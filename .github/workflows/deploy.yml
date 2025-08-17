@@ -9,18 +9,34 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+
+      # Configure Pages (required)
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
-      - run: npm ci
-      - run: npm run build 
-      - uses: actions/upload-pages-artifact@v3
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build (Next.js static export)
+        run: npm run build   # produces ./out because next.config.ts has output: "export"
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
         with:
           path: ./out
 
