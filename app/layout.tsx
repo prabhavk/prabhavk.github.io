@@ -1,23 +1,18 @@
+// app/layout.tsx
 import "./globals.css";
-import Link from "next/link";
+import type { Metadata } from "next";
+import Navbar from "@/components/Navbar";
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export const metadata: Metadata = {
+  title: "EMTR UI",
+  description: "Run EMTR and view results",
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="bg-gray-50 text-black">
-        {/* Navbar */}
-        <nav className="bg-blue-600 text-white px-6 py-3 flex space-x-6">
-          <Link href="/" className="hover:underline">
-            Form
-          </Link>
-          <Link href="/results" className="hover:underline">
-            Results
-          </Link>
-        </nav>
+      <body className="bg-white text-black">
+        <Navbar />
         <div className="p-6">{children}</div>
       </body>
     </html>
