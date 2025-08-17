@@ -1,7 +1,8 @@
-// app/layout.tsx
 import "./globals.css";
 import type { Metadata } from "next";
-import Navbar from "@/components/Navbar";
+import Navbar from "../components/Navbar";
+import ProgressProvider from "../components/ProgressProvider";
+import ProgressPane from "../components/ProgressPane";
 
 export const metadata: Metadata = {
   title: "EMTR UI",
@@ -13,7 +14,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body className="bg-white text-black">
         <Navbar />
-        <div className="p-6">{children}</div>
+        <ProgressProvider>
+          <div className="max-w-6xl mx-auto px-4">
+            <div className="flex flex-col lg:flex-row gap-4 py-4">
+              <main className="flex-1">{children}</main>
+              <ProgressPane />
+            </div>
+          </div>
+        </ProgressProvider>
       </body>
     </html>
   );
