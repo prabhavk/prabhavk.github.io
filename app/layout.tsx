@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="bg-white text-black">
+      <body className="bg-gray-500 text-white">
         <Navbar />
         <ProgressProvider>
           <div className="max-w-6xl mx-auto px-4">

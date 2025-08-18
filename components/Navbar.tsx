@@ -13,8 +13,8 @@ export default function Navbar() {
         href={href}
         className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors ${
           active
-            ? "bg-blue-600 text-black shadow-md"
-            : "bg-green-700 text-white hover:bg-yellow-500"
+            ? "bg-gray-200 text-black shadow-md"
+            : "bg-gray-700 text-white hover:bg-yellow-500"
         }`}
       >
         {label}
@@ -23,7 +23,7 @@ export default function Navbar() {
   };
 
   return (
-    <nav className="w-full border-b bg-blue-300">
+    <nav className="w-full border-b bg-black">
       <div className="max-w-6xl mx-auto px-4 py-3 flex gap-3">
         {tab("/", "Input")}
         {tab("/wilcoxon", "Wilcoxon Rank Sum Tests & Violin Plots")}

@@ -106,35 +106,35 @@ export default function InputPage() {
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Files */}
         <div className="space-y-2">
-          <label className="block text-sm font-medium text-black">
+          <label className="block text-sm font-medium text-white">
             Sequence file (.phyx / phylip)
           </label>
           <input
             type="file"
             onChange={(e) => setSequenceFile(e.target.files?.[0] ?? null)}
-            className="block w-full border p-2 text-black"
+            className="block w-full border p-2 text-white"
           />
         </div>
 
         <div className="space-y-2">
-          <label className="block text-sm font-medium text-black">
+          <label className="block text-sm font-medium text-white">
             Topology file (.csv)
           </label>
           <input
             type="file"
             onChange={(e) => setTopologyFile(e.target.files?.[0] ?? null)}
-            className="block w-full border p-2 text-black"
+            className="block w-full border p-2 text-white"
           />
         </div>
 
         {/* Parameters */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
-            <label className="block text-sm font-medium text-black">
+            <label className="block text-sm font-medium text-white">
               Convergence threshold
             </label>
             <input
-              className="w-full border p-2 text-black"
+              className="w-full border p-2 text-white"
               value={threshold}
               onChange={(e) => setThreshold(e.target.value)}
               placeholder="e.g., 0.001"
@@ -142,12 +142,12 @@ export default function InputPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-black">
+            <label className="block text-sm font-medium text-white">
               Repetitions
             </label>
             <input
               type="number"
-              className="w-full border p-2 text-black"
+              className="w-full border p-2 text-white"
               value={numReps}
               onChange={(e) => setNumReps(e.target.value)}
               placeholder="e.g., 50"
@@ -155,12 +155,12 @@ export default function InputPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-black">
+            <label className="block text-sm font-medium text-white">
               Max iterations
             </label>
             <input
               type="number"
-              className="w-full border p-2 text-black"
+              className="w-full border p-2 text-white"
               value={maxIter}
               onChange={(e) => setMaxIter(e.target.value)}
               placeholder="e.g., 200"
@@ -172,11 +172,11 @@ export default function InputPage() {
         {/* Format & Method */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
-            <label className="block text-sm font-medium text-black">
+            <label className="block text-sm font-medium text-white">
               Sequence format
             </label>
             <select
-              className="w-full border p-2 text-black"
+              className="w-full border p-2 text-white"
               value={seqFormat}
               onChange={(e) => setSeqFormat(e.target.value)}
             >
@@ -185,11 +185,11 @@ export default function InputPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-black">
+            <label className="block text-sm font-medium text-white">
               Method
             </label>
             <select
-              className="w-full border p-2 text-black"
+              className="w-full border p-2 text-white"
               value={method}
               onChange={(e) => setMethod(e.target.value as Method)}
             >
@@ -201,8 +201,8 @@ export default function InputPage() {
           </div>
         </div>
 
-        <button className="bg-blue-600 text-white px-4 py-2 rounded">
-          Run EMTR (WASM)
+        <button className="bg-gray-600 text-white px-4 py-2 rounded">
+          Start EMTR 
         </button>
       </form>
     </main>

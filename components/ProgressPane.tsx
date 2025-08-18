@@ -16,7 +16,7 @@ export default function ProgressPane() {
   return (
     <aside className="w-full lg:w-80 xl:w-96 border-l bg-white p-4 sticky top-0 h-[calc(100vh-0px)]">
       <div className="flex items-center justify-between mb-2">
-        <h2 className="font-semibold">Progress</h2>
+        <h2 className="font-semibold text-gray-600">Progress</h2>
         <span className="text-xs rounded px-2 py-0.5 bg-gray-100 text-gray-700">
           {status.toUpperCase()}
         </span>
@@ -37,13 +37,13 @@ export default function ProgressPane() {
       <div className="mt-3 flex gap-2">
         <button
           onClick={() => navigator.clipboard.writeText(logs.join("\n"))}
-          className="px-3 py-1 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
+          className="px-3 py-1 rounded bg-blue-500 text-white text-sm hover:bg-red-500"
         >
           Copy
         </button>
         <button
           onClick={clear}
-          className="px-3 py-1 rounded bg-gray-200 text-sm hover:bg-gray-300"
+          className="px-3 py-1 rounded bg-gray-600 text-sm hover:bg-white hover:text-black"
         >
           Clear
         </button>
