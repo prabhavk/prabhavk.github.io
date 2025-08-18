@@ -7,7 +7,7 @@ export default function ProgressPane() {
   const { jobId, status, logs, clear, attachScroller } = useProgress();
   const boxRef = useRef<HTMLDivElement>(null);
 
-  // Register this pane as the scroll target for auto-scrolling
+  // Register this pane as the scroll target (attachScroller is now stable)
   useEffect(() => {
     attachScroller(boxRef.current);
     return () => attachScroller(null);

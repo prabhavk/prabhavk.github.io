@@ -45,6 +45,12 @@ jobs:
             -o public/wasm/emtr.js
           test -f public/wasm/emtr.wasm
 
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: emtr-wasm
+          path: public/wasm/
+
   web:
     name: Build static site
     needs: wasm
@@ -52,6 +58,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: emtr-wasm
+          path: public/wasm
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -62,15 +74,14 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      # cache-bust WASM/worker imports using the commit SHA
-      - name: Expose commit SHA to Next.js
+      - name: Expose commit SHA to Next.js (cache-bust WASM)
         run: echo "NEXT_PUBLIC_COMMIT_SHA=${GITHUB_SHA}" >> $GITHUB_ENV
 
       - name: Install deps
         run: npm ci
 
       - name: Build (Next.js static export)
-        run: npm run build   # expects next.config.{js,ts} with output: "export"
+        run: npm run build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

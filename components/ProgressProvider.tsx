@@ -1,6 +1,13 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import React, {
+  createContext,
+  useContext,
+  useLayoutEffect, // ⬅️ useLayoutEffect
+  useRef,
+  useState,
+  useCallback,     // ⬅️ useCallback
+} from "react";
 
 type Status = "idle" | "running" | "done" | "error";
 
@@ -11,7 +18,6 @@ type ProgressCtx = {
   start: (jobId: string) => void;
   append: (line: string) => void;
   clear: () => void;
-  /** Call this with a DOM node that renders the logs to enable auto-scroll */
   attachScroller: (el: HTMLElement | null) => void;
 };
 
@@ -31,9 +37,9 @@ export default function ProgressProvider({ children }: { children: React.ReactNo
 
   // element to auto-scroll
   const scrollerRef = useRef<HTMLElement | null>(null);
-  const attachScroller = (el: HTMLElement | null) => {
-    scrollerRef.current = el;
-  };
+  const attachScroller = useCallback((el: HTMLElement | null) => {
+    scrollerRef.current = el ?? null;
+  }, []); // ⬅️ stable function identity
 
   function clear() {
     setLogs([]);
@@ -47,17 +53,23 @@ export default function ProgressProvider({ children }: { children: React.ReactNo
     setLogs((prev) => [...prev, line]);
   }
 
-  // Auto-scroll to bottom whenever logs change
-  useEffect(() => {
+  // Auto-scroll to bottom whenever logs/status change
+  useLayoutEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
 
-    // If user is near bottom (or we just want to force-scroll), scroll to bottom
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+
     if (nearBottom || status === "running") {
-      el.scrollTop = el.scrollHeight;
+      // wait for layout/paint to account for the new line
+      requestAnimationFrame(() => {
+        const prev = (el.style as any).scrollBehavior;
+        (el.style as any).scrollBehavior = status === "running" ? "smooth" : "auto";
+        el.scrollTop = el.scrollHeight;
+        (el.style as any).scrollBehavior = prev ?? "";
+      });
     }
-  }, [logs, status]);
+  }, [logs, status]); // ⬅️ runs after layout thanks to useLayoutEffect
 
   // Call this when you kick off EMTR
   function start(id: string) {
