@@ -86,10 +86,7 @@ private:
 	bool verbose;
 	bool localPhyloOnly;	
 	bool useChowLiu;
-	bool modelSelection; 
-	double max_log_lik_pars;
-	double max_log_lik_diri;
-	double max_log_lik_ssh;
+	bool modelSelection; 	
     int max_iter;		
 	string supertree_method;
 	int numberOfVerticesInSubtree;
@@ -108,14 +105,16 @@ private:
               int max_iter,
               double conv_threshold);
 	~EMManager();
+	double max_log_lik;
+	double max_log_lik_pars;
+	double max_log_lik_diri;
+	double max_log_lik_ssh;
 	void SetDNAMap();
 	void SetThresholds();
 	void EMTRackboneWithOneExternalVertex();
 	void EMTRackbone_k2020_preprint();
 	void EMgivenInputTopology();
-	void RootSuperTree();
-	void start_EMt_with_MPars(int num_repetitions);
-	void start_EMt_with_SSH_pars(int num_repetitions);
+	void RootSuperTree();		
 	void EMTRackboneWithRootSEMAndMultipleExternalVertices();
 	void EMTRackboneOverlappingSets();
 	void EMTRackboneOnlyLocalPhylo();

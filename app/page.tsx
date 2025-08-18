@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useProgress } from "../components/ProgressProvider";
 
-type Method = "dirichlet" | "parsimony" | "ssh";
+type Method = "main" | "dirichlet" | "parsimony" | "ssh";
 
 export default function InputPage() {
   const { start, append } = useProgress();
@@ -17,7 +17,7 @@ export default function InputPage() {
   const [numReps, setNumReps] = useState("50");
   const [maxIter, setMaxIter] = useState("200");
   const [seqFormat, setSeqFormat] = useState("phylip");
-  const [method, setMethod] = useState<Method>("dirichlet");
+  const [method, setMethod] = useState<Method>("main");
 
   const workerRef = useRef<Worker | null>(null);
 
@@ -58,8 +58,9 @@ export default function InputPage() {
       `🌲 Starting EMTR (WASM): seq=${sequenceFile.name}, topo=${topologyFile.name}, thr=${thr}, reps=${reps}, maxIter=${iters}, format=${seqFormat}, method=${method}`
     );
 
-    // spin up worker
-    const w = new Worker("/wasm/worker.js", { type: "module" });
+    // spin up worker (cache-busted to avoid stale worker/module in dev)
+    const v = Date.now();
+    const w = new Worker(`/wasm/worker.js?v=${v}`, { type: "module" });
     workerRef.current = w;
 
     w.onmessage = (ev) => {
@@ -192,6 +193,7 @@ export default function InputPage() {
               value={method}
               onChange={(e) => setMethod(e.target.value as Method)}
             >
+              <option value="main">Main</option>
               <option value="dirichlet">Dirichlet</option>
               <option value="parsimony">Parsimony</option>
               <option value="ssh">SSH</option>

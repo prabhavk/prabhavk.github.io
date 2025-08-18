@@ -1832,6 +1832,9 @@ public:
 	map <int, double> scalingFactorPerRateCategory_stored;
 	int numberOfRateCategories = 0;
 	double maximumLogLikelihood;
+	double max_log_likelihood_diri;
+	double max_log_likelihood_pars;
+	double max_log_likelihood_best;
 	emtr::Md I4by4;	
 	cliqueTree * cliqueT;
 	bool debug;
@@ -1976,10 +1979,12 @@ public:
 	void RestoreEdgeListForChowLiuTree();
 	void StoreDirectedEdgeList();
 	void RestoreDirectedEdgeList();
+	void StoreBestProbability();
 	void StoreRootAndRootProbability();
 	void RestoreRootAndRootProbability();
 	void StoreTransitionMatrices();	
 	void RestoreTransitionMatrices();
+	void RestoreBestProbability();
 	void StoreRateMatricesAndScalingFactors();
 	void RestoreRateMatricesAndScalingFactors();
 	void ResetPointerToRoot();
@@ -2074,9 +2079,9 @@ public:
 	void SetParameterFile();	
 	void initialize_GMM(string init_criterion);
 	
-	double EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
-	double EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
-	double EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetitions);
+	void EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
+	void EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
+	void EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetitions);
 	void EM_root_search_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
 	void EM_root_search_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
 	void EM_root_search_at_each_internal_vertex_started_with_SSH_par(int num_repetitions);
@@ -3999,9 +4004,26 @@ pair <bool,SEM_vertex *> SEM::CheckAndRetrieveObservedVertexThatIsNotALeafAndIsN
 	return (make_pair(containsVertex,vPtrToReturn));
 }
 
+void SEM::StoreBestProbability() {
+	this->StoreRootAndRootProbability();
+	this->StoreTransitionMatrices();
+}
+
 void SEM::StoreRootAndRootProbability() {
 	this->root_stored = this->root;
 	this->rootProbability_stored = this->rootProbability;
+}
+
+void SEM::StoreTransitionMatrices() {
+	for (pair <int,SEM_vertex*> idPtrPair : * this->vertexMap) {
+		idPtrPair.second->transitionMatrix_stored = idPtrPair.second->transitionMatrix;
+	}
+}
+
+void SEM::RestoreBestProbability() {
+	this->RestoreRootAndRootProbability();
+	this->RestoreTransitionMatrices();
+	this->RootTreeAtVertex(this->root);
 }
 
 void SEM::RestoreRootAndRootProbability() {
@@ -4010,9 +4032,9 @@ void SEM::RestoreRootAndRootProbability() {
 	this->root->rootProbability = this->rootProbability;	
 }
 
-void SEM::StoreTransitionMatrices() {
-	for (pair <int,SEM_vertex*> idPtrPair : * this->vertexMap) {
-		idPtrPair.second->transitionMatrix_stored = idPtrPair.second->transitionMatrix;
+void SEM::RestoreTransitionMatrices() {
+	for (pair<int,SEM_vertex*> idPtrPair : * this->vertexMap) {
+		idPtrPair.second->transitionMatrix = idPtrPair.second->transitionMatrix_stored;
 	}
 }
 
@@ -4024,12 +4046,6 @@ void SEM::StoreRateMatricesAndScalingFactors() {
 void SEM::RestoreRateMatricesAndScalingFactors() {
 	this->rateMatrixPerRateCategory = this->rateMatrixPerRateCategory_stored;
 	this->scalingFactorPerRateCategory = this->scalingFactorPerRateCategory_stored;
-}
-
-void SEM::RestoreTransitionMatrices() {
-	for (pair<int,SEM_vertex*> idPtrPair : * this->vertexMap) {
-		idPtrPair.second->transitionMatrix = idPtrPair.second->transitionMatrix_stored;
-	}
 }
 
 
@@ -4367,7 +4383,7 @@ void SEM::SetParameterFile(){
 	// }
 }
 
-double SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repetitions) {
+void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repetitions) {
 	int n = this->numberOfObservedVertices;
 	int num_vertices = this->vertexMap->size();	
 	SEM_vertex * v;
@@ -4381,7 +4397,7 @@ double SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_rep
                                 << "ecd-ll first" << "\t"
                                 << "ecd-ll final" << "\t"
                                 << "ll final" << endl;
-	double max_log_likelihood = -1 * pow(10,5);
+	this->max_log_likelihood_diri = -1 * pow(10,5);
 	double logLikelihood_pars;
 	double loglikelihood_edc_first;
 	double loglikelihood_edc_final;
@@ -4422,20 +4438,23 @@ double SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_rep
 										<< setprecision(ll_precision) << loglikelihood_edc_first << "\t"
 										<< setprecision(ll_precision) << loglikelihood_edc_final << "\t"
 										<< setprecision(ll_precision) << logLikelihood_final << endl;
-			if (max_log_likelihood < logLikelihood_final) {                
-				this->WriteProbabilities(this->probabilityFileName_diri);
-				max_log_likelihood = logLikelihood_final;
+			if (this->max_log_likelihood_diri < logLikelihood_final) {							
+				this->max_log_likelihood_diri = logLikelihood_final;
+				if (this->max_log_likelihood_best < this->max_log_likelihood_diri) {
+					this->max_log_likelihood_best = this->max_log_likelihood_diri;
+					this->StoreRootAndRootProbability();
+					this->StoreTransitionMatrices();
+				}				
 			}
 		}
 	}
 	
 	loglikelihood_node_rep_file.close();	
-	cout << "max log likelihood, precision 10, obtained using Dirichlet parameters is " << setprecision(10) << max_log_likelihood << endl;	
-	cout << "max log likelihood, precision 24, obtained using Dirichlet parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;	
-	return max_log_likelihood;
+	cout << "max log likelihood, precision 10, obtained using Dirichlet parameters is " << setprecision(10) << this->max_log_likelihood_diri << endl;	
+	// cout << "max log likelihood, precision 24, obtained using Dirichlet parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;		
 }
 
-double SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repetitions) {
+void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repetitions) {
 	int n = this->numberOfObservedVertices;
 	int num_vertices = this->vertexMap->size();	
 	SEM_vertex * v;
@@ -4449,7 +4468,7 @@ double SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_rep
                                 << "edc-ll first" << "\t"
                                 << "edc-ll final" << "\t"
                                 << "ll final" << endl;
-	double max_log_likelihood = -1 * pow(10,5);
+	this->max_log_likelihood_pars = -1 * pow(10,5);
 	double logLikelihood_pars;
 	double loglikelihood_edc_first;
 	double loglikelihood_edc_final;
@@ -4476,7 +4495,7 @@ double SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_rep
             throw mt_error("Expect internal nodes to have degree three");
         }
 		loglikelihoodscoresForEachRepetition.clear();
-		for (int rep = 0; rep < num_repetitions; rep++) {					
+		for (int rep = 0; rep < num_repetitions; rep++) {				
 			iter_parsll_edllfirst_edllfinal_llfinal = this->EM_started_with_parsimony_rooted_at(v);			
 			iter = get<0>(iter_parsll_edllfirst_edllfinal_llfinal);
 			logLikelihood_pars = get<1>(iter_parsll_edllfirst_edllfinal_llfinal);
@@ -4490,20 +4509,23 @@ double SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_rep
 										<< setprecision(ll_precision) << loglikelihood_edc_first << "\t"
 										<< setprecision(ll_precision) << loglikelihood_edc_final << "\t"
 										<< setprecision(ll_precision) << logLikelihood_final << endl;
-			if (max_log_likelihood < logLikelihood_final) {                
-				this->WriteProbabilities(this->probabilityFileName_pars);
-				max_log_likelihood = logLikelihood_final;
+			if (this->max_log_likelihood_pars < logLikelihood_final) {				
+				this->max_log_likelihood_pars = logLikelihood_final;
+				if (this->max_log_likelihood_best < this->max_log_likelihood_pars) {
+					this->max_log_likelihood_best = this->max_log_likelihood_pars;
+					this->StoreRootAndRootProbability();
+					this->StoreTransitionMatrices();
+				}
 			}
 		}
 	}
 	
 	loglikelihood_node_rep_file.close();	
-	 cout << "max log likelihood obtained using Parsimony parameters is " << setprecision(6) << max_log_likelihood << endl;
-	// (*this->logFile) << "max log likelihood obtained using Parsimony parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;
-	return max_log_likelihood;	
+	cout << "max log likelihood obtained using Parsimony parameters is " << setprecision(10) << this->max_log_likelihood_pars << endl;
+	// (*this->logFile) << "max log likelihood obtained using Parsimony parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;	
 }
 
-double SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetitions) {
+void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetitions) {
 	// cout << "convergence threshold for EM is " << this->logLikelihoodConvergenceThreshold << endl;
 	// (* this->logFile) << "convergence threshold for EM is " << this->logLikelihoodConvergenceThreshold << endl;
 	// cout << "maximum number of EM iterations allowed is " << this->maxIter << endl;
@@ -4562,16 +4584,15 @@ double SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repet
 										<< setprecision(ll_precision) << loglikelihood_edc_first << "\t"
 										<< setprecision(ll_precision) << loglikelihood_edc_final << "\t"
 										<< setprecision(ll_precision) << logLikelihood_final << endl;
-			if (max_log_likelihood < logLikelihood_final) {
+			if (max_log_likelihood < logLikelihood_final) {				
 				// this->WriteProbabilities();
 				max_log_likelihood = logLikelihood_final;
 			}
 		}
 	}
 	loglikelihood_node_rep_file.close();
-	cout << "max log likelihood obtained using SSH parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;
-	(*this->logFile) << "max log likelihood obtained using SSH parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;
-	return max_log_likelihood;		
+	cout << "max log likelihood obtained using SSH parameters is " << setprecision(10) << max_log_likelihood << endl;
+	// (*this->logFile) << "max log likelihood obtained using SSH parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;	
 }
 
 
@@ -6901,28 +6922,36 @@ EMManager::~EMManager(){
 	}
 
 
-void EMManager::EM_main() {
-	// call Dirichlet
-	this->EMdirichlet();
-	// call Parsimony
-	this->EMparsimony();
-	// call SSH
-	this->EMssh();
+void EMManager::EM_main() {	
+	// store parameters yielding max log lik in diri and pars
+	
+	this->P->max_log_likelihood_best = -1 * pow(10,10);
+	cout << "Starting EM with initial parameters set using parsimony" << endl;
+	this->P->EM_rooted_at_each_internal_vertex_started_with_parsimony(this->num_repetitions);
+	
+	cout << "Starting EM with initial parameters sampled from Dirichlet distribution" << endl;
+	this->P->EM_rooted_at_each_internal_vertex_started_with_dirichlet(this->num_repetitions);
+	
+	// restore parameters yielding max log lik 			
+	this->P->RestoreBestProbability();
+	this->P->ReparameterizeGMM();
+	cout << "Starting EM with initial parameters set using reparameterized MLE" << endl;
+    this->P->EM_rooted_at_each_internal_vertex_started_with_SSH_par(this->num_repetitions);
 }
 
 void EMManager::EMparsimony() {
     cout << "Starting EM with initial parameters set using parsimony" << endl;
 	this->P->probabilityFileName_pars = this->prefix_for_output_files + ".pars_prob";
 	this->probabilityFileName_pars = this->prefix_for_output_files + ".pars_prob";
-    this->max_log_lik_pars = this->P->EM_rooted_at_each_internal_vertex_started_with_parsimony(this->num_repetitions);
+    this->P->EM_rooted_at_each_internal_vertex_started_with_parsimony(this->num_repetitions);
 }
 
 
 void EMManager::EMdirichlet() {
-	cout << "Starting EM with initial parameters sampled from Dirichlet distribution" << endl;
+	cout << "This should not be running" << endl;
 	this->P->probabilityFileName_diri = this->prefix_for_output_files + ".diri_prob";
 	this->probabilityFileName_diri = this->prefix_for_output_files + ".diri_prob";
-	this->max_log_lik_diri = this->P->EM_rooted_at_each_internal_vertex_started_with_dirichlet(this->num_repetitions);
+	this->P->EM_rooted_at_each_internal_vertex_started_with_dirichlet(this->num_repetitions);
 }
 
 void EMManager::SetprobFileforSSH() {
@@ -6935,35 +6964,6 @@ void EMManager::SetprobFileforSSH() {
 	}
 }
 
-void EMManager::EMforCompleteData(){
-	// use MST object to compute site patterns
-
-	// tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);		
-	// cout << "setting sequence file name, topology file name, site pattern weights, number of input sequences" << endl;
-    // cout << "number of site patterns is " << sitePatternWeights.size() << endl;	
-	// SEM * P = new SEM(1,this->conv_thresh,this->max_EM_iter,this->verbose);
-	// P->SetStream(this->emt_logFile);
-	// this->P->sequenceFileName = this->fastaFileName;
-	// this->P->topologyFileName = this->topologyFileName;
-	// this->P->AddSequences(sequences);
-	// this->P->AddNames(names);
-	// this->P->AddSitePatternWeights(sitePatternWeights);
-	// this->P->SetNumberOfInputSequences(numberOfInputSequences);	
-	// this->P->numberOfObservedVertices = numberOfInputSequences;
-	// cout << "setting edges from topology file" << endl;		
-	// // replace the following and setting edges from input topology	
-	// this->P->SetEdgesFromTopologyFile();
-	
-	
-
-	// read topology	
-	// read all sequences
-	// place root at h_21
-	// Optimize GMM using complete data
-	// compute log-likelihood using 24 digits of precision
-	// repeat above operation 100 times to visualize sequence motif
-}
-
 void EMManager::EMssh() {
 	this->SetprobFileforSSH();
 	cout << "Starting EM with initial parameters set using Bayes rule as described in SSH paper" << endl;
@@ -6971,7 +6971,7 @@ void EMManager::EMssh() {
 	cout << this->P->probabilityFileName_best << endl;
     this->P->SetGMMparameters();
 	this->P->ReparameterizeGMM();    
-    this->max_log_lik_ssh = this->P->EM_rooted_at_each_internal_vertex_started_with_SSH_par(this->num_repetitions);
+    this->P->EM_rooted_at_each_internal_vertex_started_with_SSH_par(this->num_repetitions);
 }
 
 void EMManager::SetDNAMap() {
@@ -7302,13 +7302,6 @@ void EMManager::EMTRackbone_k2020_preprint() {
 	this->P->WriteRootedTreeInNewickFormat(this->prefix_for_output_files + ".unrooted_newick");	
 }
 
-void EMManager::start_EMt_with_SSH_pars(int num_repetitions) {
-	this->P->EM_rooted_at_each_internal_vertex_started_with_SSH_par(num_repetitions);	
-}
-
-void EMManager::start_EMt_with_MPars(int num_repetitions){
-	this->P->EM_rooted_at_each_internal_vertex_started_with_parsimony(num_repetitions);	
-}
 void EMManager::EMTRackboneWithRootSEMAndMultipleExternalVertices() {
 	vector <string> names;
 	vector <vector <unsigned char> > sequences;
