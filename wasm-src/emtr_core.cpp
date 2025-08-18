@@ -4636,7 +4636,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int n
 	int n = this->numberOfObservedVertices;
 	int num_vertices = this->vertexMap->size();	
 		
-	this->max_log_likelihood_pars = -1 * pow(10,5);
+	this->max_log_likelihood_ssh = -1 * pow(10,5);
 	
 	vector<int> vertex_indices_to_visit;
 	vertex_indices_to_visit.reserve(std::max(0, num_vertices - n));
@@ -4678,13 +4678,6 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int n
             );
 
 
-#ifdef EMTR_EMIT_JSON_ROWS_NOW
-            emtr::emit_row_json(
-                "SSH", v->name, rep + 1, iter,
-                logLikelihood_pars, loglikelihood_ecd_first, loglikelihood_ecd_final, logLikelihood_final
-            );
-#endif
-
 			if (this->max_log_likelihood_ssh < logLikelihood_final) {				
 				this->max_log_likelihood_ssh = logLikelihood_final;
 				if (this->max_log_likelihood_best < this->max_log_likelihood_ssh) {
@@ -4696,8 +4689,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int n
 		}
 	}
 		
-	cout << "max log likelihood obtained using SSH parameters is " << setprecision(10) << this->max_log_likelihood_ssh << endl;
-	// (*this->logFile) << "max log likelihood obtained using Parsimony parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;
+	cout << "max log likelihood obtained using SSH parameters is " << setprecision(10) << this->max_log_likelihood_ssh << endl;	
 }
 
 void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetitions) {
