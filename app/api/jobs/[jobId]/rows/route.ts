@@ -1,5 +1,5 @@
 // app/api/jobs/[jobId]/rows/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import mysql, { ResultSetHeader } from "mysql2/promise";
 
 type Method = "main" | "dirichlet" | "parsimony" | "ssh";
@@ -73,7 +73,7 @@ async function getConn() {
 
 /* ---------- route handler ---------- */
 export async function POST(
-  req: NextRequest,
+  req: Request,
   { params }: { params: { jobId: string } }
 ) {
   const jobId = params.jobId;
