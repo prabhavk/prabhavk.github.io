@@ -1,9 +1,9 @@
-name: Deploy Pages (after WASM)
+name: Build WASM & Deploy to GitHub Pages
 
 on:
-  workflow_run:
-    workflows: ["Build WebAssembly (em++)"]
-    types: [completed]
+  push:
+    branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,13 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy-on-wasm:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+  wasm:
+    name: Build WebAssembly (em++)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # Rebuild WASM to publish fresh artifacts with the site
       - name: Set up Emscripten SDK
         uses: mymindstorm/setup-emsdk@v14
         with:
@@ -39,12 +39,20 @@ jobs:
             -s ENVIRONMENT=web,worker \
             -s FILESYSTEM=1 \
             -s EXPORTED_RUNTIME_METHODS='["FS","ccall","cwrap"]' \
-            -s ASSERTIONS=2 -s DEMANGLE_SUPPORT=1 \
+            -s ASSERTIONS=2 \
             -s DISABLE_EXCEPTION_CATCHING=0 \
             --bind \
             -o public/wasm/emtr.js
+          test -f public/wasm/emtr.wasm
 
-      # Build & stage the static site
+  web:
+    name: Build static site
+    needs: wasm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
@@ -54,19 +62,24 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      # cache-bust WASM/worker imports using the commit SHA
+      - name: Expose commit SHA to Next.js
+        run: echo "NEXT_PUBLIC_COMMIT_SHA=${GITHUB_SHA}" >> $GITHUB_ENV
+
       - name: Install deps
         run: npm ci
 
       - name: Build (Next.js static export)
-        run: npm run build
+        run: npm run build   # expects next.config.{js,ts} with output: "export"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./out
 
-  publish:
-    needs: deploy-on-wasm
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: web
     runs-on: ubuntu-latest
     environment:
       name: github-pages
