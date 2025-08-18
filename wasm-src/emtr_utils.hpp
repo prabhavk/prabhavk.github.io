@@ -11,9 +11,103 @@
 #include <utility>
 #include <vector>
 #include <stdexcept>
+#include <cstdio>
+#include <tuple>
 
 
 namespace emtr {
+
+    // Escape a string for JSON (handles quotes, backslashes, control chars)
+    inline std::string json_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (unsigned char c : s) {
+        switch (c) {
+        case '\"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\b': out += "\\b";  break;
+        case '\f': out += "\\f";  break;
+        case '\n': out += "\\n";  break;
+        case '\r': out += "\\r";  break;
+        case '\t': out += "\\t";  break;
+        default:
+            if (c < 0x20) {
+            char buf[7];
+            std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
+            out += buf;
+            } else {
+            out.push_back(static_cast<char>(c));
+            }
+        }
+    }
+    return out;
+    }
+
+    // Alias that matches your EMTR_results element type
+    using Row = std::tuple<
+    std::string, // init_method ("Parsimony" | "Dirichlet" | "SSH")
+    std::string, // root (one of 17 names)
+    int,         // repetition (1..N)
+    int,         // iter (max iterations taken by EM)
+    double,      // ll_initial
+    double,      // ecd_ll_first
+    double,      // ecd_ll_final
+    double       // ll_final
+    >;
+
+    // Emit one row as JSON line prefixed with a tag (default "[ROW]\t")
+    inline void emit_row_json(
+        const std::string& init_method,
+        const std::string& root,
+        int repetition,
+        int iter,
+        double ll_initial,
+        double ecd_ll_first,
+        double ecd_ll_final,
+        double ll_final,
+        const char* tag = "[ROW]\t") {            
+            const std::string im = json_escape(init_method);
+            const std::string rt = json_escape(root);
+
+            // %.17g keeps double precision compact; fflush for prompt delivery to worker
+            std::printf(
+                "%s"
+                "{\"init_method\":\"%s\",\"root\":\"%s\",\"repetition\":%d,"
+                "\"iter\":%d,\"ll_initial\":%.17g,"
+                "\"ecd_ll_first\":%.17g,\"ecd_ll_final\":%.17g,\"ll_final\":%.17g}\n",
+                tag,
+                im.c_str(), rt.c_str(), repetition, iter,
+                ll_initial, ecd_ll_first, ecd_ll_final, ll_final);
+            std::fflush(stdout);}
+    
+
+    // Convenience: push one row into your vector (keeps call sites tidy)
+    inline void push_result(
+        std::vector<Row>& results,
+        const std::string& init_method,
+        const std::string& root,
+        int repetition,
+        int iter,
+        double ll_initial,
+        double ecd_ll_first,
+        double ecd_ll_final,
+        double ll_final)
+    {
+    results.emplace_back(init_method, root, repetition, iter,
+                        ll_initial, ecd_ll_first, ecd_ll_final, ll_final);
+    }
+
+    // Flush & clear a vector of rows, emitting each as JSON
+    inline void flush_rows_json(std::vector<Row>& results, const char* tag = "[ROW]\t") {
+    for (auto& t : results) {
+        emit_row_json(
+        std::get<0>(t), std::get<1>(t), std::get<2>(t), std::get<3>(t),
+        std::get<4>(t), std::get<5>(t), std::get<6>(t), std::get<7>(t),
+        tag
+        );
+    }
+    results.clear();
+    }
 
     // ---------- Dirichlet sampler ----------
     using Md = std::array<std::array<double,4>,4>;

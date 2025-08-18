@@ -1,6 +1,45 @@
 // public/wasm/worker.js
+
+// (A) --- NEW: batching + API config ---------------------------------
+const API_BASE = "";                // "" => same origin; or e.g. "http://localhost:3000" / "https://api.yourdomain.com"
+const AUTH = "";                    // optional: bearer token if your API requires it
+
+const rowBuffer = [];
+let flushTimer = null;
+let jobIdForThisRun;                // set from the page
+
+function queueRow(jobId, row) {
+  rowBuffer.push(row);
+  if (rowBuffer.length >= 200) flushNow(jobId);
+  if (!flushTimer) flushTimer = setTimeout(() => flushNow(jobId), 1000);
+}
+
+async function flushNow(jobId) {
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  const batch = rowBuffer.splice(0, rowBuffer.length);
+  if (!batch.length) return;
+  try {
+    await fetch(`${API_BASE}/api/jobs/${jobId}/rows`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(AUTH ? { authorization: `Bearer ${AUTH}` } : {}),
+      },
+      body: JSON.stringify({ rows: batch }),
+    });
+    postMessage({ type: "log", line: `⤴︎ uploaded ${batch.length} rows` });
+  } catch (err) {
+    postMessage({ type: "log", line: `upload failed: ${String(err)} — retrying soon` });
+    rowBuffer.unshift(...batch);
+    if (!flushTimer) flushTimer = setTimeout(() => flushNow(jobId), 2000);
+  }
+}
+
+// --------------------------------------------------------------------
+
 self.onmessage = async (e) => {
-  const { params, seqBytes, topoBytes } = e.data;
+  const { params, seqBytes, topoBytes, jobId } = e.data;   // (B) NEW: accept jobId
+  jobIdForThisRun = jobId;
 
   // Cache-bust in dev so you don't run stale wasm
   const v = Date.now();
@@ -8,7 +47,20 @@ self.onmessage = async (e) => {
 
   const Module = await createEmtr({
     locateFile: (p) => `/wasm/${p}?v=${v}`,
-    print: (txt) => postMessage({ type: "log", line: txt }),
+    // (C) NEW: parse emitted rows in stdout and buffer them
+    print: (txt) => {
+      const line = String(txt).trim();
+      if (jobIdForThisRun && line.startsWith("[ROW]\t")) {
+        try {
+          const row = JSON.parse(line.slice(6)); // after "[ROW]\t"
+          queueRow(jobIdForThisRun, row);
+          return; // don't spam UI log with data rows
+        } catch (e) {
+          postMessage({ type: "log", line: `row-parse-error: ${String(e)} :: ${line}` });
+        }
+      }
+      postMessage({ type: "log", line: txt });
+    },
     printErr: (txt) => postMessage({ type: "log", line: `ERR: ${txt}` }),
   });
 
@@ -66,6 +118,7 @@ self.onmessage = async (e) => {
           reps, maxIter, thr
         );
         mgr.EM_main(); // no args
+        await flushNow(jobIdForThisRun);  // (D) NEW: final flush before finishing
         shipArtifacts();
         postMessage({ type: "done", rc: 0 });
         return;
@@ -81,6 +134,7 @@ self.onmessage = async (e) => {
         throw new Error("EM_main_entry_c not exported");
       }
       rc = EM_main_entry_c("/work/sequence.phyx", "/work/topology.csv", thr, reps, maxIter, fmt);
+      await flushNow(jobIdForThisRun);    // (D) NEW: final flush
       shipArtifacts();
       postMessage({ type: "done", rc });
       return;
@@ -98,6 +152,7 @@ self.onmessage = async (e) => {
         case "dirichlet":
         default:          mgr.EMdirichlet(); break;
       }
+      await flushNow(jobIdForThisRun);      // (D) NEW: final flush
       shipArtifacts();
       postMessage({ type: "done", rc: 0 });
       return;
@@ -106,6 +161,8 @@ self.onmessage = async (e) => {
     // If we got here, nothing was callable
     throw new Error("No EMManager binding; and method !== 'main' for bridge fallback.");
   } catch (err) {
+    // try to flush whatever we buffered before signaling error
+    await flushNow(jobIdForThisRun);        // (D) NEW: flush on error too
     postMessage({ type: "log", line: `❌ ${String(err)}` });
     postMessage({ type: "done", rc: 1 });
   }

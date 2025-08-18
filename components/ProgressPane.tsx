@@ -43,7 +43,7 @@ export default function ProgressPane() {
         </button>
         <button
           onClick={clear}
-          className="px-3 py-1 rounded bg-gray-600 text-sm hover:bg-white hover:text-black"
+          className="px-3 py-1 rounded bg-red-500 text-white text-sm hover:bg-blue-500 hover:text-white"
         >
           Clear
         </button>

@@ -54,6 +54,7 @@ export default function InputPage() {
 
     const jobId = `wasm-${Date.now()}`;
     start(jobId);
+    append(`🆔 jobId = ${jobId}`);
     append(
       `🌲 Starting EMTR (WASM): seq=${sequenceFile.name}, topo=${topologyFile.name}, thr=${thr}, reps=${reps}, maxIter=${iters}, format=${seqFormat}, method=${method}`
     );
@@ -96,6 +97,7 @@ export default function InputPage() {
       },
       seqBytes: await sequenceFile.arrayBuffer(),
       topoBytes: await topologyFile.arrayBuffer(),
+      jobId,
     });
   }
 

@@ -74,23 +74,16 @@ export default function ProgressProvider({ children }: { children: React.ReactNo
 
   // Call this when you kick off EMTR
   function start(id: string) {
-    setJobId(id);
-    setStatus("running");
-    setLogs([]);
+  setJobId(id);
+  setStatus("running");
+  setLogs([]);
 
-    // Demo stub (remove when wiring to worker events)
-    if (pollRef.current) window.clearInterval(pollRef.current);
-    let i = 0;
-    pollRef.current = window.setInterval(() => {
-      i++;
-      append(`[${new Date().toLocaleTimeString()}] EMTR: iteration ${i}, ll=-4363.9…`);
-      if (i >= 10) {
-        setStatus("done");
-        if (pollRef.current) window.clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    }, 700);
+  // stop & clear any leftover demo timer, if it ever existed
+  if (pollRef.current) {
+    window.clearInterval(pollRef.current);
+    pollRef.current = null;
   }
+}
 
   return (
     <Ctx.Provider value={{ jobId, status, logs, start, append, clear, attachScroller }}>
