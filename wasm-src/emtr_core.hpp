@@ -122,6 +122,7 @@ private:
 	void EMforCompleteData();
 	void ReadAllSequences(string complete_sequence_file_name);
 	void main(string init_criterion, bool root_search);
+	void EM_main();
     void EMparsimony();
 	void EMdirichlet();
 	void SetprobFileforSSH();

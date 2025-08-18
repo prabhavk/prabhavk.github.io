@@ -2071,8 +2071,7 @@ public:
 	void ResetData();	
 	void AddDuplicatedSequencesToRootedTree(MST * M);
 	void AddDuplicatedSequencesToUnrootedTree(MST * M);
-	void SetParameterFile();
-	double EM_main(string init_criterion, bool root_search);
+	void SetParameterFile();	
 	void initialize_GMM(string init_criterion);
 	
 	double EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
@@ -4431,7 +4430,7 @@ double SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_rep
 	}
 	
 	loglikelihood_node_rep_file.close();	
-	cout << "max log likelihood, precision 8, obtained using Dirichlet parameters is " << setprecision(8) << max_log_likelihood << endl;	
+	cout << "max log likelihood, precision 10, obtained using Dirichlet parameters is " << setprecision(10) << max_log_likelihood << endl;	
 	cout << "max log likelihood, precision 24, obtained using Dirichlet parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;	
 	return max_log_likelihood;
 }
@@ -6902,9 +6901,13 @@ EMManager::~EMManager(){
 	}
 
 
-void EMManager::main(string init_criterion, bool root_search){
-	this->P->init_criterion = init_criterion;
-	this->P->root_search = root_search;	
+void EMManager::EM_main() {
+	// call Dirichlet
+	this->EMdirichlet();
+	// call Parsimony
+	this->EMparsimony();
+	// call SSH
+	this->EMssh();
 }
 
 void EMManager::EMparsimony() {

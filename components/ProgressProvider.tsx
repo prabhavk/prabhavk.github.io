@@ -63,10 +63,11 @@ export default function ProgressProvider({ children }: { children: React.ReactNo
     if (nearBottom || status === "running") {
       // wait for layout/paint to account for the new line
       requestAnimationFrame(() => {
-        const prev = (el.style as any).scrollBehavior;
-        (el.style as any).scrollBehavior = status === "running" ? "smooth" : "auto";
+        const elStyle = el.style as CSSStyleDeclaration;
+        const prev = elStyle.scrollBehavior;
+        elStyle.scrollBehavior = status === "running" ? "smooth" : "auto";
         el.scrollTop = el.scrollHeight;
-        (el.style as any).scrollBehavior = prev ?? "";
+        elStyle.scrollBehavior = prev || "";
       });
     }
   }, [logs, status]); // ⬅️ runs after layout thanks to useLayoutEffect
