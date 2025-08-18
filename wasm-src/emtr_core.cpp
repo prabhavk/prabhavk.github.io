@@ -4431,7 +4431,8 @@ double SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_rep
 	}
 	
 	loglikelihood_node_rep_file.close();	
-	cout << "max log likelihood obtained using Dirichlet parameters is " << setprecision(8) << max_log_likelihood << endl;	
+	cout << "max log likelihood, precision 8, obtained using Dirichlet parameters is " << setprecision(8) << max_log_likelihood << endl;	
+	cout << "max log likelihood, precision 24, obtained using Dirichlet parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;	
 	return max_log_likelihood;
 }
 
@@ -4498,8 +4499,8 @@ double SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_rep
 	}
 	
 	loglikelihood_node_rep_file.close();	
-	 cout << "max log likelihood obtained using Parsimony parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;
-	(*this->logFile) << "max log likelihood obtained using Parsimony parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;
+	 cout << "max log likelihood obtained using Parsimony parameters is " << setprecision(6) << max_log_likelihood << endl;
+	// (*this->logFile) << "max log likelihood obtained using Parsimony parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;
 	return max_log_likelihood;	
 }
 
