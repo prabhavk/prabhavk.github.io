@@ -5,8 +5,7 @@ import mysql, { ResultSetHeader } from "mysql2/promise";
 type Method = "main" | "dirichlet" | "parsimony" | "ssh";
 
 export interface EmtrRow {
-  // method is optional if you use one table for all three functions and/or store it in jobs
-  method?: Method;
+  method?: Method; // optional if you store method in jobs instead
   root: string;
   rep: number;
   iter: number;
@@ -20,27 +19,29 @@ interface RowsPayload {
   rows: EmtrRow[];
 }
 
-// ---- tiny runtime validators (no zod dependency) ----
+/* ---------- tiny runtime validators (no any) ---------- */
 function isFiniteNumber(x: unknown): x is number {
   return typeof x === "number" && Number.isFinite(x);
 }
 
-function isEmtrRow(x: unknown): x is EmtrRow {
-  if (typeof x !== "object" || x === null) return false;
-  const r = x as Record<string, unknown>;
+function isEmtrRow(obj: unknown): obj is EmtrRow {
+  if (typeof obj !== "object" || obj === null) return false;
+  const r = obj as Record<string, unknown>;
+  const method = r.method;
   const methodOk =
-    r.method === undefined ||
-    r.method === "main" ||
-    r.method === "dirichlet" ||
-    r.method === "parsimony" ||
-    r.method === "ssh";
+    method === undefined ||
+    method === "main" ||
+    method === "dirichlet" ||
+    method === "parsimony" ||
+    method === "ssh";
+
   return (
     methodOk &&
     typeof r.root === "string" &&
     isFiniteNumber(r.rep) &&
-    Number.isInteger(r.rep) &&
+    Number.isInteger(r.rep as number) &&
     isFiniteNumber(r.iter) &&
-    Number.isInteger(r.iter) &&
+    Number.isInteger(r.iter as number) &&
     isFiniteNumber(r.ll_pars) &&
     isFiniteNumber(r.edc_ll_first) &&
     isFiniteNumber(r.edc_ll_final) &&
@@ -48,16 +49,17 @@ function isEmtrRow(x: unknown): x is EmtrRow {
   );
 }
 
-function isRowsPayload(x: unknown): x is RowsPayload {
-  return (
-    typeof x === "object" &&
-    x !== null &&
-    Array.isArray((x as any).rows) && // eslint won’t complain: we don’t type the variable as any
-    (x as { rows: unknown[] }).rows.every(isEmtrRow)
-  );
+function hasRowsProp(x: unknown): x is { rows: unknown } {
+  return typeof x === "object" && x !== null && "rows" in (x as object);
 }
 
-// Optional: factor this out to a shared db util module for pooling
+function isRowsPayload(x: unknown): x is RowsPayload {
+  if (!hasRowsProp(x)) return false;
+  const rows = (x as { rows: unknown }).rows;
+  return Array.isArray(rows) && rows.every(isEmtrRow);
+}
+
+/* ---------- DB connection (simple; you can switch to a pool) ---------- */
 async function getConn() {
   return mysql.createConnection({
     host: process.env.EMTR_DB_HOST ?? "127.0.0.1",
@@ -69,14 +71,15 @@ async function getConn() {
   });
 }
 
+/* ---------- route handler ---------- */
 export async function POST(
   req: NextRequest,
   { params }: { params: { jobId: string } }
 ) {
   const jobId = params.jobId;
-  if (!jobId || typeof jobId !== "string") {
+  if (!jobId) {
     return NextResponse.json(
-      { ok: false, error: "Missing or invalid jobId" },
+      { ok: false, error: "Missing jobId" },
       { status: 400 }
     );
   }
@@ -93,13 +96,12 @@ export async function POST(
 
   if (!isRowsPayload(bodyUnknown)) {
     return NextResponse.json(
-      { ok: false, error: "Invalid payload shape for { rows: EmtrRow[] }" },
+      { ok: false, error: "Invalid payload; expected { rows: EmtrRow[] }" },
       { status: 400 }
     );
   }
 
   const { rows } = bodyUnknown;
-
   if (rows.length === 0) {
     return NextResponse.json({ ok: true, inserted: 0 });
   }
@@ -108,9 +110,7 @@ export async function POST(
   try {
     await conn.beginTransaction();
 
-    // If you also want to store the method column, include it below and in your table.
-    // Here we assume table emtr_rows has columns:
-    // (job_id, root, rep, iter, ll_pars, edc_ll_first, edc_ll_final, ll_final)
+    // If you also add a `method` column in emtr_rows, include it here.
     const sql = `
       INSERT INTO emtr_rows
       (job_id, root, rep, iter, ll_pars, edc_ll_first, edc_ll_final, ll_final)
@@ -136,7 +136,7 @@ export async function POST(
   } catch (e: unknown) {
     await conn.rollback();
     const msg =
-      e && typeof e === "object" && "message" in e
+      typeof e === "object" && e && "message" in e
         ? String((e as { message?: unknown }).message)
         : "Unknown error";
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
