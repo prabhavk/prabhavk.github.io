@@ -74,10 +74,11 @@ async function getConn() {
 /* ---------- route handler ---------- */
 export async function POST(
   req: Request,
-  { params }: { params: { jobId: string } }
+  context: { params: Record<string, string | string[]> }
 ) {
-  const jobId = params.jobId;
-  if (!jobId) {
+  const raw = context.params["jobId"];
+  const jobId = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof jobId !== "string" || jobId.length === 0) {
     return NextResponse.json(
       { ok: false, error: "Missing jobId" },
       { status: 400 }
