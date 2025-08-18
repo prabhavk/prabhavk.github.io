@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Rebuild WASM to publish fresh artifacts with the site
+      # Rebuild WASM here to ensure we publish with the fresh C++ (simplest and reliable).
       - name: Set up Emscripten SDK
         uses: mymindstorm/setup-emsdk@v14
         with:
@@ -44,7 +44,7 @@ jobs:
             --bind \
             -o public/wasm/emtr.js
 
-      # Build & stage the static site
+      # Build & deploy the site
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
