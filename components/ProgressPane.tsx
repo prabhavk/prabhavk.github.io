@@ -4,14 +4,14 @@ import { useEffect, useRef } from "react";
 import { useProgress } from "./ProgressProvider";
 
 export default function ProgressPane() {
-  const { jobId, status, logs, clear } = useProgress();
+  const { jobId, status, logs, clear, attachScroller } = useProgress();
   const boxRef = useRef<HTMLDivElement>(null);
 
-  // auto-scroll to bottom as logs arrive
+  // Register this pane as the scroll target for auto-scrolling
   useEffect(() => {
-    const el = boxRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [logs]);
+    attachScroller(boxRef.current);
+    return () => attachScroller(null);
+  }, [attachScroller]);
 
   return (
     <aside className="w-full lg:w-80 xl:w-96 border-l bg-white p-4 sticky top-0 h-[calc(100vh-0px)]">
@@ -27,8 +27,11 @@ export default function ProgressPane() {
         ref={boxRef}
         className="h-[70vh] overflow-auto rounded border bg-gray-50 p-2 font-mono text-xs text-black"
       >
-        {logs.length === 0 ? <div className="text-gray-400">No output yet…</div> :
-          logs.map((l, i) => <div key={i}>{l}</div>)}
+        {logs.length === 0 ? (
+          <div className="text-gray-400">No output yet…</div>
+        ) : (
+          logs.map((l, i) => <div key={i}>{l}</div>)
+        )}
       </div>
 
       <div className="mt-3 flex gap-2">

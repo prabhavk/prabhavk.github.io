@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 
 type Status = "idle" | "running" | "done" | "error";
+
 type ProgressCtx = {
   jobId?: string;
   status: Status;
@@ -10,6 +11,8 @@ type ProgressCtx = {
   start: (jobId: string) => void;
   append: (line: string) => void;
   clear: () => void;
+  /** Call this with a DOM node that renders the logs to enable auto-scroll */
+  attachScroller: (el: HTMLElement | null) => void;
 };
 
 const Ctx = createContext<ProgressCtx | null>(null);
@@ -26,6 +29,12 @@ export default function ProgressProvider({ children }: { children: React.ReactNo
   const [logs, setLogs] = useState<string[]>([]);
   const pollRef = useRef<number | null>(null);
 
+  // element to auto-scroll
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  const attachScroller = (el: HTMLElement | null) => {
+    scrollerRef.current = el;
+  };
+
   function clear() {
     setLogs([]);
     setStatus("idle");
@@ -35,16 +44,28 @@ export default function ProgressProvider({ children }: { children: React.ReactNo
   }
 
   function append(line: string) {
-    setLogs(prev => [...prev, line]);
+    setLogs((prev) => [...prev, line]);
   }
+
+  // Auto-scroll to bottom whenever logs change
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+
+    // If user is near bottom (or we just want to force-scroll), scroll to bottom
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    if (nearBottom || status === "running") {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [logs, status]);
 
   // Call this when you kick off EMTR
   function start(id: string) {
     setJobId(id);
     setStatus("running");
     setLogs([]);
-    // TODO: Replace with your backend stream (SSE/WebSocket) when ready.
-    // --- Demo/poll stub (static hosting fallback) ---
+
+    // Demo stub (remove when wiring to worker events)
     if (pollRef.current) window.clearInterval(pollRef.current);
     let i = 0;
     pollRef.current = window.setInterval(() => {
@@ -53,22 +74,13 @@ export default function ProgressProvider({ children }: { children: React.ReactNo
       if (i >= 10) {
         setStatus("done");
         if (pollRef.current) window.clearInterval(pollRef.current);
-        pollRef.current = null;        
+        pollRef.current = null;
       }
     }, 700);
   }
 
-  // If you later wire a real backend:
-  // useEffect(() => {
-  //   if (!jobId) return;
-  //   const es = new EventSource(`https://YOUR-BACKEND/jobs/${jobId}/stream`);
-  //   es.onmessage = (e) => append(e.data);
-  //   es.onerror = () => setStatus("error");
-  //   return () => es.close();
-  // }, [jobId]);
-
   return (
-    <Ctx.Provider value={{ jobId, status, logs, start, append, clear }}>
+    <Ctx.Provider value={{ jobId, status, logs, start, append, clear, attachScroller }}>
       {children}
     </Ctx.Provider>
   );
