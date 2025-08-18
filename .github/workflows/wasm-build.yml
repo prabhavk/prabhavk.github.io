@@ -30,7 +30,7 @@ jobs:
             -s ENVIRONMENT=web,worker \
             -s FILESYSTEM=1 \
             -s EXPORTED_RUNTIME_METHODS='["FS","ccall","cwrap"]' \
-            -s ASSERTIONS=2 -s DEMANGLE_SUPPORT=1 \
+            -s ASSERTIONS=2\
             -s DISABLE_EXCEPTION_CATCHING=0 \
             --bind \
             -o public/wasm/emtr.js
