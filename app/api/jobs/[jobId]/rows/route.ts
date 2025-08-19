@@ -58,7 +58,7 @@ export async function POST(req: Request) {
     }
 
     // jobId from URL
-    const jobId = req.url.match(/\/api\/jobs\/([^/]+)\/rows\/?$/)?.[1] ?? "";
+    const jobId = params.jobId;
     if (!jobId) {
       return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
     }
