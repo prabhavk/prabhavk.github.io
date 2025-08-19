@@ -31,13 +31,13 @@ function normalizeRow(raw) {
     raw.logLikelihood_ssh ??
     raw.loglikelihood_ssh;
 
-  const edc_first_src =
+  const ecd_first_src =
     raw.ecd_ll_first ??
     raw.ecd_ll_first ??
     raw.logLikelihood_ecd_first ??
     raw.loglikelihood_ecd_first;
 
-  const edc_final_src =
+  const ecd_final_src =
     raw.edc_ll_final ??
     raw.ecd_ll_final ??
     raw.logLikelihood_ecd_final ??
@@ -58,8 +58,8 @@ function normalizeRow(raw) {
     rep: Number.isInteger(raw.rep) ? raw.rep : toInt(rep_src),
     iter: Number.isInteger(raw.iter) ? raw.iter : toInt(iter_src),
     ll_pars: toNum(ll_pars_src),
-    ecd_ll_first: toNum(edc_first_src),
-    ecd_ll_final: toNum(edc_final_src),
+    ecd_ll_first: toNum(ecd_first_src),
+    ecd_ll_final: toNum(ecd_final_src),
     ll_final: toNum(ll_final_src),
   };
 
