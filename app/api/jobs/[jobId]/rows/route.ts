@@ -108,7 +108,7 @@ export async function POST(
       const placeholders = batch.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
       const args = batch.flatMap((r) => [
         jobId,
-        normMethod(r.method),       // <-- use normalized method (no longer hard-coded to "main")
+        r.method,       
         r.root,
         toInt(r.rep),
         toInt(r.iter),

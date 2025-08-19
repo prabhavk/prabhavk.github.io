@@ -4447,7 +4447,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results
 
 			emtr::push_result(
                 this->EMTR_results,                 // vector<tuple<string,string,int,int,double,double,double,double>>
-                "Dirichlet",                        // init_method
+                "dirichlet",                        // init_method
                 v->name,                            // root
                 rep + 1,                            // repetition (1-based)
                 iter,
@@ -4576,7 +4576,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results
 
 			emtr::push_result(
                 this->EMTR_results,                 // vector<tuple<string,string,int,int,double,double,double,double>>
-                "Parsimony",                        // init_method
+                "parsimony",                        // init_method
                 v->name,                            // root
                 rep + 1,                            // repetition (1-based)
                 iter,
@@ -4708,7 +4708,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int n
 
 			emtr::push_result(
                 this->EMTR_results,                 // vector<tuple<string,string,int,int,double,double,double,double>>
-                "SSH",		                        // init_method
+                "ssh",		                        // init_method
                 v->name,                            // root
                 rep + 1,                            // repetition (1-based)
                 iter,
