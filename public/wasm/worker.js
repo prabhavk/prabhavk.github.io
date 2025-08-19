@@ -22,6 +22,10 @@ function normalizeRow(raw) {
   const toNum = (v) => (v == null || v === "" ? NaN : Number(v));
   const toInt = (v) => (v == null || v === "" ? NaN : parseInt(v, 10));
 
+  // Map method strings like "Parsimony"/"Dirichlet"/"SSH" to lowercase enum
+  const mRaw = String(raw.method ?? "").toLowerCase();
+  const method = (mRaw === "parsimony" || mRaw === "dirichlet" || mRaw === "ssh") ? mRaw : "main";
+
   // ----- alias mapping (accept multiple key spellings from native stdout) -----
   const ll_pars_src =
     raw.ll_pars ??

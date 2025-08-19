@@ -1,6 +1,7 @@
-// app/jobs/[jobId]/wilcoxon/page.tsx
 "use client";
+
 import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 
 type PairRes = { U: number; p: number; q?: number; n1: number; n2: number };
 type RowRes = {
@@ -10,21 +11,23 @@ type RowRes = {
   dirichlet_vs_ssh: PairRes;
 };
 
-export default function WilcoxonPage({ params }: { params: { jobId: string } }) {
-  const { jobId } = params;
+export default function WilcoxonPage() {
+  const { jobId } = useParams<{ jobId: string }>();
   const [rows, setRows] = useState<RowRes[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!jobId) return;
     fetch(`/api/jobs/${encodeURIComponent(jobId)}/wilcoxon`)
-      .then(r => r.json())
-      .then(j => {
+      .then((r) => r.json())
+      .then((j) => {
         if (!j.ok) setErr(j.error || "Error");
         else setRows(j.results || []);
       })
-      .catch(e => setErr(String(e)));
+      .catch((e) => setErr(String(e)));
   }, [jobId]);
 
+  if (!jobId) return <div className="p-4">Loading…</div>;
   if (err) return <div className="p-4 text-red-400">Error: {err}</div>;
 
   return (

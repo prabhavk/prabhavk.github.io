@@ -4,13 +4,14 @@ import { db } from "@/lib/pscale";
 
 export const runtime = "edge";
 
-// row shape FROM THE WORKER (no method required here)
+// Row shape FROM THE WORKER
 interface EmtrRowIn {
+  method: string;                  // e.g., "Parsimony" | "Dirichlet" | "SSH" | "main"
   root: string;
   rep: number | string;
   iter: number | string;
   ll_pars: number | string;
-  ecd_ll_first: number | string;
+  ecd_ll_first: number | string;   // NOTE: corrected "ecd_*" names
   ecd_ll_final: number | string;
   ll_final: number | string;
 }
@@ -25,10 +26,21 @@ const toNum = (x: unknown) => (typeof x === "number" ? x : Number(String(x)));
 const isFiniteNum = (x: unknown) => Number.isFinite(toNum(x));
 const isSafeInt = (x: unknown) => Number.isInteger(toInt(x)) && toInt(x) >= 0;
 
+// Normalize worker-provided method to your DB enum (lowercase)
+function normMethod(m: unknown): "parsimony" | "dirichlet" | "ssh" | "main" {
+  const s = String(m ?? "").trim().toLowerCase();
+  if (s === "parsimony" || s === "dirichlet" || s === "ssh" || s === "main") return s;
+  // Accept common capitalizations from native logs:
+  if (s === "reparameterized mle") return "ssh"; // if you ever emit that label
+  return "main";
+}
+
 function isRow(x: unknown): x is EmtrRowIn {
   if (typeof x !== "object" || x === null) return false;
   const r = x as Record<string, unknown>;
+  // Validate types and numeric fields
   return (
+    typeof r.method !== "undefined" &&
     typeof r.root === "string" &&
     isSafeInt(r.rep) &&
     isSafeInt(r.iter) &&
@@ -48,7 +60,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
 /* ---------- handler ---------- */
 export async function POST(
   req: NextRequest,
-  // Next.js 15 note: params is a Promise
+  // Next.js 15: params is a Promise
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   try {
@@ -80,7 +92,7 @@ export async function POST(
       );
     }
 
-    // Validate + normalize
+    // Validate + collect
     const valid: EmtrRowIn[] = [];
     for (const r of rows) {
       if (!isRow(r)) {
@@ -96,7 +108,7 @@ export async function POST(
       const placeholders = batch.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
       const args = batch.flatMap((r) => [
         jobId,
-        "main",                      // force method to "main"
+        normMethod(r.method),       // <-- use normalized method (no longer hard-coded to "main")
         r.root,
         toInt(r.rep),
         toInt(r.iter),
@@ -106,7 +118,7 @@ export async function POST(
         toNum(r.ll_final),
       ]);
 
-      // ON DUPLICATE KEY requires a UNIQUE or PRIMARY KEY over (job_id, root, rep, iter)
+      // Columns reflect corrected "ecd_*" names
       const sql = `
         INSERT INTO emtr_rows
           (job_id, method, root, rep, iter, ll_pars, ecd_ll_first, ecd_ll_final, ll_final)
