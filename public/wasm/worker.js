@@ -23,8 +23,8 @@ function normalizeRow(raw) {
   const toInt = (v) => (v == null || v === "" ? NaN : parseInt(v, 10));
 
   // Map method strings like "Parsimony"/"Dirichlet"/"SSH" to lowercase enum
-  const mRaw = String(raw.method ?? "").toLowerCase();  
-  const method = (mRaw === "parsimony" || mRaw === "dirichlet" || mRaw === "ssh") ? mRaw : "main";
+  // const mRaw = String(raw.method ?? "").toLowerCase();  
+  const method_src = raw.method
 
   // ----- alias mapping (accept multiple key spellings from native stdout) -----
   const ll_pars_src =
@@ -57,7 +57,7 @@ function normalizeRow(raw) {
   const root_src = raw.root ?? raw.start ?? raw.node;
 
   const r = {
-    method: method,
+    method: method_src,
     root: String(root_src ?? ""),
     rep: Number.isInteger(raw.rep) ? raw.rep : toInt(rep_src),
     iter: Number.isInteger(raw.iter) ? raw.iter : toInt(iter_src),
