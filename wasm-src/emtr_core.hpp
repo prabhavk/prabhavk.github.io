@@ -97,13 +97,19 @@ private:
 	int max_EM_iter;
 	double conv_thresh;
     public:
-    EMManager(string sequenceFileNameToSet,
-              string input_format,
+    EMManager(string sequenceFileNameToSet,              
               string topologyFileNameToSet,
-              string prefix_for_output_files,
               int num_repetitions,
               int max_iter,
-              double conv_threshold);
+              double conv_threshold,
+			  double pi_a_1,
+			  double pi_a_2,
+			  double pi_a_3,
+			  double pi_a_4,
+			  double M_a_1,
+			  double M_a_2,
+			  double M_a_3,
+			  double M_a_4);
 	~EMManager();
 	double max_log_lik;
 	double max_log_lik_pars;

@@ -112,36 +112,10 @@ namespace emtr {
     // ---------- Dirichlet sampler ----------
     using Md = std::array<std::array<double,4>,4>;
 
-    inline std::array<double, 4> sample_dirichlet(const std::array<double, 4>& alpha,
-                                                std::mt19937_64& gen) {
-        std::array<double, 4> x{};
-        double sum = 0.0;
-        for (std::size_t i = 0; i < 4; ++i) {
-            std::gamma_distribution<double> gamma(alpha[i], 1.0);
-            x[i] = gamma(gen);
-            sum += x[i];
-        }
-        for (auto& v : x) v /= sum;
-        return x;
-    }
-
-    inline constexpr std::array<double,4> D_pi_default  {100,100,100,100};
-    inline constexpr std::array<double,4> D_M_row_default {100,2,2,2};
-
-
     inline std::mt19937_64& rng() {
         static thread_local std::mt19937_64 g{0xC0FFEEULL};
         return g;
     }
-
-    inline std::array<double, 4> sample_pi(const std::array<double,4>& alpha = D_pi_default) {
-    return sample_dirichlet(alpha, rng());
-    }
-
-    inline std::array<double, 4> sample_M_row(const std::array<double,4>& alpha = D_M_row_default) {
-    return sample_dirichlet(alpha, rng());
-    }
-
     
     inline bool starts_with(const std::string& str, const std::string& prefix) {
         return str.size() >= prefix.size() && str.compare(0, prefix.size(), prefix) == 0;

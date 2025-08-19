@@ -23,7 +23,6 @@ function normalizeRow(raw) {
   const toInt = (v) => (v == null || v === "" ? NaN : parseInt(v, 10));
 
   // ----- alias mapping (accept multiple key spellings from native stdout) -----
-  // initial/parsimony/ssh log-likelihood (what your DB calls ll_pars)
   const ll_pars_src =
     raw.ll_pars ??
     raw.ll_initial ??
@@ -32,37 +31,30 @@ function normalizeRow(raw) {
     raw.logLikelihood_ssh ??
     raw.loglikelihood_ssh;
 
-  // first EDC pass; handle edc/ec d + different casings
   const edc_first_src =
     raw.edc_ll_first ??
     raw.ecd_ll_first ??
     raw.logLikelihood_ecd_first ??
     raw.loglikelihood_ecd_first;
 
-  // final EDC pass
   const edc_final_src =
     raw.edc_ll_final ??
     raw.ecd_ll_final ??
     raw.logLikelihood_ecd_final ??
     raw.loglikelihood_ecd_final;
 
-  // final EM log-likelihood
   const ll_final_src =
     raw.ll_final ??
     raw.logLikelihood_final ??
     raw.loglikelihood_final;
 
-  // repetition / iteration
   const rep_src  = raw.rep  ?? raw.repetition ?? raw.repeat;
   const iter_src = raw.iter ?? raw.iteration;
-
-  // root node label (sometimes printed as "start" or "node")
   const root_src = raw.root ?? raw.start ?? raw.node;
 
-  // ----- build the canonical row -----
   const r = {
-    method: "main",                              // fixed
-    root: String(root_src ?? ""),                // required string
+    method: "main",
+    root: String(root_src ?? ""),
     rep: Number.isInteger(raw.rep) ? raw.rep : toInt(rep_src),
     iter: Number.isInteger(raw.iter) ? raw.iter : toInt(iter_src),
     ll_pars: toNum(ll_pars_src),
@@ -191,24 +183,42 @@ self.onmessage = async (e) => {
     const reps = params.reps | 0;
     const maxIter = params.maxIter | 0;
 
-    // Fixed format (sequence format field removed from UI)
-    const fmt = "phylip";
+    // Dirichlet alphas (with defaults)
+    const D_pi = Array.isArray(params?.D_pi) && params.D_pi.length === 4 ? params.D_pi.map(Number) : [100,100,100,100];
+    const D_M  = Array.isArray(params?.D_M)  && params.D_M.length  === 4 ? params.D_M.map(Number)  : [100,2,2,2];
 
     postMessage({ type: "log", line: `WASM dispatch: EM_main` });
 
     // --- Single unified path: EM_main only ---
     let rc = 0;
     if (typeof Module.EMManager === "function") {
-      const mgr = new Module.EMManager("/work/sequence.phyx", fmt, "/work/topology.csv", "/work/out", reps, maxIter, thr);
+      // EMManager(sequence, topology, reps, maxIter, thr, pi1..pi4, M1..M4)
+      const mgr = new Module.EMManager(
+        "/work/sequence.phyx",
+        "/work/topology.csv",
+        reps,
+        maxIter,
+        thr,
+        D_pi[0], D_pi[1], D_pi[2], D_pi[3],
+        D_M[0],  D_M[1],  D_M[2],  D_M[3]
+      );
       mgr.EM_main(); // internally: parsimony → dirichlet → ssh
     } else {
+      // C ABI fallback (signature updated to include 8 Dirichlet params; no format arg)
       const EM_main_entry_c = Module.cwrap(
         "EM_main_entry_c",
         "number",
-        ["string", "string", "number", "number", "number", "string"]
+        ["string","string","number","number","number",
+         "number","number","number","number",
+         "number","number","number","number"]
       );
       if (!EM_main_entry_c) throw new Error("EM_main_entry_c not exported");
-      rc = EM_main_entry_c("/work/sequence.phyx", "/work/topology.csv", thr, reps, maxIter, fmt);
+      rc = EM_main_entry_c(
+        "/work/sequence.phyx", "/work/topology.csv",
+        thr, reps, maxIter,
+        D_pi[0], D_pi[1], D_pi[2], D_pi[3],
+        D_M[0],  D_M[1],  D_M[2],  D_M[3]
+      );
     }
 
     // Finalize: flush rows, ship artifacts, and finish

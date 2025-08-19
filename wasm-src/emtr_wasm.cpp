@@ -11,21 +11,25 @@ static void set_line_buffered_impl() {
   setvbuf(stderr, nullptr, _IOLBF, 0);
 }
 
+// Unified runner for EM_main with Dirichlet params (no format arg)
 static int run_em_main_pipeline(const std::string& seqPath,
                                 const std::string& topoPath,
-                                double thr,
-                                int reps,
-                                int maxIter,
-                                const std::string& seqFormat,
-                                const std::string& prefix = "/work/out") {
+                                double conv_threshold,
+                                int num_repetitions,
+                                int max_iter,
+                                double pi_a_1, double pi_a_2, double pi_a_3, double pi_a_4,
+                                double M_a_1, double M_a_2, double M_a_3, double M_a_4) {
   set_line_buffered_impl();
-  // ctor: (sequence_file, seq_file_format, topology_file, prefix, num_reps, max_iter, conv_threshold)
-  EMManager mgr(seqPath, seqFormat, topoPath, prefix, reps, maxIter, thr);
-  mgr.EM_main(); // no-arg method using the state above
+  // EMManager(sequence, topology, reps, maxIter, thr,
+  //           pi1, pi2, pi3, pi4, M1, M2, M3, M4)
+  EMManager mgr(seqPath, topoPath, num_repetitions, max_iter, conv_threshold,
+                pi_a_1, pi_a_2, pi_a_3, pi_a_4,
+                M_a_1,  M_a_2,  M_a_3,  M_a_4);
+  mgr.EM_main();
   return 0;
 }
 
-// ---------- C exports (usable via cwrap) ----------
+// ---------- C exports (used by worker.js fallback) ----------
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
@@ -34,37 +38,42 @@ void set_line_buffered_c() { set_line_buffered_impl(); }
 EMSCRIPTEN_KEEPALIVE
 int EM_main_entry_c(const char* seqPath,
                     const char* topoPath,
-                    double thr,
-                    int reps,
-                    int maxIter,
-                    const char* seqFormat) {
-  return run_em_main_pipeline(seqPath, topoPath, thr, reps, maxIter, seqFormat, "/work/out");
+                    double conv_threshold,
+                    int num_repetitions,
+                    int max_iter,
+                    double pi_a_1, double pi_a_2, double pi_a_3, double pi_a_4,
+                    double M_a_1, double M_a_2, double M_a_3, double M_a_4) {
+  return run_em_main_pipeline(std::string(seqPath), std::string(topoPath),
+                              conv_threshold, num_repetitions, max_iter,
+                              pi_a_1, pi_a_2, pi_a_3, pi_a_4,
+                              M_a_1,  M_a_2,  M_a_3,  M_a_4);
 }
 
 } // extern "C"
 
-// ---------- Embind (class API + convenience fns) ----------
+// ---------- Embind (class API only; no ambiguous helpers) ----------
 EMSCRIPTEN_BINDINGS(emtr_module) {
   emscripten::class_<EMManager>("EMManager")
-    // (sequence_file, seq_file_format, topology_file, prefix, num_reps, max_iter, conv_threshold)
-    .constructor<std::string, std::string, std::string, std::string, int, int, double>()
+    // constructor(sequence, topology, reps, maxIter, thr, pi1..pi4, M1..M4)
+    .constructor<std::string, std::string, int, int, double,
+                 double,double,double,double,
+                 double,double,double,double>()
     .function("EM_main",     &EMManager::EM_main)
     .function("EMparsimony", &EMManager::EMparsimony)
     .function("EMdirichlet", &EMManager::EMdirichlet)
     .function("EMssh",       &EMManager::EMssh);
 
-  // Embind-callable helpers:
-  emscripten::function("set_line_buffered", &set_line_buffered_impl);
-
-  emscripten::function(
-    "EM_main_entry",
-    emscripten::optional_override([](const std::string& seqPath,
-                                     const std::string& topoPath,
-                                     double thr,
-                                     int reps,
-                                     int maxIter,
-                                     const std::string& seqFormat) {
-      return run_em_main_pipeline(seqPath, topoPath, thr, reps, maxIter, seqFormat, "/work/out");
-    })
-  );
+  // If you ever want embind helpers instead of C exports, use fully-qualified names:
+  // emscripten::function("set_line_buffered", &set_line_buffered_impl);
+  // emscripten::function("EM_main_entry",
+  //   emscripten::optional_override([](const std::string& seqPath,
+  //                                    const std::string& topoPath,
+  //                                    double conv_threshold, int num_repetitions, int max_iter,
+  //                                    double pi_a_1, double pi_a_2, double pi_a_3, double pi_a_4,
+  //                                    double M_a_1, double M_a_2, double M_a_3, double M_a_4) {
+  //     return run_em_main_pipeline(seqPath, topoPath, conv_threshold, num_repetitions, max_iter,
+  //                                 pi_a_1, pi_a_2, pi_a_3, pi_a_4,
+  //                                 M_a_1, M_a_2, M_a_3, M_a_4);
+  //   })
+  // );
 }

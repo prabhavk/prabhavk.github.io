@@ -786,7 +786,7 @@ void MST::ReadPhyx(string sequenceFileNameToSet) {
     vector <string> splitLine = emtr::split_ws(line);
     this->numberOfInputSequences = stoi(splitLine[0]);
     this->sequence_length = stoi(splitLine[1]);
-    cout << "phylip file contains " << this->numberOfInputSequences << " sequences of length " << this->sequence_length << endl;
+    cout << "sequence file contains " << this->numberOfInputSequences << " sequences of length " << this->sequence_length << endl;
     while(getline(inputFile,line)) {
         vector <string> splitLine = emtr::split_ws(line);
         seqName = splitLine[0];
@@ -1789,6 +1789,9 @@ void cliqueTree::CalibrateTree() {
 class SEM {
 	
 public:
+	array <double, 4> alpha_pi;
+	array <double, 4> alpha_M_row;
+	array<double, 4> sample_dirichlet(const array <double, 4>& alpha, mt19937_64& gen);
 	int largestIdOfVertexInMST = 1;
 	default_random_engine generator;
 	bool setParameters;
@@ -2088,10 +2091,16 @@ public:
 	void EM_root_search_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
 	void EM_root_search_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
 	void EM_root_search_at_each_internal_vertex_started_with_SSH_par(int num_repetitions);
+	void set_alpha_PI(double a1, double a2, double a3, double a4);
+	void set_alpha_M_row(double a1, double a2, double a3, double a4);
+	array <double, 4> sample_pi();
+    array <double, 4> sample_M_row();
 	// Select vertex for rooting Chow-Liu tree and update edges in T
 	// Modify T such that T is a bifurcating tree and likelihood of updated
 	// tree is equivalent to the likelihood of T
-	SEM (int largestIdOfVertexInMST_toSet, double loglikelihood_conv_thresh, int max_EM_iter, bool verbose_flag_to_set) {
+	SEM (int largestIdOfVertexInMST_toSet, double loglikelihood_conv_thresh, int max_EM_iter, bool verbose_flag_to_set) {		
+		this->alpha_pi = {100,100,100,100}; // default value
+		this->alpha_M_row = {100,2,2,2};
 		this->root_search = false;
 		this->logLikelihoodConvergenceThreshold = loglikelihood_conv_thresh;
 		this->maxIter = max_EM_iter;
@@ -2129,9 +2138,41 @@ public:
 	}
 };
 
-// void SEM::SetStream(ofstream& stream_to_set){
-// 	this->logFile = &stream_to_set;
-// }
+
+array <double, 4> SEM::sample_pi() {
+	return sample_dirichlet(this->alpha_pi, rng());
+}
+
+array <double, 4> SEM::sample_M_row() {
+	return sample_dirichlet(this->alpha_M_row, rng());
+}
+
+array <double, 4> SEM::sample_dirichlet(const array<double, 4>& alpha, mt19937_64& gen) {
+        array<double, 4> x{};
+        double sum = 0.0;
+        for (size_t i = 0; i < 4; ++i) {
+            gamma_distribution<double> gamma(alpha[i], 1.0);
+            x[i] = gamma(gen);
+            sum += x[i];
+        }
+        for (auto& v : x) v /= sum;
+        return x;
+    }
+
+void SEM::set_alpha_PI(double a1, double a2, double a3, double a4) {
+	this->alpha_pi[0] = a1;
+	this->alpha_pi[1] = a2;
+	this->alpha_pi[2] = a3;
+	this->alpha_pi[3] = a4;	
+}
+
+void SEM::set_alpha_M_row(double a1, double a2, double a3, double a4) {
+	this->alpha_M_row[0] = a1;
+	this->alpha_M_row[1] = a2;
+	this->alpha_M_row[2] = a3;
+	this->alpha_M_row[3] = a4;
+}
+
 
 void SEM::AddDuplicatedSequencesToRootedTree(MST * M) {
 	// Store dupl seq names in uniq seq vertex
@@ -5739,7 +5780,7 @@ void SEM::ComputeMLEOfTransitionMatrices() {
 
 void SEM::SetInitialEstimateOfModelParametersUsingDirichlet() {
 
-	array <double, 4> pi_diri = emtr::sample_pi();
+	array <double, 4> pi_diri = SEM::sample_pi();
 
 	this->rootProbability = pi_diri;
 	this->root->rootProbability = pi_diri;
@@ -5750,7 +5791,7 @@ void SEM::SetInitialEstimateOfModelParametersUsingDirichlet() {
 		c = edge.second;
 
 		for (int row = 0; row < 4; row++) {
-			array <double, 4> M_row_diri = emtr::sample_M_row();
+			array <double, 4> M_row_diri = SEM::sample_M_row();
 			int diri_index = 1;
 			for (int col = 0; col < 4; col++) {
 				if (row == col){
@@ -7038,17 +7079,21 @@ void SEM::ComputeNJTree_may_contain_uninitialized_values() {
 
 ///...///...///...///...///...///...///... Constructor and Destructor for EM manager ///...///...///...///...///...///...///...///...///
 
-EMManager::EMManager(string sequenceFileNameToSet, string input_format, string topologyFileNameToSet, string prefix_for_output_files, int num_repetitions, int max_iter, double conv_threshold) {			
-		this->prefix_for_output_files = prefix_for_output_files;
-		// this->emt_logFile.open(this->prefix_for_output_files + ".emt_log");		
-        if (input_format == "phylip") {
-            cout << "file format is phylip\n";
-            this->phylipFileName = sequenceFileNameToSet;
-        } else if (input_format == "fasta") {            
-            throw mt_error("Fasta file parsing not implemented");
-        } else {
-            throw mt_error("Sequence file format not recognized");
-        }
+EMManager::EMManager(string sequenceFileNameToSet,					 
+					 string topologyFileNameToSet,
+					 int num_repetitions,
+					 int max_iter,
+					 double conv_threshold,
+					 double pi_a_1,
+					 double pi_a_2,
+					 double pi_a_3,
+					 double pi_a_4,
+					 double M_a_1,
+					 double M_a_2,
+					 double M_a_3,
+					 double M_a_4) { // add parameters for Matrix rows			
+									 // add parameters for root probability
+		this->prefix_for_output_files = "";		        
 		this->topologyFileName = topologyFileNameToSet;
 		this->supertree_method = "mstbackbone";
         this->num_repetitions = num_repetitions;        
@@ -7057,23 +7102,19 @@ EMManager::EMManager(string sequenceFileNameToSet, string input_format, string t
 		this->flag_topology = 1;
 		this->conv_thresh = conv_threshold;
 		this->max_EM_iter = max_iter;		
-		this->numberOfLargeEdgesThreshold = 100;		
-		MSTFileName = prefix_for_output_files + ".initial_MST";
+		this->numberOfLargeEdgesThreshold = 100;				
 		this->SetDNAMap();
 		this->ancestralSequencesString = "";		
 		this->M = new MST();
-        if (input_format == "phylip") {
-            cout << "Reading phylip file\n";
-            this->M->ReadPhyx(this->phylipFileName);
-        }
-		this->M->ComputeMST();	
-		if (false) {
-			this->M->WriteToFile(MSTFileName);
-		}	    
+        this->M->ReadPhyx(sequenceFileNameToSet);
+		this->M->ComputeMST();		
 		int numberOfInputSequences = (int) this->M->vertexMap->size();
 		this->M->SetNumberOfLargeEdgesThreshold(this->numberOfLargeEdgesThreshold);		
 		this->P = new SEM(1,conv_threshold,max_iter,this->verbose);
-		// this->P->SetStream(this->emt_logFile);		
+		// set dirichlet parameters
+		this->P->set_alpha_PI(pi_a_1, pi_a_2, pi_a_3, pi_a_4);
+		this->P->set_alpha_M_row(M_a_1, M_a_2, M_a_3, M_a_4);
+		
 		this->P->numberOfObservedVertices = numberOfInputSequences;
 		this->P->logLikelihoodConvergenceThreshold = conv_threshold;
 		this->P->maxIter = max_iter;		
@@ -7089,7 +7130,7 @@ EMManager::~EMManager(){
 	}
 
 
-void EMManager::EM_main() {
+void EMManager::EM_main() {	
 	this->P->max_log_likelihood_best = -1 * pow(10,10);
 	cout << "Starting EM with initial parameters set using parsimony" << endl;	
 	this->P->EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results(this->num_repetitions);
