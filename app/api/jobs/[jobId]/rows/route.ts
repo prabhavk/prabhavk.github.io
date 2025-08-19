@@ -50,8 +50,9 @@ function chunk<T>(arr: T[], size: number): T[][] {
 
 /* ---------- handler ---------- */
 export async function POST(
-  req: NextRequest,                                  // ✅ use NextRequest
-  { params }: { params: { jobId: string } }         // ✅ valid context shape
+  req: NextRequest,
+  // ✅ Next.js 15: params is a Promise
+  { params }: { params: Promise<{ jobId: string }> }
 ) {
   try {
     // Require JSON
@@ -60,8 +61,8 @@ export async function POST(
       return NextResponse.json({ ok: false, error: "Content-Type must be application/json" }, { status: 415 });
     }
 
-    // jobId from route params
-    const jobId = params.jobId;
+    // ✅ await params in Next 15
+    const { jobId } = await params;
     if (!jobId) {
       return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
     }
