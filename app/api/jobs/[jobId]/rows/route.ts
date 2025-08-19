@@ -49,7 +49,10 @@ function chunk<T>(arr: T[], size: number): T[][] {
 }
 
 /* ---------- handler ---------- */
-export async function POST(req: Request) {
+export async function POST(
+  req: Request,
+  { params }: { params: { jobId: string } }   // ✅ accept params from Next.js
+) {
   try {
     // Require JSON
     const ct = req.headers.get("content-type") || "";
@@ -57,7 +60,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Content-Type must be application/json" }, { status: 415 });
     }
 
-    // jobId from URL
+    // jobId from route params
     const jobId = params.jobId;
     if (!jobId) {
       return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
@@ -86,9 +89,7 @@ export async function POST(req: Request) {
     const valid: EmtrRow[] = [];
     for (const r of rows) {
       if (isEmtrRow(r)) valid.push(r);
-      else {
-        return NextResponse.json({ ok: false, error: "Row validation failed" }, { status: 400 });
-      }
+      else return NextResponse.json({ ok: false, error: "Row validation failed" }, { status: 400 });
     }
 
     // Build SQL and insert in chunks
@@ -97,7 +98,7 @@ export async function POST(req: Request) {
 
     for (const batch of chunk(valid, INSERT_CHUNK_SIZE)) {
       const valuesSql = batch.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
-      const params = batch.flatMap((r) => [
+      const sqlParams = batch.flatMap((r) => [   // ✅ renamed from `params` → `sqlParams`
         jobId,
         r.method,
         r.root,
@@ -116,7 +117,7 @@ export async function POST(req: Request) {
         ON DUPLICATE KEY UPDATE job_id = job_id
       `;
 
-      await conn.execute(sql, params);
+      await conn.execute(sql, sqlParams);
       inserted += batch.length;
     }
 
