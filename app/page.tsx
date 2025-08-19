@@ -3,6 +3,25 @@
 import { useEffect, useRef, useState } from "react";
 import { useProgress } from "../components/ProgressProvider";
 
+const REQUIRE_MAP_SAFE = true; // set to false if your EM uses posterior means, not MAP
+const ALPHA_MIN = 1e-6;       // numeric guardrail
+const ALPHA_MAX = 1e6;        // numeric guardrail
+const KAPPA_MAX = 1e8;        // sum(α) guardrail
+
+function validateDirichlet(a: number[], requireMapSafe = REQUIRE_MAP_SAFE): string | null {
+  if (!Array.isArray(a) || a.length !== 4) return "Must have exactly 4 α values.";
+  for (const x of a) {
+    if (!Number.isFinite(x)) return "α values must be finite numbers.";
+    if (x <= 0) return "All α must be > 0.";
+    if (x < ALPHA_MIN) return `α too small (< ${ALPHA_MIN}) — may be numerically unstable.`;
+    if (x > ALPHA_MAX) return `α too large (> ${ALPHA_MAX}) — prior may dominate.`;
+    if (requireMapSafe && x < 1) return "For MAP updates, use α ≥ 1 to avoid degenerate numerators.";
+  }
+  const kappa = a[0] + a[1] + a[2] + a[3];
+  if (kappa > KAPPA_MAX) return `Sum of α (κ) is too large (> ${KAPPA_MAX}).`;
+  return null;
+}
+
 export default function InputPage() {
   const { start, append } = useProgress();
 
@@ -51,13 +70,13 @@ export default function InputPage() {
       return;
     }
 
-    // Dirichlet α validation (Dirichlet requires α_i > 0)
+    // Dirichlet α validation
     const D_pi = pi.map(Number);
-    const D_M = M.map(Number);
-    const badPi = D_pi.some((x) => !Number.isFinite(x) || x <= 0);
-    const badM = D_M.some((x) => !Number.isFinite(x) || x <= 0);
-    if (badPi || badM) {
-      append("❗ Dirichlet α values must be positive numbers (e.g., 100,100,100,100 and 100,2,2,2).");
+    const D_M  = M.map(Number);
+    let err = validateDirichlet(D_pi);
+    if (!err) err = validateDirichlet(D_M);
+    if (err) {
+      append(`❗ ${err}`);
       return;
     }
 
@@ -93,7 +112,7 @@ export default function InputPage() {
       }
     };
 
-    // ✅ include Dirichlet α’s in params
+    // Send params (incl. Dirichlet α’s)
     w.postMessage({
       params: {
         thr,
@@ -120,6 +139,7 @@ export default function InputPage() {
           </label>
           <input
             type="file"
+            accept=".phyx"
             onChange={(e) => setSequenceFile(e.target.files?.[0] ?? null)}
             className="block w-full border p-2 text-white"
           />
@@ -131,6 +151,7 @@ export default function InputPage() {
           </label>
           <input
             type="file"
+            accept=".csv"
             onChange={(e) => setTopologyFile(e.target.files?.[0] ?? null)}
             className="block w-full border p-2 text-white"
           />
@@ -199,6 +220,9 @@ export default function InputPage() {
                 />
               ))}
             </div>
+            <p className="text-xs text-gray-300">
+              Use α ≥ 1 (defaults: 100,100,100,100).
+            </p>
           </div>
 
           <div className="space-y-2 md:col-span-3">
@@ -222,6 +246,9 @@ export default function InputPage() {
                 />
               ))}
             </div>
+            <p className="text-xs text-gray-300">
+              Defaults: 100,2,2,2 (strong self-transition prior).
+            </p>
           </div>
         </div>
 
