@@ -10,8 +10,8 @@ interface EmtrRowIn {
   rep: number | string;
   iter: number | string;
   ll_pars: number | string;
-  edc_ll_first: number | string;
-  edc_ll_final: number | string;
+  ecd_ll_first: number | string;
+  ecd_ll_final: number | string;
   ll_final: number | string;
 }
 
@@ -33,8 +33,8 @@ function isRow(x: unknown): x is EmtrRowIn {
     isSafeInt(r.rep) &&
     isSafeInt(r.iter) &&
     isFiniteNum(r.ll_pars) &&
-    isFiniteNum(r.edc_ll_first) &&
-    isFiniteNum(r.edc_ll_final) &&
+    isFiniteNum(r.ecd_ll_first) &&
+    isFiniteNum(r.ecd_ll_final) &&
     isFiniteNum(r.ll_final)
   );
 }
@@ -101,15 +101,15 @@ export async function POST(
         toInt(r.rep),
         toInt(r.iter),
         toNum(r.ll_pars),
-        toNum(r.edc_ll_first),
-        toNum(r.edc_ll_final),
+        toNum(r.ecd_ll_first),
+        toNum(r.ecd_ll_final),
         toNum(r.ll_final),
       ]);
 
       // ON DUPLICATE KEY requires a UNIQUE or PRIMARY KEY over (job_id, root, rep, iter)
       const sql = `
         INSERT INTO emtr_rows
-          (job_id, method, root, rep, iter, ll_pars, edc_ll_first, edc_ll_final, ll_final)
+          (job_id, method, root, rep, iter, ll_pars, ecd_ll_first, ecd_ll_final, ll_final)
         VALUES ${placeholders}
         ON DUPLICATE KEY UPDATE job_id = job_id
       `;

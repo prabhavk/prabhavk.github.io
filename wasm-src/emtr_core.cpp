@@ -4612,8 +4612,8 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repet
                                 << "rep" << "\t"
                                 << "iter" << "\t"
                                 << "ll pars" << "\t"
-                                << "edc-ll first" << "\t"
-                                << "edc-ll final" << "\t"
+                                << "ecd-ll first" << "\t"
+                                << "ecd-ll final" << "\t"
                                 << "ll final" << endl;
 	this->max_log_likelihood_pars = -1 * pow(10,5);
 	double logLikelihood_pars;
