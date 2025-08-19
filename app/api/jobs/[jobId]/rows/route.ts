@@ -4,17 +4,15 @@ import { db } from "@/lib/pscale";
 
 export const runtime = "edge";
 
-type Method = "main" | "dirichlet" | "parsimony" | "ssh";
-
-interface EmtrRow {
-  method: Method;
+// row shape FROM THE WORKER (no method required here)
+interface EmtrRowIn {
   root: string;
-  rep: number;        // integer >= 0
-  iter: number;       // integer >= 0
-  ll_pars: number;
-  edc_ll_first: number;
-  edc_ll_final: number;
-  ll_final: number;
+  rep: number | string;
+  iter: number | string;
+  ll_pars: number | string;
+  edc_ll_first: number | string;
+  edc_ll_final: number | string;
+  ll_final: number | string;
 }
 
 /* ---------- config ---------- */
@@ -22,16 +20,15 @@ const MAX_ROWS_PER_REQUEST = 5_000;
 const INSERT_CHUNK_SIZE = 500;
 
 /* ---------- utils ---------- */
-const isSafeInt = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x >= 0;
-const isFiniteNum = (x: unknown) => typeof x === "number" && Number.isFinite(x);
+const toInt = (x: unknown) => (typeof x === "number" ? x : parseInt(String(x), 10));
+const toNum = (x: unknown) => (typeof x === "number" ? x : Number(String(x)));
+const isFiniteNum = (x: unknown) => Number.isFinite(toNum(x));
+const isSafeInt = (x: unknown) => Number.isInteger(toInt(x)) && toInt(x) >= 0;
 
-function isEmtrRow(x: unknown): x is EmtrRow {
+function isRow(x: unknown): x is EmtrRowIn {
   if (typeof x !== "object" || x === null) return false;
   const r = x as Record<string, unknown>;
-  const m = r.method;
-  const methodOk = m === "main" || m === "dirichlet" || m === "parsimony" || m === "ssh";
   return (
-    methodOk &&
     typeof r.root === "string" &&
     isSafeInt(r.rep) &&
     isSafeInt(r.iter) &&
@@ -51,23 +48,20 @@ function chunk<T>(arr: T[], size: number): T[][] {
 /* ---------- handler ---------- */
 export async function POST(
   req: NextRequest,
-  // ✅ Next.js 15: params is a Promise
+  // Next.js 15 note: params is a Promise
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   try {
-    // Require JSON
     const ct = req.headers.get("content-type") || "";
     if (!ct.toLowerCase().includes("application/json")) {
       return NextResponse.json({ ok: false, error: "Content-Type must be application/json" }, { status: 415 });
     }
 
-    // ✅ await params in Next 15
     const { jobId } = await params;
     if (!jobId) {
       return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
     }
 
-    // Parse body
     const body = await req.json().catch(() => null as unknown);
     const rows = (body && typeof body === "object" && Array.isArray((body as { rows?: unknown[] }).rows))
       ? (body as { rows: unknown[] }).rows
@@ -86,39 +80,41 @@ export async function POST(
       );
     }
 
-    // Validate
-    const valid: EmtrRow[] = [];
+    // Validate + normalize
+    const valid: EmtrRowIn[] = [];
     for (const r of rows) {
-      if (isEmtrRow(r)) valid.push(r);
-      else return NextResponse.json({ ok: false, error: "Row validation failed" }, { status: 400 });
+      if (!isRow(r)) {
+        return NextResponse.json({ ok: false, error: "Row validation failed" }, { status: 400 });
+      }
+      valid.push(r);
     }
 
-    // Build SQL and insert in chunks
     const conn = db();
     let inserted = 0;
 
     for (const batch of chunk(valid, INSERT_CHUNK_SIZE)) {
-      const valuesSql = batch.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
-      const sqlParams = batch.flatMap((r) => [
+      const placeholders = batch.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
+      const args = batch.flatMap((r) => [
         jobId,
-        r.method,
+        "main",                      // force method to "main"
         r.root,
-        r.rep,
-        r.iter,
-        r.ll_pars,
-        r.edc_ll_first,
-        r.edc_ll_final,
-        r.ll_final,
+        toInt(r.rep),
+        toInt(r.iter),
+        toNum(r.ll_pars),
+        toNum(r.edc_ll_first),
+        toNum(r.edc_ll_final),
+        toNum(r.ll_final),
       ]);
 
+      // ON DUPLICATE KEY requires a UNIQUE or PRIMARY KEY over (job_id, root, rep, iter)
       const sql = `
         INSERT INTO emtr_rows
           (job_id, method, root, rep, iter, ll_pars, edc_ll_first, edc_ll_final, ll_final)
-        VALUES ${valuesSql}
+        VALUES ${placeholders}
         ON DUPLICATE KEY UPDATE job_id = job_id
       `;
 
-      await conn.execute(sql, sqlParams);
+      await conn.execute(sql, args);
       inserted += batch.length;
     }
 
