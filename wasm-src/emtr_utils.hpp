@@ -45,7 +45,7 @@ namespace emtr {
 
     // Alias that matches your EMTR_results element type
     using Row = std::tuple<
-    std::string, // init_method ("Parsimony" | "Dirichlet" | "SSH")
+    std::string, // method ("Parsimony" | "Dirichlet" | "SSH")
     std::string, // root (one of 17 names)
     int,         // repetition (1..N)
     int,         // iter (max iterations taken by EM)
@@ -57,7 +57,7 @@ namespace emtr {
 
     // Emit one row as JSON line prefixed with a tag (default "[ROW]\t")
     inline void emit_row_json(
-        const std::string& init_method,
+        const std::string& method,
         const std::string& root,
         int repetition,
         int iter,
@@ -66,13 +66,13 @@ namespace emtr {
         double ecd_ll_final,
         double ll_final,
         const char* tag = "[ROW]\t") {            
-            const std::string im = json_escape(init_method);
+            const std::string im = json_escape(method);
             const std::string rt = json_escape(root);
 
             // %.17g keeps double precision compact; fflush for prompt delivery to worker
             std::printf(
                 "%s"
-                "{\"init_method\":\"%s\",\"root\":\"%s\",\"repetition\":%d,"
+                "{\"method\":\"%s\",\"root\":\"%s\",\"repetition\":%d,"
                 "\"iter\":%d,\"ll_initial\":%.17g,"
                 "\"ecd_ll_first\":%.17g,\"ecd_ll_final\":%.17g,\"ll_final\":%.17g}\n",
                 tag,
@@ -84,7 +84,7 @@ namespace emtr {
     // Convenience: push one row into your vector (keeps call sites tidy)
     inline void push_result(
         std::vector<Row>& results,
-        const std::string& init_method,
+        const std::string& method,
         const std::string& root,
         int repetition,
         int iter,
@@ -93,7 +93,7 @@ namespace emtr {
         double ecd_ll_final,
         double ll_final)
     {
-    results.emplace_back(init_method, root, repetition, iter,
+    results.emplace_back(method, root, repetition, iter,
                         ll_initial, ecd_ll_first, ecd_ll_final, ll_final);
     }
 
