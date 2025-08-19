@@ -152,7 +152,9 @@ self.onmessage = async (e) => {
     const thr = Number(params.thr);
     const reps = params.reps | 0;
     const maxIter = params.maxIter | 0;
-    const fmt = params.seqFormat || "phylip";
+
+    // Fixed format (sequence format field removed from UI)
+    const fmt = "phylip";
 
     postMessage({ type: "log", line: `WASM dispatch: EM_main` });
 

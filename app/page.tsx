@@ -6,19 +6,15 @@ import { useProgress } from "../components/ProgressProvider";
 export default function InputPage() {
   const { start, append } = useProgress();
 
-  // real files instead of strings
   const [sequenceFile, setSequenceFile] = useState<File | null>(null);
   const [topologyFile, setTopologyFile] = useState<File | null>(null);
 
-  // params
   const [threshold, setThreshold] = useState("0.001");
   const [numReps, setNumReps] = useState("50");
   const [maxIter, setMaxIter] = useState("200");
-  const [seqFormat, setSeqFormat] = useState("phylip");
 
   const workerRef = useRef<Worker | null>(null);
 
-  // clean up worker when navigating away
   useEffect(() => {
     return () => {
       workerRef.current?.terminate();
@@ -53,10 +49,9 @@ export default function InputPage() {
     start(jobId);
     append(`🆔 jobId = ${jobId}`);
     append(
-      `🌲 Starting EMTR (WASM): seq=${sequenceFile.name}, topo=${topologyFile.name}, thr=${thr}, reps=${reps}, maxIter=${iters}, format=${seqFormat}`
+      `🌲 Starting EMTR (WASM): seq=${sequenceFile.name}, topo=${topologyFile.name}, thr=${thr}, reps=${reps}, maxIter=${iters}`
     );
 
-    // spin up worker (cache-busted to avoid stale worker/module in dev)
     const v = Date.now();
     const w = new Worker(`/wasm/worker.js?v=${v}`, { type: "module" });
     workerRef.current = w;
@@ -65,7 +60,6 @@ export default function InputPage() {
       const msg = ev.data;
       if (msg.type === "log") append(msg.line);
       if (msg.type === "artifact") {
-        // receive an output file from WASM & trigger download
         const blob = new Blob([new Uint8Array(msg.bytes)], {
           type: "application/octet-stream",
         });
@@ -83,10 +77,8 @@ export default function InputPage() {
       }
     };
 
-    // send inputs + params (note: no method now)
     w.postMessage({
       params: {
-        seqFormat,
         thr,
         reps,
         maxIter: iters,
@@ -164,23 +156,6 @@ export default function InputPage() {
               placeholder="e.g., 200"
               min={1}
             />
-          </div>
-        </div>
-
-        {/* Format (method removed) */}
-        <div className="grid grid-cols-1 md:grid-cols-1 gap-3">
-          <div>
-            <label className="block text-sm font-medium text-white">
-              Sequence format
-            </label>
-            <select
-              className="w-full border p-2 text-white"
-              value={seqFormat}
-              onChange={(e) => setSeqFormat(e.target.value)}
-            >
-              <option value="phylip">phylip</option>
-              {/* <option value="fasta" disabled>fasta (not implemented)</option> */}
-            </select>
           </div>
         </div>
 
