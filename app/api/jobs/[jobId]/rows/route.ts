@@ -1,5 +1,5 @@
 // app/api/jobs/[jobId]/rows/route.ts
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/lib/pscale";
 
 export const runtime = "edge";
@@ -50,8 +50,8 @@ function chunk<T>(arr: T[], size: number): T[][] {
 
 /* ---------- handler ---------- */
 export async function POST(
-  req: Request,
-  { params }: { params: { jobId: string } }   // ✅ accept params from Next.js
+  req: NextRequest,                                  // ✅ use NextRequest
+  { params }: { params: { jobId: string } }         // ✅ valid context shape
 ) {
   try {
     // Require JSON
@@ -98,7 +98,7 @@ export async function POST(
 
     for (const batch of chunk(valid, INSERT_CHUNK_SIZE)) {
       const valuesSql = batch.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
-      const sqlParams = batch.flatMap((r) => [   // ✅ renamed from `params` → `sqlParams`
+      const sqlParams = batch.flatMap((r) => [
         jobId,
         r.method,
         r.root,
