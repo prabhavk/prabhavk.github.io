@@ -18,20 +18,47 @@ let retryDelay = RETRY_BASE_MS;
 
 // Coerce/validate a parsed row so it satisfies the API schema
 function normalizeRow(raw) {
-  const r = { ...raw };
+  const num = (v) => (v == null || v === "" ? NaN : Number(v));
+  const toInt = (v) => (v == null || v === "" ? NaN : parseInt(v, 10));
 
-  // If your API still requires "method", lock it to "main"
-  r.method = "main";
+  // Accept multiple possible keys from native stdout
+  const ll_pars =
+    raw.ll_pars ??
+    raw.ll_initial ??             // e.g., SSH/parsimony "initial"
+    raw.ll_ssh ??                 // sometimes explicit
+    raw.ll_parsimony ??           // sometimes explicit
+    raw.logLikelihood_ssh;        // camelCase from C++
 
-  // ints required by the API
-  r.rep = Number.isInteger(r.rep) ? r.rep : parseInt(r.rep ?? 0, 10);
-  r.iter = Number.isInteger(r.iter) ? r.iter : parseInt(r.iter ?? 0, 10);
+  const ecd_first =
+    raw.edc_ll_first ??
+    raw.ecd_ll_first ??
+    raw.loglikelihood_ecd_first ??
+    raw.logLikelihood_ecd_first;
 
-  // numeric fields
-  r.ll_pars       = Number(r.ll_pars);
-  r.edc_ll_first  = Number(r.edc_ll_first);
-  r.edc_ll_final  = Number(r.edc_ll_final);
-  r.ll_final      = Number(r.ll_final);
+  const ecd_final =
+    raw.edc_ll_final ??
+    raw.ecd_ll_final ??
+    raw.loglikelihood_ecd_final ??
+    raw.logLikelihood_ecd_final;
+
+  const ll_final =
+    raw.ll_final ??
+    raw.loglikelihood_final ??
+    raw.logLikelihood_final;
+
+  const rep = raw.rep ?? raw.repetition ?? raw.repeat;
+  const iter = raw.iter ?? raw.iteration;
+
+  const r = {
+    method: "main",
+    root: String(raw.root ?? raw.start ?? raw.node ?? ""), // fallbacks if native prints "start"/"node"
+    rep: Number.isInteger(raw.rep) ? raw.rep : toInt(rep),
+    iter: Number.isInteger(raw.iter) ? raw.iter : toInt(iter),
+    ll_pars: num(ll_pars),
+    edc_ll_first: num(ecd_first),
+    edc_ll_final: num(ecd_final),
+    ll_final: num(ll_final),
+  };
 
   return r;
 }
