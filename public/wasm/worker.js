@@ -1,60 +1,112 @@
 // public/wasm/worker.js
 
-// (A) --- NEW: batching + API config ---------------------------------
-const API_BASE = "";                // "" => same origin; or e.g. "http://localhost:3000" / "https://api.yourdomain.com"
-const AUTH = "";                    // optional: bearer token if your API requires it
+// ---------- Upload config ----------
+const API_BASE = "";                // "" => same origin; or e.g. "https://emtr-web.vercel.app"
+const AUTH = "";                    // optional: "Bearer <token>" if you add auth later
 
-const rowBuffer = [];
+const MAX_BATCH = 200;              // flush when buffer hits this size
+const FLUSH_INTERVAL_MS = 1000;     // or after 1s of inactivity
+const RETRY_BASE_MS = 1500;         // backoff start
+const RETRY_MAX_MS = 15_000;        // backoff cap
+
+// ---------- Upload state ----------
+let jobIdForThisRun = "";
+let rowBuffer = [];
 let flushTimer = null;
-let jobIdForThisRun;                // set from the page
+let inflight = false;
+let retryDelay = RETRY_BASE_MS;
+
+// Coerce/validate a parsed row so it satisfies the API schema
+function normalizeRow(raw) {
+  const r = { ...raw };
+
+  // If your API still requires "method", lock it to "main"
+  r.method = "main";
+
+  // ints required by the API
+  r.rep = Number.isInteger(r.rep) ? r.rep : parseInt(r.rep ?? 0, 10);
+  r.iter = Number.isInteger(r.iter) ? r.iter : parseInt(r.iter ?? 0, 10);
+
+  // numeric fields
+  r.ll_pars       = Number(r.ll_pars);
+  r.edc_ll_first  = Number(r.edc_ll_first);
+  r.edc_ll_final  = Number(r.edc_ll_final);
+  r.ll_final      = Number(r.ll_final);
+
+  return r;
+}
+
+function scheduleFlush() {
+  if (!flushTimer) {
+    flushTimer = setTimeout(() => flushNow(jobIdForThisRun), FLUSH_INTERVAL_MS);
+  }
+}
 
 function queueRow(jobId, row) {
-  rowBuffer.push(row);
-  if (rowBuffer.length >= 200) flushNow(jobId);
-  if (!flushTimer) flushTimer = setTimeout(() => flushNow(jobId), 1000);
+  rowBuffer.push(normalizeRow(row));
+  if (rowBuffer.length >= MAX_BATCH) {
+    flushNow(jobId);
+  } else {
+    scheduleFlush();
+  }
 }
 
 async function flushNow(jobId) {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  if (inflight) return;                 // don't overlap
+  if (!rowBuffer.length) return;
+
   const batch = rowBuffer.splice(0, rowBuffer.length);
-  if (!batch.length) return;
+  inflight = true;
   try {
-    await fetch(`${API_BASE}/api/jobs/${jobId}/rows`, {
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/rows`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...(AUTH ? { authorization: `Bearer ${AUTH}` } : {}),
+        ...(AUTH ? { authorization: AUTH } : {}),
       },
+      keepalive: true,
       body: JSON.stringify({ rows: batch }),
     });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status} ${res.statusText} :: ${text.slice(0, 400)}`);
+    }
+
+    // success: reset backoff and notify UI
+    retryDelay = RETRY_BASE_MS;
     postMessage({ type: "log", line: `⤴︎ uploaded ${batch.length} rows` });
   } catch (err) {
-    postMessage({ type: "log", line: `upload failed: ${String(err)} — retrying soon` });
+    // put rows back at the front of the buffer
     rowBuffer.unshift(...batch);
-    if (!flushTimer) flushTimer = setTimeout(() => flushNow(jobId), 2000);
+    postMessage({ type: "log", line: `upload failed: ${String(err)} — retrying in ${retryDelay}ms` });
+    setTimeout(() => flushNow(jobId), retryDelay);
+    retryDelay = Math.min(Math.floor(retryDelay * 1.8), RETRY_MAX_MS);
+  } finally {
+    inflight = false;
   }
 }
 
-// --------------------------------------------------------------------
-
+// ---------- WASM worker entry ----------
 self.onmessage = async (e) => {
-  const { params, seqBytes, topoBytes, jobId } = e.data;   // (B) NEW: accept jobId
-  jobIdForThisRun = jobId;
+  const { params, seqBytes, topoBytes, jobId } = e.data;
+  jobIdForThisRun = jobId || `job-${Date.now()}`;
 
-  // Cache-bust in dev so you don't run stale wasm
-  const v = Date.now();
+  // Cache-bust so we never load stale wasm in dev/preview
+  const v = (self.NEXT_PUBLIC_COMMIT_SHA || Date.now());
   const createEmtr = (await import(`/wasm/emtr.js?v=${v}`)).default;
 
   const Module = await createEmtr({
     locateFile: (p) => `/wasm/${p}?v=${v}`,
-    // (C) NEW: parse emitted rows in stdout and buffer them
     print: (txt) => {
       const line = String(txt).trim();
+      // Expect lines like: [ROW]\t{...json...}
       if (jobIdForThisRun && line.startsWith("[ROW]\t")) {
         try {
-          const row = JSON.parse(line.slice(6)); // after "[ROW]\t"
-          queueRow(jobIdForThisRun, row);
-          return; // don't spam UI log with data rows
+          const parsed = JSON.parse(line.slice(6));
+          queueRow(jobIdForThisRun, parsed);
+          return; // don't echo data rows to UI
         } catch (e) {
           postMessage({ type: "log", line: `row-parse-error: ${String(e)} :: ${line}` });
         }
@@ -64,7 +116,6 @@ self.onmessage = async (e) => {
     printErr: (txt) => postMessage({ type: "log", line: `ERR: ${txt}` }),
   });
 
-  // Helper to ship any artifacts from /work/out
   function shipArtifacts() {
     try {
       const outDir = "/work/out";
@@ -72,16 +123,13 @@ self.onmessage = async (e) => {
       const names = FS.readdir(outDir).filter((n) => n !== "." && n !== "..");
       for (const name of names) {
         const path = `${outDir}/${name}`;
-        const stat = FS.stat(path);
-        // Only send regular files
-        if ((stat.mode & 0o170000) === 0o100000) {
-          const bytes = FS.readFile(path, { encoding: "binary" }); // Uint8Array
+        const st = FS.stat(path);
+        if ((st.mode & 0o170000) === 0o100000) {
+          const bytes = FS.readFile(path, { encoding: "binary" });
           postMessage({ type: "artifact", name, bytes }, [bytes.buffer]);
         }
       }
-    } catch {
-      /* no-op if /work/out missing or empty */
-    }
+    } catch { /* ignore */ }
   }
 
   try {
@@ -89,13 +137,13 @@ self.onmessage = async (e) => {
     try { FS.mkdir("/work"); } catch {}
     try { FS.mkdir("/work/out"); } catch {}
 
-    // Write inputs where your bridge & embind code expect them
+    // Write inputs where the native side expects them
     FS.writeFile("/work/sequence.phyx", new Uint8Array(seqBytes));
     FS.writeFile("/work/topology.csv", new Uint8Array(topoBytes));
 
-    // Set line-buffered stdout/stderr for progressive logs
+    // Line-buffered stdout for progressive logs
     if (typeof Module.set_line_buffered === "function") {
-      Module.set_line_buffered(); // embind version
+      Module.set_line_buffered();
     } else {
       const setLineBufferedC = Module.cwrap("set_line_buffered_c", "void", []);
       if (setLineBufferedC) setLineBufferedC();
@@ -106,63 +154,30 @@ self.onmessage = async (e) => {
     const maxIter = params.maxIter | 0;
     const fmt = params.seqFormat || "phylip";
 
-    postMessage({ type: "log", line: `WASM dispatch: method="${params.method}"` });
+    postMessage({ type: "log", line: `WASM dispatch: EM_main` });
 
+    // --- Single unified path: EM_main only ---
     let rc = 0;
-
-    if (params.method === "main") {
-      // Prefer the embind class path (no-arg method) if available
-      if (typeof Module.EMManager === "function") {
-        const mgr = new Module.EMManager(
-          "/work/sequence.phyx", fmt, "/work/topology.csv", "/work/out",
-          reps, maxIter, thr
-        );
-        mgr.EM_main(); // no args
-        await flushNow(jobIdForThisRun);  // (D) NEW: final flush before finishing
-        shipArtifacts();
-        postMessage({ type: "done", rc: 0 });
-        return;
-      }
-
-      // Fallback to the C-export bridge
+    if (typeof Module.EMManager === "function") {
+      const mgr = new Module.EMManager("/work/sequence.phyx", fmt, "/work/topology.csv", "/work/out", reps, maxIter, thr);
+      mgr.EM_main(); // internally: parsimony → dirichlet → ssh
+    } else {
       const EM_main_entry_c = Module.cwrap(
         "EM_main_entry_c",
         "number",
         ["string", "string", "number", "number", "number", "string"]
       );
-      if (!EM_main_entry_c) {
-        throw new Error("EM_main_entry_c not exported");
-      }
+      if (!EM_main_entry_c) throw new Error("EM_main_entry_c not exported");
       rc = EM_main_entry_c("/work/sequence.phyx", "/work/topology.csv", thr, reps, maxIter, fmt);
-      await flushNow(jobIdForThisRun);    // (D) NEW: final flush
-      shipArtifacts();
-      postMessage({ type: "done", rc });
-      return;
     }
 
-    // Non-main methods: embind class API
-    if (typeof Module.EMManager === "function") {
-      const mgr = new Module.EMManager(
-        "/work/sequence.phyx", fmt, "/work/topology.csv", "/work/out",
-        reps, maxIter, thr
-      );
-      switch (params.method) {
-        case "parsimony": mgr.EMparsimony(); break;
-        case "ssh":       mgr.EMssh();       break;
-        case "dirichlet":
-        default:          mgr.EMdirichlet(); break;
-      }
-      await flushNow(jobIdForThisRun);      // (D) NEW: final flush
-      shipArtifacts();
-      postMessage({ type: "done", rc: 0 });
-      return;
-    }
-
-    // If we got here, nothing was callable
-    throw new Error("No EMManager binding; and method !== 'main' for bridge fallback.");
+    // Finalize: flush rows, ship artifacts, and finish
+    await flushNow(jobIdForThisRun);
+    shipArtifacts();
+    postMessage({ type: "done", rc });
   } catch (err) {
-    // try to flush whatever we buffered before signaling error
-    await flushNow(jobIdForThisRun);        // (D) NEW: flush on error too
+    // Flush whatever we have before failing
+    await flushNow(jobIdForThisRun);
     postMessage({ type: "log", line: `❌ ${String(err)}` });
     postMessage({ type: "done", rc: 1 });
   }

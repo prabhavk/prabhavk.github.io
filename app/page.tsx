@@ -3,8 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useProgress } from "../components/ProgressProvider";
 
-type Method = "main" | "dirichlet" | "parsimony" | "ssh";
-
 export default function InputPage() {
   const { start, append } = useProgress();
 
@@ -17,7 +15,6 @@ export default function InputPage() {
   const [numReps, setNumReps] = useState("50");
   const [maxIter, setMaxIter] = useState("200");
   const [seqFormat, setSeqFormat] = useState("phylip");
-  const [method, setMethod] = useState<Method>("main");
 
   const workerRef = useRef<Worker | null>(null);
 
@@ -56,7 +53,7 @@ export default function InputPage() {
     start(jobId);
     append(`🆔 jobId = ${jobId}`);
     append(
-      `🌲 Starting EMTR (WASM): seq=${sequenceFile.name}, topo=${topologyFile.name}, thr=${thr}, reps=${reps}, maxIter=${iters}, format=${seqFormat}, method=${method}`
+      `🌲 Starting EMTR (WASM): seq=${sequenceFile.name}, topo=${topologyFile.name}, thr=${thr}, reps=${reps}, maxIter=${iters}, format=${seqFormat}`
     );
 
     // spin up worker (cache-busted to avoid stale worker/module in dev)
@@ -86,10 +83,9 @@ export default function InputPage() {
       }
     };
 
-    // send inputs + params
+    // send inputs + params (note: no method now)
     w.postMessage({
       params: {
-        method,
         seqFormat,
         thr,
         reps,
@@ -171,8 +167,8 @@ export default function InputPage() {
           </div>
         </div>
 
-        {/* Format & Method */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {/* Format (method removed) */}
+        <div className="grid grid-cols-1 md:grid-cols-1 gap-3">
           <div>
             <label className="block text-sm font-medium text-white">
               Sequence format
@@ -186,25 +182,10 @@ export default function InputPage() {
               {/* <option value="fasta" disabled>fasta (not implemented)</option> */}
             </select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-white">
-              Method
-            </label>
-            <select
-              className="w-full border p-2 text-white"
-              value={method}
-              onChange={(e) => setMethod(e.target.value as Method)}
-            >
-              <option value="main">Main</option>
-              <option value="dirichlet">Dirichlet</option>
-              <option value="parsimony">Parsimony</option>
-              <option value="ssh">SSH</option>
-            </select>
-          </div>
         </div>
 
         <button className="bg-gray-600 text-white px-4 py-2 rounded">
-          Start EMTR 
+          Start EMTR
         </button>
       </form>
     </main>
