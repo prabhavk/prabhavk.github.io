@@ -1,111 +1,129 @@
 // app/api/jobs/[jobId]/rows/route.ts
 import { NextResponse } from "next/server";
-import mysql, { ResultSetHeader } from "mysql2/promise";
+import { db } from "@/lib/pscale";
+
+export const runtime = "edge";
 
 type Method = "main" | "dirichlet" | "parsimony" | "ssh";
 
-export interface EmtrRow {
-  method?: Method;
+interface EmtrRow {
+  method: Method;
   root: string;
-  rep: number;
-  iter: number;
+  rep: number;        // integer >= 0
+  iter: number;       // integer >= 0
   ll_pars: number;
   edc_ll_first: number;
   edc_ll_final: number;
   ll_final: number;
 }
 
-/* ---------- tiny runtime validators (no any) ---------- */
-function isFiniteNumber(x: unknown): x is number {
-  return typeof x === "number" && Number.isFinite(x);
-}
-function isEmtrRow(obj: unknown): obj is EmtrRow {
-  if (typeof obj !== "object" || obj === null) return false;
-  const r = obj as Record<string, unknown>;
+/* ---------- config ---------- */
+const MAX_ROWS_PER_REQUEST = 5_000;
+const INSERT_CHUNK_SIZE = 500;
+
+/* ---------- utils ---------- */
+const isSafeInt = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x >= 0;
+const isFiniteNum = (x: unknown) => typeof x === "number" && Number.isFinite(x);
+
+function isEmtrRow(x: unknown): x is EmtrRow {
+  if (typeof x !== "object" || x === null) return false;
+  const r = x as Record<string, unknown>;
   const m = r.method;
-  const methodOk =
-    m === undefined || m === "main" || m === "dirichlet" || m === "parsimony" || m === "ssh";
+  const methodOk = m === "main" || m === "dirichlet" || m === "parsimony" || m === "ssh";
   return (
     methodOk &&
     typeof r.root === "string" &&
-    isFiniteNumber(r.rep) && Number.isInteger(r.rep as number) &&
-    isFiniteNumber(r.iter) && Number.isInteger(r.iter as number) &&
-    isFiniteNumber(r.ll_pars) &&
-    isFiniteNumber(r.edc_ll_first) &&
-    isFiniteNumber(r.edc_ll_final) &&
-    isFiniteNumber(r.ll_final)
+    isSafeInt(r.rep) &&
+    isSafeInt(r.iter) &&
+    isFiniteNum(r.ll_pars) &&
+    isFiniteNum(r.edc_ll_first) &&
+    isFiniteNum(r.edc_ll_final) &&
+    isFiniteNum(r.ll_final)
   );
 }
-function isRowsPayload(x: unknown): x is { rows: EmtrRow[] } {
-  if (typeof x !== "object" || x === null) return false;
-  const rows = (x as { rows?: unknown }).rows;
-  return Array.isArray(rows) && rows.every(isEmtrRow);
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
 }
 
-/* ---------- DB conn ---------- */
-async function getConn() {
-  return mysql.createConnection({
-    host: process.env.EMTR_DB_HOST ?? "127.0.0.1",
-    user: process.env.EMTR_DB_USER ?? "emtr",
-    password: process.env.EMTR_DB_PASS ?? "emtrpw",
-    database: process.env.EMTR_DB_NAME ?? "emtr",
-    port: Number(process.env.EMTR_DB_PORT ?? 3306),
-    multipleStatements: false,
-  });
-}
-
-/* ---------- handler (single-arg; parse jobId from URL) ---------- */
+/* ---------- handler ---------- */
 export async function POST(req: Request) {
-  const { pathname } = new URL(req.url);
-  // matches /api/jobs/{jobId}/rows  (with or without trailing slash)
-  const m = pathname.match(/\/api\/jobs\/([^/]+)\/rows\/?$/);
-  const jobId = m?.[1] ?? "";
-  if (!jobId) {
-    return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
-  }
-
-  let bodyUnknown: unknown;
   try {
-    bodyUnknown = await req.json();
-  } catch {
-    return NextResponse.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
-  }
-
-  if (!isRowsPayload(bodyUnknown)) {
-    return NextResponse.json(
-      { ok: false, error: "Invalid payload; expected { rows: EmtrRow[] }" },
-      { status: 400 }
-    );
-  }
-
-  const { rows } = bodyUnknown;
-  if (rows.length === 0) {
-    return NextResponse.json({ ok: true, inserted: 0 });
-  }
-
-  const conn = await getConn();
-  try {
-    await conn.beginTransaction();
-    const sql = `
-      INSERT INTO emtr_rows
-      (job_id, root, rep, iter, ll_pars, edc_ll_first, edc_ll_final, ll_final)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE job_id = job_id
-    `;
-    for (const r of rows) {
-      await conn.execute<ResultSetHeader>(sql, [
-        jobId, r.root, r.rep, r.iter, r.ll_pars, r.edc_ll_first, r.edc_ll_final, r.ll_final,
-      ]);
+    // Require JSON
+    const ct = req.headers.get("content-type") || "";
+    if (!ct.toLowerCase().includes("application/json")) {
+      return NextResponse.json({ ok: false, error: "Content-Type must be application/json" }, { status: 415 });
     }
-    await conn.commit();
-    return NextResponse.json({ ok: true, inserted: rows.length });
-  } catch (e: unknown) {
-    await conn.rollback();
-    const msg = typeof e === "object" && e && "message" in e
-      ? String((e as { message?: unknown }).message)
-      : "Unknown error";
+
+    // jobId from URL
+    const jobId = req.url.match(/\/api\/jobs\/([^/]+)\/rows\/?$/)?.[1] ?? "";
+    if (!jobId) {
+      return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
+    }
+
+    // Parse body
+    const body = await req.json().catch(() => null as unknown);
+    const rows = (body && typeof body === "object" && Array.isArray((body as { rows?: unknown[] }).rows))
+      ? (body as { rows: unknown[] }).rows
+      : null;
+
+    if (!rows) {
+      return NextResponse.json({ ok: false, error: "Invalid payload; expected { rows: EmtrRow[] }" }, { status: 400 });
+    }
+    if (rows.length === 0) {
+      return NextResponse.json({ ok: true, inserted: 0, skipped: 0, total: 0 });
+    }
+    if (rows.length > MAX_ROWS_PER_REQUEST) {
+      return NextResponse.json(
+        { ok: false, error: `Too many rows; max ${MAX_ROWS_PER_REQUEST} per request` },
+        { status: 413 }
+      );
+    }
+
+    // Validate
+    const valid: EmtrRow[] = [];
+    for (const r of rows) {
+      if (isEmtrRow(r)) valid.push(r);
+      else {
+        return NextResponse.json({ ok: false, error: "Row validation failed" }, { status: 400 });
+      }
+    }
+
+    // Build SQL and insert in chunks
+    const conn = db();
+    let inserted = 0;
+
+    for (const batch of chunk(valid, INSERT_CHUNK_SIZE)) {
+      const valuesSql = batch.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
+      const params = batch.flatMap((r) => [
+        jobId,
+        r.method,
+        r.root,
+        r.rep,
+        r.iter,
+        r.ll_pars,
+        r.edc_ll_first,
+        r.edc_ll_final,
+        r.ll_final,
+      ]);
+
+      const sql = `
+        INSERT INTO emtr_rows
+          (job_id, method, root, rep, iter, ll_pars, edc_ll_first, edc_ll_final, ll_final)
+        VALUES ${valuesSql}
+        ON DUPLICATE KEY UPDATE job_id = job_id
+      `;
+
+      await conn.execute(sql, params);
+      inserted += batch.length;
+    }
+
+    return NextResponse.json({ ok: true, inserted, skipped: rows.length - inserted, total: rows.length });
+  } catch (e) {
+    const msg =
+      e && typeof e === "object" && "message" in e ? String((e as { message?: unknown }).message) : "Unknown error";
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
-  } finally {
-    await conn.end();
   }
 }
