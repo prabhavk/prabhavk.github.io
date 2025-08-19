@@ -1,213 +1,123 @@
-// public/wasm/worker.js
+import { NextResponse, type NextRequest } from "next/server";
+import { db } from "@/lib/pscale";
 
-// ---------- Upload config ----------
-const API_BASE = "";                // "" => same origin; or e.g. "https://emtr-web.vercel.app"
-const AUTH = "";                    // optional: "Bearer <token>" if you add auth later
+export const runtime = "edge";
 
-const MAX_BATCH = 200;              // flush when buffer hits this size
-const FLUSH_INTERVAL_MS = 1000;     // or after 1s of inactivity
-const RETRY_BASE_MS = 1500;         // backoff start
-const RETRY_MAX_MS = 15_000;        // backoff cap
-
-// ---------- Upload state ----------
-let jobIdForThisRun = "";
-let rowBuffer = [];
-let flushTimer = null;
-let inflight = false;
-let retryDelay = RETRY_BASE_MS;
-
-// Coerce/validate a parsed row so it satisfies the API schema
-function normalizeRow(raw) {
-  const num = (v) => (v == null || v === "" ? NaN : Number(v));
-  const toInt = (v) => (v == null || v === "" ? NaN : parseInt(v, 10));
-
-  // Accept multiple possible keys from native stdout
-  const ll_pars =
-    raw.ll_pars ??
-    raw.ll_initial ??             // e.g., SSH/parsimony "initial"
-    raw.ll_ssh ??                 // sometimes explicit
-    raw.ll_parsimony ??           // sometimes explicit
-    raw.logLikelihood_ssh;        // camelCase from C++
-
-  const ecd_first =
-    raw.edc_ll_first ??
-    raw.ecd_ll_first ??
-    raw.loglikelihood_ecd_first ??
-    raw.logLikelihood_ecd_first;
-
-  const ecd_final =
-    raw.edc_ll_final ??
-    raw.ecd_ll_final ??
-    raw.loglikelihood_ecd_final ??
-    raw.logLikelihood_ecd_final;
-
-  const ll_final =
-    raw.ll_final ??
-    raw.loglikelihood_final ??
-    raw.logLikelihood_final;
-
-  const rep = raw.rep ?? raw.repetition ?? raw.repeat;
-  const iter = raw.iter ?? raw.iteration;
-
-  const r = {
-    method: "main",
-    root: String(raw.root ?? raw.start ?? raw.node ?? ""), // fallbacks if native prints "start"/"node"
-    rep: Number.isInteger(raw.rep) ? raw.rep : toInt(rep),
-    iter: Number.isInteger(raw.iter) ? raw.iter : toInt(iter),
-    ll_pars: num(ll_pars),
-    edc_ll_first: num(ecd_first),
-    edc_ll_final: num(ecd_final),
-    ll_final: num(ll_final),
-  };
-
-  return r;
+// Row shape AFTER worker normalization (numbers may arrive as strings)
+interface EmtrRowIn {
+  root: string;
+  rep: number | string;
+  iter: number | string;
+  ll_pars: number | string;
+  edc_ll_first: number | string;
+  edc_ll_final: number | string;
+  ll_final: number | string;
 }
 
-function scheduleFlush() {
-  if (!flushTimer) {
-    flushTimer = setTimeout(() => flushNow(jobIdForThisRun), FLUSH_INTERVAL_MS);
-  }
+/* ---------- config ---------- */
+const MAX_ROWS_PER_REQUEST = 5_000;
+const INSERT_CHUNK_SIZE = 500;
+
+/* ---------- utils ---------- */
+const toInt = (x: unknown) => (typeof x === "number" ? x : parseInt(String(x), 10));
+const toNum = (x: unknown) => (typeof x === "number" ? x : Number(String(x)));
+const isFiniteNum = (x: unknown) => Number.isFinite(toNum(x));
+const isSafeInt = (x: unknown) => Number.isInteger(toInt(x)) && toInt(x) >= 0;
+
+function isRow(x: unknown): x is EmtrRowIn {
+  if (typeof x !== "object" || x === null) return false;
+  const r = x as Record<string, unknown>;
+  return (
+    typeof r.root === "string" &&
+    isSafeInt(r.rep) &&
+    isSafeInt(r.iter) &&
+    isFiniteNum(r.ll_pars) &&
+    isFiniteNum(r.edc_ll_first) &&
+    isFiniteNum(r.edc_ll_final) &&
+    isFiniteNum(r.ll_final)
+  );
 }
 
-function queueRow(jobId, row) {
-  rowBuffer.push(normalizeRow(row));
-  if (rowBuffer.length >= MAX_BATCH) {
-    flushNow(jobId);
-  } else {
-    scheduleFlush();
-  }
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
 }
 
-async function flushNow(jobId) {
-  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-  if (inflight) return;                 // don't overlap
-  if (!rowBuffer.length) return;
-
-  const batch = rowBuffer.splice(0, rowBuffer.length);
-  inflight = true;
+/* ---------- handler ---------- */
+export async function POST(
+  req: NextRequest,
+  // Next.js 15: params is a Promise
+  { params }: { params: Promise<{ jobId: string }> }
+) {
   try {
-    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/rows`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(AUTH ? { authorization: AUTH } : {}),
-      },
-      keepalive: true,
-      body: JSON.stringify({ rows: batch }),
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`HTTP ${res.status} ${res.statusText} :: ${text.slice(0, 400)}`);
+    // Content-Type guard
+    const ct = req.headers.get("content-type") || "";
+    if (!ct.toLowerCase().includes("application/json")) {
+      return NextResponse.json({ ok: false, error: "Content-Type must be application/json" }, { status: 415 });
     }
 
-    // success: reset backoff and notify UI
-    retryDelay = RETRY_BASE_MS;
-    postMessage({ type: "log", line: `⤴︎ uploaded ${batch.length} rows` });
-  } catch (err) {
-    // put rows back at the front of the buffer
-    rowBuffer.unshift(...batch);
-    postMessage({ type: "log", line: `upload failed: ${String(err)} — retrying in ${retryDelay}ms` });
-    setTimeout(() => flushNow(jobId), retryDelay);
-    retryDelay = Math.min(Math.floor(retryDelay * 1.8), RETRY_MAX_MS);
-  } finally {
-    inflight = false;
-  }
-}
+    const { jobId } = await params;
+    if (!jobId) return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
 
-// ---------- WASM worker entry ----------
-self.onmessage = async (e) => {
-  const { params, seqBytes, topoBytes, jobId } = e.data;
-  jobIdForThisRun = jobId || `job-${Date.now()}`;
+    const body = await req.json().catch(() => null as unknown);
+    const rows = (body && typeof body === "object" && Array.isArray((body as { rows?: unknown[] }).rows))
+      ? (body as { rows: unknown[] }).rows
+      : null;
 
-  // Cache-bust so we never load stale wasm in dev/preview
-  const v = (self.NEXT_PUBLIC_COMMIT_SHA || Date.now());
-  const createEmtr = (await import(`/wasm/emtr.js?v=${v}`)).default;
-
-  const Module = await createEmtr({
-    locateFile: (p) => `/wasm/${p}?v=${v}`,
-    print: (txt) => {
-      const line = String(txt).trim();
-      // Expect lines like: [ROW]\t{...json...}
-      if (jobIdForThisRun && line.startsWith("[ROW]\t")) {
-        try {
-          const parsed = JSON.parse(line.slice(6));
-          queueRow(jobIdForThisRun, parsed);
-          return; // don't echo data rows to UI
-        } catch (e) {
-          postMessage({ type: "log", line: `row-parse-error: ${String(e)} :: ${line}` });
-        }
-      }
-      postMessage({ type: "log", line: txt });
-    },
-    printErr: (txt) => postMessage({ type: "log", line: `ERR: ${txt}` }),
-  });
-
-  function shipArtifacts() {
-    try {
-      const outDir = "/work/out";
-      const FS = Module.FS;
-      const names = FS.readdir(outDir).filter((n) => n !== "." && n !== "..");
-      for (const name of names) {
-        const path = `${outDir}/${name}`;
-        const st = FS.stat(path);
-        if ((st.mode & 0o170000) === 0o100000) {
-          const bytes = FS.readFile(path, { encoding: "binary" });
-          postMessage({ type: "artifact", name, bytes }, [bytes.buffer]);
-        }
-      }
-    } catch { /* ignore */ }
-  }
-
-  try {
-    const FS = Module.FS;
-    try { FS.mkdir("/work"); } catch {}
-    try { FS.mkdir("/work/out"); } catch {}
-
-    // Write inputs where the native side expects them
-    FS.writeFile("/work/sequence.phyx", new Uint8Array(seqBytes));
-    FS.writeFile("/work/topology.csv", new Uint8Array(topoBytes));
-
-    // Line-buffered stdout for progressive logs
-    if (typeof Module.set_line_buffered === "function") {
-      Module.set_line_buffered();
-    } else {
-      const setLineBufferedC = Module.cwrap("set_line_buffered_c", "void", []);
-      if (setLineBufferedC) setLineBufferedC();
+    if (!rows) {
+      return NextResponse.json({ ok: false, error: "Invalid payload; expected { rows: EmtrRow[] }" }, { status: 400 });
     }
-
-    const thr = Number(params.thr);
-    const reps = params.reps | 0;
-    const maxIter = params.maxIter | 0;
-
-    // Fixed format (sequence format field removed from UI)
-    const fmt = "phylip";
-
-    postMessage({ type: "log", line: `WASM dispatch: EM_main` });
-
-    // --- Single unified path: EM_main only ---
-    let rc = 0;
-    if (typeof Module.EMManager === "function") {
-      const mgr = new Module.EMManager("/work/sequence.phyx", fmt, "/work/topology.csv", "/work/out", reps, maxIter, thr);
-      mgr.EM_main(); // internally: parsimony → dirichlet → ssh
-    } else {
-      const EM_main_entry_c = Module.cwrap(
-        "EM_main_entry_c",
-        "number",
-        ["string", "string", "number", "number", "number", "string"]
+    if (rows.length === 0) {
+      return NextResponse.json({ ok: true, inserted: 0, skipped: 0, total: 0 });
+    }
+    if (rows.length > MAX_ROWS_PER_REQUEST) {
+      return NextResponse.json(
+        { ok: false, error: `Too many rows; max ${MAX_ROWS_PER_REQUEST} per request` },
+        { status: 413 }
       );
-      if (!EM_main_entry_c) throw new Error("EM_main_entry_c not exported");
-      rc = EM_main_entry_c("/work/sequence.phyx", "/work/topology.csv", thr, reps, maxIter, fmt);
     }
 
-    // Finalize: flush rows, ship artifacts, and finish
-    await flushNow(jobIdForThisRun);
-    shipArtifacts();
-    postMessage({ type: "done", rc });
-  } catch (err) {
-    // Flush whatever we have before failing
-    await flushNow(jobIdForThisRun);
-    postMessage({ type: "log", line: `❌ ${String(err)}` });
-    postMessage({ type: "done", rc: 1 });
+    // Validate
+    const valid: EmtrRowIn[] = [];
+    for (const r of rows) {
+      if (!isRow(r)) {
+        // Optional: include small sample of bad row for debugging
+        return NextResponse.json({ ok: false, error: "Row validation failed" }, { status: 400 });
+      }
+      valid.push(r);
+    }
+
+    const conn = db();
+    let inserted = 0;
+
+    for (const batch of chunk(valid, INSERT_CHUNK_SIZE)) {
+      const placeholders = batch.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
+      const args = batch.flatMap((r) => [
+        jobId,
+        "main",                // force method to "main"
+        r.root,
+        toInt(r.rep),
+        toInt(r.iter),
+        toNum(r.ll_pars),
+        toNum(r.edc_ll_first),
+        toNum(r.edc_ll_final),
+        toNum(r.ll_final),
+      ]);
+
+      // Use ON DUPLICATE KEY only if you have a UNIQUE key on (job_id, root, rep, iter)
+      const sql = `
+        INSERT INTO emtr_rows
+          (job_id, method, root, rep, iter, ll_pars, edc_ll_first, edc_ll_final, ll_final)
+        VALUES ${placeholders}
+        ON DUPLICATE KEY UPDATE job_id = job_id
+      `;
+      await conn.execute(sql, args);
+      inserted += batch.length;
+    }
+
+    return NextResponse.json({ ok: true, inserted, skipped: rows.length - inserted, total: rows.length });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: String(e?.message ?? e ?? "Unknown error") }, { status: 500 });
   }
-};
+}
