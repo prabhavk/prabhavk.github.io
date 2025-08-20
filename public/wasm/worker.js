@@ -2,7 +2,7 @@
 
 // ---------- Upload config ----------
 const API_BASE = "";                // "" => same origin; or e.g. "https://emtr-web.vercel.app"
-const AUTH = "";                    // optional: "Bearer <token>" if you add auth later
+const AUTH = "";                    // optional: "Bearer <token)" if you add auth later
 
 const MAX_BATCH = 200;              // flush when buffer hits this size
 const FLUSH_INTERVAL_MS = 1000;     // or after 1s of inactivity
@@ -18,31 +18,26 @@ let retryDelay = RETRY_BASE_MS;
 
 // Coerce/validate a parsed row so it satisfies the API schema
 function normalizeRow(raw) {
-  // helpers that also accept numeric strings
   const toNum = (v) => (v == null || v === "" ? NaN : Number(v));
   const toInt = (v) => (v == null || v === "" ? NaN : parseInt(v, 10));
 
-  // Map method strings like "Parsimony"/"Dirichlet"/"SSH" to lowercase enum
-  // const mRaw = String(raw.method ?? "").toLowerCase();  
-  const method_src = raw.method
+  // method comes from native; keep as-is (DB uses VARCHAR)
+  const method_src = raw.method;
 
-  // ----- alias mapping (accept multiple key spellings from native stdout) -----
+  // ---- canonical keys (no more 'edc_*' fallbacks) ----
   const ll_init_src =
     raw.ll_init ??
+    raw.ll_pars ??                 // legacy name (back-compat)
     raw.ll_initial ??
-    raw.ll_ssh ??
-    raw.ll_initimony ??
-    raw.logLikelihood_ssh ??
-    raw.loglikelihood_ssh;
+    raw.logLikelihood_initial ??
+    raw.loglikelihood_initial;
 
   const ecd_first_src =
-    raw.ecd_ll_first ??
     raw.ecd_ll_first ??
     raw.logLikelihood_ecd_first ??
     raw.loglikelihood_ecd_first;
 
   const ecd_final_src =
-    raw.edc_ll_final ??
     raw.ecd_ll_final ??
     raw.logLikelihood_ecd_final ??
     raw.loglikelihood_ecd_final;
@@ -56,7 +51,7 @@ function normalizeRow(raw) {
   const iter_src = raw.iter ?? raw.iteration;
   const root_src = raw.root ?? raw.start ?? raw.node;
 
-  const r = {
+  return {
     method: method_src,
     root: String(root_src ?? ""),
     rep: Number.isInteger(raw.rep) ? raw.rep : toInt(rep_src),
@@ -66,8 +61,6 @@ function normalizeRow(raw) {
     ecd_ll_final: toNum(ecd_final_src),
     ll_final: toNum(ll_final_src),
   };
-
-  return r;
 }
 
 function scheduleFlush() {
@@ -77,9 +70,17 @@ function scheduleFlush() {
 }
 
 function queueRow(jobId, row) {
-  rowBuffer.push(normalizeRow(row));
+  const r = normalizeRow(row);
+  if (!r) return;
+
+  rowBuffer.push(r);
+
   if (rowBuffer.length >= MAX_BATCH) {
-    flushNow(jobId);
+    if (!inflight) {
+      flushNow(jobId);
+    } else {
+      scheduleFlush();
+    }
   } else {
     scheduleFlush();
   }
@@ -87,7 +88,7 @@ function queueRow(jobId, row) {
 
 async function flushNow(jobId) {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-  if (inflight) return;                 // don't overlap
+  if (inflight) return;
   if (!rowBuffer.length) return;
 
   const batch = rowBuffer.splice(0, rowBuffer.length);
@@ -108,9 +109,8 @@ async function flushNow(jobId) {
       throw new Error(`HTTP ${res.status} ${res.statusText} :: ${text.slice(0, 400)}`);
     }
 
-    // success: reset backoff and notify UI
     retryDelay = RETRY_BASE_MS;
-    postMessage({ type: "log", line: `⤴︎ uploaded ${batch.length} rows` });
+    postMessage({ type: "log", line: `⤴︎ uploaded ${batch.length} rows (remaining: ${rowBuffer.length})` });
   } catch (err) {
     // put rows back at the front of the buffer
     rowBuffer.unshift(...batch);
@@ -120,6 +120,11 @@ async function flushNow(jobId) {
   } finally {
     inflight = false;
   }
+
+  // keep draining until buffer is empty
+  if (rowBuffer.length) {
+    setTimeout(() => flushNow(jobId), 0);
+  }
 }
 
 // ---------- WASM worker entry ----------
@@ -127,7 +132,6 @@ self.onmessage = async (e) => {
   const { params, seqBytes, topoBytes, jobId } = e.data;
   jobIdForThisRun = jobId || `job-${Date.now()}`;
 
-  // Cache-bust so we never load stale wasm in dev/preview
   const v = (self.NEXT_PUBLIC_COMMIT_SHA || Date.now());
   const createEmtr = (await import(`/wasm/emtr.js?v=${v}`)).default;
 
@@ -135,12 +139,11 @@ self.onmessage = async (e) => {
     locateFile: (p) => `/wasm/${p}?v=${v}`,
     print: (txt) => {
       const line = String(txt).trim();
-      // Expect lines like: [ROW]\t{...json...}
       if (jobIdForThisRun && line.startsWith("[ROW]\t")) {
         try {
           const parsed = JSON.parse(line.slice(6));
           queueRow(jobIdForThisRun, parsed);
-          return; // don't echo data rows to UI
+          return;
         } catch (e) {
           postMessage({ type: "log", line: `row-parse-error: ${String(e)} :: ${line}` });
         }
@@ -171,11 +174,9 @@ self.onmessage = async (e) => {
     try { FS.mkdir("/work"); } catch {}
     try { FS.mkdir("/work/out"); } catch {}
 
-    // Write inputs where the native side expects them
     FS.writeFile("/work/sequence.phyx", new Uint8Array(seqBytes));
     FS.writeFile("/work/topology.csv", new Uint8Array(topoBytes));
 
-    // Line-buffered stdout for progressive logs
     if (typeof Module.set_line_buffered === "function") {
       Module.set_line_buffered();
     } else {
@@ -193,10 +194,8 @@ self.onmessage = async (e) => {
 
     postMessage({ type: "log", line: `WASM dispatch: EM_main` });
 
-    // --- Single unified path: EM_main only ---
     let rc = 0;
     if (typeof Module.EMManager === "function") {
-      // EMManager(sequence, topology, reps, maxIter, thr, pi1..pi4, M1..M4)
       const mgr = new Module.EMManager(
         "/work/sequence.phyx",
         "/work/topology.csv",
@@ -206,9 +205,8 @@ self.onmessage = async (e) => {
         D_pi[0], D_pi[1], D_pi[2], D_pi[3],
         D_M[0],  D_M[1],  D_M[2],  D_M[3]
       );
-      mgr.EM_main(); // internally: parsimony → dirichlet → ssh
+      mgr.EM_main();
     } else {
-      // C ABI fallback (signature updated to include 8 Dirichlet params; no format arg)
       const EM_main_entry_c = Module.cwrap(
         "EM_main_entry_c",
         "number",
@@ -225,12 +223,10 @@ self.onmessage = async (e) => {
       );
     }
 
-    // Finalize: flush rows, ship artifacts, and finish
     await flushNow(jobIdForThisRun);
     shipArtifacts();
     postMessage({ type: "done", rc });
   } catch (err) {
-    // Flush whatever we have before failing
     await flushNow(jobIdForThisRun);
     postMessage({ type: "log", line: `❌ ${String(err)}` });
     postMessage({ type: "done", rc: 1 });
