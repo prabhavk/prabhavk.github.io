@@ -9,7 +9,9 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@bunchmark/stats": "^1.0.0-pre-5",
     "@planetscale/database": "^1.19.0",
+    "mysql2": "^3.14.3",
     "next": "15.4.6",
     "react": "19.1.0",
     "react-dom": "19.1.0",

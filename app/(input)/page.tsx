@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useProgress } from "../components/ProgressProvider";
+import { useProgress } from "@/components/ProgressProvider";
 
 const REQUIRE_MAP_SAFE = true; // set to false if your EM uses posterior means, not MAP
 const ALPHA_MIN = 1e-6;       // numeric guardrail
