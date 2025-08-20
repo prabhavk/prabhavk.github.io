@@ -8,11 +8,12 @@ export const runtime = "nodejs";
 type MethodName = "Parsimony" | "Dirichlet" | "SSH";
 type PairKey = "parsimony_vs_dirichlet" | "parsimony_vs_ssh" | "dirichlet_vs_ssh";
 
-type DBRow = { method: string; ll_final: number }; // adjust names below if your schema differs
+type DBRow = { method: string; ll_final: number };
 
 type PairResult = {
   winner: MethodName | "none";
-  p_value: number;   // one-sided p for the winning direction
+  p_value: number;   // one-sided p (winner's direction)
+  z: number;         // z-statistic from MWU
   nA: number;
   nB: number;
 };
@@ -33,7 +34,7 @@ function normalizeMethod(s: string): MethodName | null {
   return null;
 }
 
-// Normal CDF via erf — for one-sided p from z
+// --- math helpers ---
 function phi(x: number): number {
   return 0.5 * (1 + erf(x / Math.SQRT2));
 }
@@ -45,6 +46,42 @@ function erf(x: number): number {
   const t = 1 / (1 + p * ax);
   const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-ax * ax);
   return sign * y;
+}
+function clamp01(v: number): number {
+  if (!Number.isFinite(v)) return 1;
+  if (v < 0) return 0;
+  if (v > 1) return 1;
+  return v;
+}
+function median(xs: number[]): number {
+  const a = xs.slice().sort((x, y) => x - y);
+  const n = a.length;
+  if (n === 0) return NaN;
+  const mid = Math.floor(n / 2);
+  return n % 2 ? a[mid] : 0.5 * (a[mid - 1] + a[mid]);
+}
+
+// Decide winner with one-sided p = 1 - Phi(|z|); direction chosen from medians
+function decideOneSided(
+  A: number[], B: number[],
+  nameA: MethodName, nameB: MethodName,
+  alpha: number
+): PairResult {
+  if (A.length === 0 || B.length === 0) {
+    return { winner: "none", p_value: 1, z: 0, nA: A.length, nB: B.length };
+  }
+
+  const { z } = mwu(A, B);
+  const p_one = clamp01(1 - phi(Math.abs(z)));
+
+  const mA = median(A);
+  const mB = median(B);
+
+  if (p_one < alpha) {
+    const winner = mA > mB ? nameA : nameB;
+    return { winner, p_value: p_one, z, nA: A.length, nB: B.length };
+  }
+  return { winner: "none", p_value: p_one, z, nA: A.length, nB: B.length };
 }
 
 export async function GET(req: NextRequest) {
@@ -59,9 +96,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Invalid alpha (0 < alpha < 1)" }, { status: 400 });
     }
 
-    // NOTE: If your node column isn't named `root`, change `root = ?` to the correct column.
-    const params: Array<string> = node ? [job, node] : [job];
-    const nodeFilter = node ? "AND root = ?" : ""; // <-- rename `root` if needed
+    // If your node column isn't named `root`, change below.
+    const params: string[] = node ? [job, node] : [job];
+    const nodeFilter = node ? "AND root = ?" : "";
 
     const rows = await query<DBRow>(
       `
@@ -82,25 +119,10 @@ export async function GET(req: NextRequest) {
       if (Number.isFinite(v)) groups[m].push(v);
     }
 
-    const decide = (nameA: MethodName, nameB: MethodName): PairResult => {
-      const A = groups[nameA], B = groups[nameB];
-      if (A.length === 0 || B.length === 0) {
-        return { winner: "none", p_value: 1, nA: A.length, nB: B.length };
-      }
-      const { z } = mwu(A, B); // from @bunchmark/stats
-      // One-sided p-values for the two directions
-      const pAgtB = 1 - phi(z); // H1: A > B
-      const pBgtA = phi(z);     // H1: B > A
-
-      if (pAgtB < alpha) return { winner: nameA, p_value: pAgtB, nA: A.length, nB: B.length };
-      if (pBgtA < alpha) return { winner: nameB, p_value: pBgtA, nA: A.length, nB: B.length };
-      return { winner: "none", p_value: Math.min(pAgtB, pBgtA), nA: A.length, nB: B.length };
-    };
-
-    const pairs: ApiResp["pairs"] = {
-      parsimony_vs_dirichlet: decide("Parsimony", "Dirichlet"),
-      parsimony_vs_ssh:       decide("Parsimony", "SSH"),
-      dirichlet_vs_ssh:       decide("Dirichlet", "SSH"),
+    const pairs: Record<PairKey, PairResult> = {
+      parsimony_vs_dirichlet: decideOneSided(groups.Parsimony, groups.Dirichlet, "Parsimony", "Dirichlet", alpha),
+      parsimony_vs_ssh:       decideOneSided(groups.Parsimony, groups.SSH,       "Parsimony", "SSH",       alpha),
+      dirichlet_vs_ssh:       decideOneSided(groups.Dirichlet, groups.SSH,       "Dirichlet", "SSH",       alpha),
     };
 
     const payload: ApiResp = {
@@ -116,7 +138,7 @@ export async function GET(req: NextRequest) {
     };
 
     return NextResponse.json(payload);
-  } catch (err: unknown) {
+  } catch (err) {
     const message = err instanceof Error ? err.message : "Internal error";
     return NextResponse.json({ error: message }, { status: 500 });
   }
