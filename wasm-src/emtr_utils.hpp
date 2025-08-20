@@ -10,6 +10,7 @@
 #include <sstream>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 #include <stdexcept>
 #include <cstdio>
 #include <tuple>
@@ -17,6 +18,10 @@
 
 namespace emtr {
 
+    
+    
+    
+    
     // Escape a string for JSON (handles quotes, backslashes, control chars)
     inline std::string json_escape(const std::string& s) {
     std::string out;
@@ -54,6 +59,16 @@ namespace emtr {
     double,      // ecd_ll_final
     double       // ll_final
     >;
+
+    inline void debug_counts(const std::vector<Row>& v, const char* where) {
+    std::unordered_map<std::string,size_t> by;
+    for (const auto& t : v) by[std::get<0>(t)]++;
+    std::printf("[COUNT]\t%s size=%zu :: ", where, v.size());
+    bool first=true;
+    for (auto& kv : by) { if(!first) std::printf(", "); std::printf("%s:%zu", kv.first.c_str(), kv.second); first=false; }
+    if (first) std::printf("(empty)");
+    std::printf("\n"); std::fflush(stdout);
+    }
 
     // Emit one row as JSON line prefixed with a tag (default "[ROW]\t")
     inline void emit_row_json(
