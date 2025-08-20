@@ -10,7 +10,7 @@ interface EmtrRowIn {
   root: string;
   rep: number | string;
   iter: number | string;
-  ll_pars: number | string;
+  ll_init: number | string;
   ecd_ll_first: number | string;   // NOTE: corrected "ecd_*" names
   ecd_ll_final: number | string;
   ll_final: number | string;
@@ -44,7 +44,7 @@ function isRow(x: unknown): x is EmtrRowIn {
     typeof r.root === "string" &&
     isSafeInt(r.rep) &&
     isSafeInt(r.iter) &&
-    isFiniteNum(r.ll_pars) &&
+    isFiniteNum(r.ll_init) &&
     isFiniteNum(r.ecd_ll_first) &&
     isFiniteNum(r.ecd_ll_final) &&
     isFiniteNum(r.ll_final)
@@ -112,7 +112,7 @@ export async function POST(
         r.root,
         toInt(r.rep),
         toInt(r.iter),
-        toNum(r.ll_pars),
+        toNum(r.ll_init),
         toNum(r.ecd_ll_first),
         toNum(r.ecd_ll_final),
         toNum(r.ll_final),
@@ -121,7 +121,7 @@ export async function POST(
       // Columns reflect corrected "ecd_*" names
       const sql = `
         INSERT INTO emtr_rows
-          (job_id, method, root, rep, iter, ll_pars, ecd_ll_first, ecd_ll_final, ll_final)
+          (job_id, method, root, rep, iter, ll_init, ecd_ll_first, ecd_ll_final, ll_final)
         VALUES ${placeholders}
         ON DUPLICATE KEY UPDATE job_id = job_id
       `;
