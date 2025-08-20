@@ -8,10 +8,10 @@ type Status = "started" | "completed" | "failed";
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { jobId: string } }
+  { params }: { params: Promise<{ jobId: string }> } // ← Next 15: Promise
 ) {
   try {
-    const { jobId } = params;
+    const { jobId } = await params; // ← await it
     if (!jobId) {
       return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
     }
@@ -38,10 +38,10 @@ export async function PATCH(
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { jobId: string } }
+  { params }: { params: Promise<{ jobId: string }> } // ← Next 15: Promise
 ) {
   try {
-    const { jobId } = params;
+    const { jobId } = await params; // ← await it
     if (!jobId) {
       return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
     }
@@ -50,7 +50,7 @@ export async function GET(
       "SELECT * FROM emtr_jobs WHERE job_id = ? LIMIT 1",
       [jobId]
     );
-    return NextResponse.json({ ok: true, job: res.rows?.[0] ?? null });
+    return NextResponse.json({ ok: true, job: (res.rows as Record<string, unknown>[])[0] ?? null });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
