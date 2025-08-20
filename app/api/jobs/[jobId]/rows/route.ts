@@ -4,43 +4,30 @@ import { db } from "@/lib/pscale";
 
 export const runtime = "edge";
 
-// Row shape FROM THE WORKER
 interface EmtrRowIn {
-  method: string;                  // e.g., "Parsimony" | "Dirichlet" | "SSH" | "main"
+  method: string;
   root: string;
   rep: number | string;
   iter: number | string;
   ll_init: number | string;
-  ecd_ll_first: number | string;   // NOTE: corrected "ecd_*" names
+  ecd_ll_first: number | string;
   ecd_ll_final: number | string;
   ll_final: number | string;
 }
 
-/* ---------- config ---------- */
 const MAX_ROWS_PER_REQUEST = 5_000;
 const INSERT_CHUNK_SIZE = 500;
 
-/* ---------- utils ---------- */
 const toInt = (x: unknown) => (typeof x === "number" ? x : parseInt(String(x), 10));
 const toNum = (x: unknown) => (typeof x === "number" ? x : Number(String(x)));
 const isFiniteNum = (x: unknown) => Number.isFinite(toNum(x));
 const isSafeInt = (x: unknown) => Number.isInteger(toInt(x)) && toInt(x) >= 0;
 
-// Normalize worker-provided method to your DB enum (lowercase)
-function normMethod(m: unknown): "parsimony" | "dirichlet" | "ssh" | "main" {
-  const s = String(m ?? "").trim().toLowerCase();
-  if (s === "parsimony" || s === "dirichlet" || s === "ssh" || s === "main") return s;
-  // Accept common capitalizations from native logs:
-  if (s === "reparameterized mle") return "ssh"; // if you ever emit that label
-  return "main";
-}
-
 function isRow(x: unknown): x is EmtrRowIn {
   if (typeof x !== "object" || x === null) return false;
   const r = x as Record<string, unknown>;
-  // Validate types and numeric fields
   return (
-    typeof r.method !== "undefined" &&
+    typeof r.method === "string" &&
     typeof r.root === "string" &&
     isSafeInt(r.rep) &&
     isSafeInt(r.iter) &&
@@ -57,10 +44,8 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-/* ---------- handler ---------- */
 export async function POST(
   req: NextRequest,
-  // Next.js 15: params is a Promise
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   try {
@@ -92,7 +77,6 @@ export async function POST(
       );
     }
 
-    // Validate + collect
     const valid: EmtrRowIn[] = [];
     for (const r of rows) {
       if (!isRow(r)) {
@@ -108,7 +92,7 @@ export async function POST(
       const placeholders = batch.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
       const args = batch.flatMap((r) => [
         jobId,
-        r.method,       
+        r.method,             // ← keep what worker sends ("parsimony" | "dirichlet" | "ssh")
         r.root,
         toInt(r.rep),
         toInt(r.iter),
@@ -118,14 +102,11 @@ export async function POST(
         toNum(r.ll_final),
       ]);
 
-      // Columns reflect corrected "ecd_*" names
       const sql = `
         INSERT INTO emtr_rows
           (job_id, method, root, rep, iter, ll_init, ecd_ll_first, ecd_ll_final, ll_final)
         VALUES ${placeholders}
-        ON DUPLICATE KEY UPDATE job_id = job_id
       `;
-
       await conn.execute(sql, args);
       inserted += batch.length;
     }

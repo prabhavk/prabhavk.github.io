@@ -4,8 +4,8 @@
 const API_BASE = "";                // "" => same origin; or e.g. "https://emtr-web.vercel.app"
 const AUTH = "";                    // optional: "Bearer <token)" if you add auth later
 
-const MAX_BATCH = 200;              // flush when buffer hits this size
-const FLUSH_INTERVAL_MS = 1000;     // or after 1s of inactivity
+const MAX_BATCH = 200;              // flush threshold
+const FLUSH_INTERVAL_MS = 1000;     // idle flush
 const RETRY_BASE_MS = 1500;         // backoff start
 const RETRY_MAX_MS = 15_000;        // backoff cap
 
@@ -16,18 +16,44 @@ let flushTimer = null;
 let inflight = false;
 let retryDelay = RETRY_BASE_MS;
 
-// Coerce/validate a parsed row so it satisfies the API schema
+// ---------- helpers ----------
+async function upsertJobMetadata(jobId, cfg) {
+  try {
+    const res = await fetch(`${API_BASE}/api/jobs`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(AUTH ? { authorization: AUTH } : {}),
+      },
+      keepalive: true,
+      body: JSON.stringify({
+        job_id: jobId,
+        thr: cfg.thr,
+        reps: cfg.reps,
+        max_iter: cfg.maxIter,
+        D_pi: cfg.D_pi,   // [a1,a2,a3,a4]
+        D_M: cfg.D_M,     // [b1,b2,b3,b4]
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status} ${res.statusText} :: ${text.slice(0, 300)}`);
+    }
+    postMessage({ type: "log", line: "ℹ︎ job config saved" });
+  } catch (err) {
+    postMessage({ type: "log", line: `⚠️ failed to save job config: ${String(err)}` });
+  }
+}
+
+// Coerce one row to canonical shape
 function normalizeRow(raw) {
   const toNum = (v) => (v == null || v === "" ? NaN : Number(v));
   const toInt = (v) => (v == null || v === "" ? NaN : parseInt(v, 10));
 
-  // method comes from native; keep as-is (DB uses VARCHAR)
   const method_src = raw.method;
 
-  // ---- canonical keys (no more 'edc_*' fallbacks) ----
   const ll_init_src =
     raw.ll_init ??
-    raw.ll_pars ??                 // legacy name (back-compat)
     raw.ll_initial ??
     raw.logLikelihood_initial ??
     raw.loglikelihood_initial;
@@ -72,15 +98,11 @@ function scheduleFlush() {
 function queueRow(jobId, row) {
   const r = normalizeRow(row);
   if (!r) return;
-
   rowBuffer.push(r);
 
   if (rowBuffer.length >= MAX_BATCH) {
-    if (!inflight) {
-      flushNow(jobId);
-    } else {
-      scheduleFlush();
-    }
+    if (!inflight) flushNow(jobId);
+    else scheduleFlush();
   } else {
     scheduleFlush();
   }
@@ -112,7 +134,6 @@ async function flushNow(jobId) {
     retryDelay = RETRY_BASE_MS;
     postMessage({ type: "log", line: `⤴︎ uploaded ${batch.length} rows (remaining: ${rowBuffer.length})` });
   } catch (err) {
-    // put rows back at the front of the buffer
     rowBuffer.unshift(...batch);
     postMessage({ type: "log", line: `upload failed: ${String(err)} — retrying in ${retryDelay}ms` });
     setTimeout(() => flushNow(jobId), retryDelay);
@@ -121,10 +142,8 @@ async function flushNow(jobId) {
     inflight = false;
   }
 
-  // keep draining until buffer is empty
-  if (rowBuffer.length) {
-    setTimeout(() => flushNow(jobId), 0);
-  }
+  // keep draining if more piled up
+  if (rowBuffer.length) setTimeout(() => flushNow(jobId), 0);
 }
 
 // ---------- WASM worker entry ----------
@@ -166,7 +185,7 @@ self.onmessage = async (e) => {
           postMessage({ type: "artifact", name, bytes }, [bytes.buffer]);
         }
       }
-    } catch { /* ignore */ }
+    } catch {}
   }
 
   try {
@@ -187,13 +206,15 @@ self.onmessage = async (e) => {
     const thr = Number(params.thr);
     const reps = params.reps | 0;
     const maxIter = params.maxIter | 0;
-
-    // Dirichlet alphas (with defaults)
     const D_pi = Array.isArray(params?.D_pi) && params.D_pi.length === 4 ? params.D_pi.map(Number) : [100,100,100,100];
     const D_M  = Array.isArray(params?.D_M)  && params.D_M.length  === 4 ? params.D_M.map(Number)  : [100,2,2,2];
 
+    // ① Save job config before running
+    await upsertJobMetadata(jobIdForThisRun, { thr, reps, maxIter, D_pi, D_M });
+
     postMessage({ type: "log", line: `WASM dispatch: EM_main` });
 
+    // ② Run EM and stream rows
     let rc = 0;
     if (typeof Module.EMManager === "function") {
       const mgr = new Module.EMManager(
