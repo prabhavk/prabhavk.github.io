@@ -276,7 +276,7 @@ self.onmessage = async (e) => {
     // ⏱ success timing
     const elapsedMs = Date.now() - startedAtMs;
     const minutes = (elapsedMs / 60000).toFixed(2);
-    postMessage({ type: "log", line: `⏱ finished in ${minutes}s` });
+    postMessage({ type: "log", line: `⏱ finished in ${minutes}m` });
 
     postMessage({ type: "done", rc });
     await patchJob(jobIdForThisRun, {
@@ -290,7 +290,7 @@ self.onmessage = async (e) => {
     // ⏱ failure timing
     const elapsedMs = Date.now() - startedAtMs;
     const minutes = (elapsedMs / 60000).toFixed(2);
-    postMessage({ type: "log", line: `⏱ aborted after ${minutes}s` });
+    postMessage({ type: "log", line: `⏱ aborted after ${minutes}m` });
 
     postMessage({ type: "log", line: `❌ ${String(err)}` });
     postMessage({ type: "done", rc: 1 });

@@ -28,7 +28,7 @@ export default function InputPage() {
   const [sequenceFile, setSequenceFile] = useState<File | null>(null);
   const [topologyFile, setTopologyFile] = useState<File | null>(null);
 
-  const [threshold, setThreshold] = useState("0.0001");
+  const [threshold, setThreshold] = useState("0.01");
   const [numReps, setNumReps] = useState("50");
   const [maxIter, setMaxIter] = useState("1000");
 
@@ -167,7 +167,7 @@ export default function InputPage() {
               className="w-full border p-2 text-white"
               value={threshold}
               onChange={(e) => setThreshold(e.target.value)}
-              placeholder="e.g., 0.001"
+              placeholder="e.g., 0.01"
               inputMode="decimal"
             />
           </div>
