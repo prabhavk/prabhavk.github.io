@@ -2,7 +2,7 @@
 
 // ---------- Upload config ----------
 const API_BASE = "";                // "" => same origin; or e.g. "https://emtr-web.vercel.app"
-const AUTH = "";                    // optional: "Bearer <token)" if you add auth later
+const AUTH = "";                    // optional: "Bearer <token>" if you add auth later
 
 const MAX_BATCH = 200;              // flush threshold
 const FLUSH_INTERVAL_MS = 1000;     // idle flush
@@ -47,17 +47,22 @@ async function upsertJobMetadata(jobId, cfg) {
   }
 }
 
-async function setJobStatus(jobId, status) {
+// Update status (+ finished_at, duration_ms) via PATCH /api/jobs/[jobId]
+async function setJobStatus(jobId, status, elapsedMs) {
   try {
-    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/status`, {
-      method: "POST",
+    const finished_at = new Date().toISOString();
+    const duration_ms = Math.max(0, Number(elapsedMs) || 0);
+
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, {
+      method: "PATCH",
       headers: {
         "content-type": "application/json",
         ...(AUTH ? { authorization: AUTH } : {}),
       },
       keepalive: true,
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, finished_at, duration_ms }),
     });
+
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       postMessage({ type: "log", line: `⚠️ status "${status}" failed: HTTP ${res.status} :: ${text.slice(0,200)}` });
@@ -278,7 +283,7 @@ self.onmessage = async (e) => {
     postMessage({ type: "log", line: `⏱ finished in ${seconds}s` });
 
     postMessage({ type: "done", rc });
-    await setJobStatus(jobIdForThisRun, "completed");
+    await setJobStatus(jobIdForThisRun, "completed", elapsedMs);
   } catch (err) {
     await flushNow(jobIdForThisRun);
 
@@ -289,6 +294,6 @@ self.onmessage = async (e) => {
 
     postMessage({ type: "log", line: `❌ ${String(err)}` });
     postMessage({ type: "done", rc: 1 });
-    await setJobStatus(jobIdForThisRun, "failed");
+    await setJobStatus(jobIdForThisRun, "failed", elapsedMs);
   }
 };
