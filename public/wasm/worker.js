@@ -2,7 +2,7 @@
 
 // ---------- Upload config ----------
 const API_BASE = "";                // "" => same origin; or e.g. "https://emtr-web.vercel.app"
-const AUTH = "";                    // optional: "Bearer <token>" if you add auth later
+const AUTH = "";                    // optional: "Bearer <token)" if you add auth later
 
 const MAX_BATCH = 200;              // flush threshold
 const FLUSH_INTERVAL_MS = 1000;     // idle flush
@@ -47,12 +47,9 @@ async function upsertJobMetadata(jobId, cfg) {
   }
 }
 
-// Update status (+ finished_at, duration_ms) via PATCH /api/jobs/[jobId]
-async function setJobStatus(jobId, status, elapsedMs) {
+// PATCH /api/jobs/[jobId] with status + timing
+async function patchJob(jobId, payload) {
   try {
-    const finished_at = new Date().toISOString();
-    const duration_ms = Math.max(0, Number(elapsedMs) || 0);
-
     const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, {
       method: "PATCH",
       headers: {
@@ -60,17 +57,16 @@ async function setJobStatus(jobId, status, elapsedMs) {
         ...(AUTH ? { authorization: AUTH } : {}),
       },
       keepalive: true,
-      body: JSON.stringify({ status, finished_at, duration_ms }),
+      body: JSON.stringify(payload),
     });
-
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      postMessage({ type: "log", line: `⚠️ status "${status}" failed: HTTP ${res.status} :: ${text.slice(0,200)}` });
+      postMessage({ type: "log", line: `⚠️ job patch failed: HTTP ${res.status} :: ${text.slice(0,200)}` });
     } else {
-      postMessage({ type: "log", line: `ℹ︎ job status -> ${status}` });
+      if (payload?.status) postMessage({ type: "log", line: `ℹ︎ job status -> ${payload.status}` });
     }
   } catch (e) {
-    postMessage({ type: "log", line: `⚠️ job status update failed: ${String(e)}` });
+    postMessage({ type: "log", line: `⚠️ job patch error: ${String(e)}` });
   }
 }
 
@@ -279,21 +275,29 @@ self.onmessage = async (e) => {
 
     // ⏱ success timing
     const elapsedMs = Date.now() - startedAtMs;
-    const seconds = (elapsedMs / 1000).toFixed(2);
-    postMessage({ type: "log", line: `⏱ finished in ${seconds}s` });
+    const minutes = (elapsedMs / 60000).toFixed(2);
+    postMessage({ type: "log", line: `⏱ finished in ${minutes}s` });
 
     postMessage({ type: "done", rc });
-    await setJobStatus(jobIdForThisRun, "completed", elapsedMs);
+    await patchJob(jobIdForThisRun, {
+      status: "completed",
+      finished_at: new Date().toISOString(),
+      dur_minutes: minutes,
+    });
   } catch (err) {
     await flushNow(jobIdForThisRun);
 
     // ⏱ failure timing
     const elapsedMs = Date.now() - startedAtMs;
-    const seconds = (elapsedMs / 1000).toFixed(2);
-    postMessage({ type: "log", line: `⏱ aborted after ${seconds}s` });
+    const minutes = (elapsedMs / 60000).toFixed(2);
+    postMessage({ type: "log", line: `⏱ aborted after ${minutes}s` });
 
     postMessage({ type: "log", line: `❌ ${String(err)}` });
     postMessage({ type: "done", rc: 1 });
-    await setJobStatus(jobIdForThisRun, "failed", elapsedMs);
+    await patchJob(jobIdForThisRun, {
+      status: "failed",
+      finished_at: new Date().toISOString(),
+      dur_minutes: minutes,
+    });
   }
 };

@@ -28,9 +28,9 @@ export default function InputPage() {
   const [sequenceFile, setSequenceFile] = useState<File | null>(null);
   const [topologyFile, setTopologyFile] = useState<File | null>(null);
 
-  const [threshold, setThreshold] = useState("0.001");
+  const [threshold, setThreshold] = useState("0.0001");
   const [numReps, setNumReps] = useState("50");
-  const [maxIter, setMaxIter] = useState("200");
+  const [maxIter, setMaxIter] = useState("1000");
 
   // Dirichlet priors
   const [pi, setPi] = useState(["100", "100", "100", "100"]); // α for π

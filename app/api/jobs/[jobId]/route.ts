@@ -36,7 +36,7 @@ export async function PATCH(
       | {
           status?: Status;
           finished_at?: string | number | null;
-          duration_ms?: number | null;
+          dur_minutes?: number | null;
         }
       | null;
 
@@ -44,7 +44,7 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
     }
 
-    const { status, finished_at, duration_ms } = body;
+    const { status, finished_at, dur_minutes } = body;
 
     // Validate status if present
     if (status && !["started", "completed", "failed"].includes(status)) {
@@ -65,20 +65,20 @@ export async function PATCH(
       args.push(toMysqlTimestamp(finished_at)); // can be null to clear
     }
 
-    if (duration_ms !== undefined) {
+    if (dur_minutes !== undefined) {
       const dur =
-        duration_ms === null
+        dur_minutes === null
           ? null
-          : Number.isFinite(Number(duration_ms)) && Number(duration_ms) >= 0
-          ? Math.floor(Number(duration_ms))
+          : Number.isFinite(Number(dur_minutes)) && Number(dur_minutes) >= 0
+          ? Math.floor(Number(dur_minutes))
           : null;
-      sets.push("duration_ms = ?");
+      sets.push("dur_minutes = ?");
       args.push(dur);
     }
 
     if (sets.length === 0) {
       return NextResponse.json(
-        { ok: false, error: "Nothing to update; provide at least one of status, finished_at, duration_ms" },
+        { ok: false, error: "Nothing to update; provide at least one of status, finished_at, dur_minutes" },
         { status: 400 }
       );
     }
@@ -95,7 +95,7 @@ export async function PATCH(
       updated: {
         ...(status ? { status } : {}),
         ...(finished_at !== undefined ? { finished_at } : {}),
-        ...(duration_ms !== undefined ? { duration_ms } : {}),
+        ...(dur_minutes !== undefined ? { dur_minutes } : {}),
       },
     });
   } catch (e: unknown) {
