@@ -4,10 +4,10 @@
 const API_BASE = "";                // "" => same origin; or e.g. "https://emtr-web.vercel.app"
 const AUTH = "";                    // optional: "Bearer <token)" if you add auth later
 
-const MAX_BATCH = 50;              // flush threshold (row count)
-const FLUSH_INTERVAL_MS = 1000;     // idle flush
+const MAX_BATCH = 50;               // flush threshold (row count per POST)
+const FLUSH_INTERVAL_MS = 1000;     // idle flush (debounce)
 const RETRY_BASE_MS = 1500;         // backoff start
-const RETRY_MAX_MS = 15_000;        // backoff cap
+const RETRY_MAX_MS = 15000;         // backoff cap
 
 // ---------- Upload state ----------
 let jobIdForThisRun = "";
@@ -74,13 +74,11 @@ async function setJobStatus(jobId, payload) {
   }
 }
 
-// Approximate size of one row's JSON for logging
+// Approximate size of one row's JSON (for logging only)
 function approxBytesOfRow(r) {
-  // tag + JSON + newline; stringify length is close enough
-  return 8 + JSON.stringify(r).length + 1;
+  return 8 + JSON.stringify(r).length + 1; // tag + json + newline
 }
 
-// Summarize a batch for logs
 function summarizeBatch(batch) {
   const methods = Object.create(null);
   let minRep = Infinity, maxRep = -Infinity;
@@ -109,15 +107,13 @@ function summarizeBatch(batch) {
     ? Object.entries(methods).map(([k,v]) => `${k}:${v}`).join(", ")
     : "—";
 
-  return { methods, methodStr, minRep, maxRep, minIter, maxIter, approxBytes };
+  return { methodStr, minRep, maxRep, minIter, maxIter, approxBytes };
 }
 
-// Coerce one row to canonical shape (uses ecd_* keys only)
+// Coerce one row to canonical shape
 function normalizeRow(raw) {
   const toNum = (v) => (v == null || v === "" ? NaN : Number(v));
   const toInt = (v) => (v == null || v === "" ? NaN : parseInt(v, 10));
-
-  const method_src = raw.method;
 
   const ll_init_src =
     raw.ll_init ??
@@ -145,7 +141,7 @@ function normalizeRow(raw) {
   const root_src = raw.root ?? raw.start ?? raw.node;
 
   return {
-    method: method_src,
+    method: raw.method,
     root: String(root_src ?? ""),
     rep: Number.isInteger(raw.rep) ? raw.rep : toInt(rep_src),
     iter: Number.isInteger(raw.iter) ? raw.iter : toInt(iter_src),
@@ -158,7 +154,7 @@ function normalizeRow(raw) {
 
 function scheduleFlush() {
   if (!flushTimer) {
-    flushTimer = setTimeout(() => flushNow(jobIdForThisRun), FLUSH_INTERVAL_MS);
+    flushTimer = setTimeout(() => void flushNow(jobIdForThisRun, { final: false }), FLUSH_INTERVAL_MS);
   }
 }
 
@@ -168,19 +164,22 @@ function queueRow(jobId, row) {
   rowBuffer.push(r);
 
   if (rowBuffer.length >= MAX_BATCH) {
-    if (!inflight) flushNow(jobId);
+    if (!inflight) void flushNow(jobId, { final: false });
     else scheduleFlush();
   } else {
     scheduleFlush();
   }
 }
 
-async function flushNow(jobId) {
-  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-  if (inflight) return;
-  if (!rowBuffer.length) return;
+// Flush a chunk (<= MAX_BATCH). Returns true if attempted a POST.
+async function flushNow(jobId, { final }) {
+  // if a flush is in-flight, let pending timer handle the next one
+  if (inflight) return false;
 
-  const batch = rowBuffer.splice(0, rowBuffer.length);
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  if (!rowBuffer.length) return false;
+
+  const batch = rowBuffer.splice(0, Math.min(rowBuffer.length, MAX_BATCH));
   const { methodStr, minRep, maxRep, minIter, maxIter, approxBytes } = summarizeBatch(batch);
   const id = ++flushSeq;
 
@@ -198,7 +197,8 @@ async function flushNow(jobId) {
         "content-type": "application/json",
         ...(AUTH ? { authorization: AUTH } : {}),
       },
-      keepalive: true, // NOTE: large bodies with keepalive can be dropped by browsers (~64KB). OK if your batches are small.
+      // keepalive can drop large bodies; use it only for the tiny final chunks
+      keepalive: !!final,
       body: JSON.stringify({ rows: batch }),
     });
 
@@ -213,23 +213,55 @@ async function flushNow(jobId) {
     retryDelay = RETRY_BASE_MS;
     postMessage({
       type: "log",
-      line: `✅ [flush #${id}] ok ${res.status} in ${ms}ms · ${batch.length} rows · remaining buffer: ${rowBuffer.length}`
+      line: `✅ [flush #${id}] ok ${res.status} in ${ms}ms · remaining buffer: ${rowBuffer.length}`
     });
   } catch (err) {
     // put batch back and retry later
     rowBuffer.unshift(...batch);
     postMessage({
       type: "log",
-      line: `❌ [flush #${id}] failed: ${String(err)} — retrying in ${retryDelay}ms (buffer: ${rowBuffer.length} rows)`
+      line: `❌ [flush #${id}] ${String(err)} — retrying in ${retryDelay}ms (buffer: ${rowBuffer.length} rows)`
     });
-    setTimeout(() => flushNow(jobId), retryDelay);
+    setTimeout(() => void flushNow(jobId, { final }), retryDelay);
     retryDelay = Math.min(Math.floor(retryDelay * 1.8), RETRY_MAX_MS);
   } finally {
     inflight = false;
   }
 
-  // keep draining if more piled up
-  if (rowBuffer.length) setTimeout(() => flushNow(jobId), 0);
+  // If more rows are waiting, schedule another immediate flush
+  if (rowBuffer.length) setTimeout(() => void flushNow(jobId, { final }), 0);
+  return true;
+}
+
+// Drain everything at the end (keeps flushing until buffer empty & no inflight)
+async function drainAll(jobId) {
+  postMessage({ type: "log", line: `⤴︎ [final drain] start · buffer=${rowBuffer.length}` });
+  while (inflight || rowBuffer.length) {
+    if (!inflight && rowBuffer.length) {
+      await flushNow(jobId, { final: true });
+    } else {
+      await new Promise(r => setTimeout(r, 50));
+    }
+  }
+  postMessage({ type: "log", line: `✅ [final drain] done` });
+}
+
+// Accept any [ROW...] tag; parse JSON from first '{'
+function handlePrint(txt) {
+  const line = String(txt).trim();
+  if (jobIdForThisRun && line.startsWith("[ROW")) {
+    const brace = line.indexOf("{");
+    if (brace !== -1) {
+      try {
+        const parsed = JSON.parse(line.slice(brace));
+        queueRow(jobIdForThisRun, parsed);
+        return;
+      } catch (e) {
+        postMessage({ type: "log", line: `row-parse-error: ${String(e)} :: ${line.slice(0,200)}` });
+      }
+    }
+  }
+  postMessage({ type: "log", line });
 }
 
 // ---------- WASM worker entry ----------
@@ -243,19 +275,7 @@ self.onmessage = async (e) => {
 
   const Module = await createEmtr({
     locateFile: (p) => `/wasm/${p}?v=${v}`,
-    print: (txt) => {
-      const line = String(txt).trim();
-      if (jobIdForThisRun && line.startsWith("[ROW]\t")) {
-        try {
-          const parsed = JSON.parse(line.slice(6));
-          queueRow(jobIdForThisRun, parsed);
-          return;
-        } catch (e) {
-          postMessage({ type: "log", line: `row-parse-error: ${String(e)} :: ${line}` });
-        }
-      }
-      postMessage({ type: "log", line: txt });
-    },
+    print: handlePrint,
     printErr: (txt) => postMessage({ type: "log", line: `ERR: ${txt}` }),
   });
 
@@ -331,7 +351,8 @@ self.onmessage = async (e) => {
       );
     }
 
-    await flushNow(jobIdForThisRun);
+    // Drain any remaining rows before finalization
+    await drainAll(jobIdForThisRun);
     shipArtifacts();
 
     // ⏱ success timing
@@ -345,9 +366,9 @@ self.onmessage = async (e) => {
       dur_minutes: minutes,
     });
   } catch (err) {
-    await flushNow(jobIdForThisRun);
+    // Ensure we try to drain on failure, too
+    await drainAll(jobIdForThisRun);
 
-    // ⏱ failure timing
     const elapsedMs = Date.now() - startedAtMs;
     const minutes = (elapsedMs / 60000).toFixed(2);
     postMessage({ type: "log", line: `⏱ aborted after ${minutes}m` });
