@@ -4,7 +4,7 @@
 const API_BASE = "";                // "" => same origin; or e.g. "https://emtr-web.vercel.app"
 const AUTH = "";                    // optional: "Bearer <token)" if you add auth later
 
-const MAX_BATCH = 200;              // flush threshold
+const MAX_BATCH = 200;              // flush threshold (row count)
 const FLUSH_INTERVAL_MS = 1000;     // idle flush
 const RETRY_BASE_MS = 1500;         // backoff start
 const RETRY_MAX_MS = 15_000;        // backoff cap
@@ -16,6 +16,7 @@ let flushTimer = null;
 let inflight = false;
 let retryDelay = RETRY_BASE_MS;
 let startedAtMs = 0;                // ⏱ timing
+let flushSeq = 0;                   // sequential id for each flush
 
 // ---------- helpers ----------
 async function upsertJobMetadata(jobId, cfg) {
@@ -71,6 +72,44 @@ async function setJobStatus(jobId, payload) {
   } catch (e) {
     postMessage({ type: "log", line: `⚠️ job patch error: ${String(e)}` });
   }
+}
+
+// Approximate size of one row's JSON for logging
+function approxBytesOfRow(r) {
+  // tag + JSON + newline; stringify length is close enough
+  return 8 + JSON.stringify(r).length + 1;
+}
+
+// Summarize a batch for logs
+function summarizeBatch(batch) {
+  const methods = Object.create(null);
+  let minRep = Infinity, maxRep = -Infinity;
+  let minIter = Infinity, maxIter = -Infinity;
+  let approxBytes = 0;
+
+  for (const r of batch) {
+    const m = (r.method ?? "(none)").toString();
+    methods[m] = (methods[m] || 0) + 1;
+
+    if (Number.isFinite(r.rep)) {
+      if (r.rep < minRep) minRep = r.rep;
+      if (r.rep > maxRep) maxRep = r.rep;
+    }
+    if (Number.isFinite(r.iter)) {
+      if (r.iter < minIter) minIter = r.iter;
+      if (r.iter > maxIter) maxIter = r.iter;
+    }
+    approxBytes += approxBytesOfRow(r);
+  }
+
+  if (!Number.isFinite(minRep)) { minRep = null; maxRep = null; }
+  if (!Number.isFinite(minIter)) { minIter = null; maxIter = null; }
+
+  const methodStr = Object.keys(methods).length
+    ? Object.entries(methods).map(([k,v]) => `${k}:${v}`).join(", ")
+    : "—";
+
+  return { methods, methodStr, minRep, maxRep, minIter, maxIter, approxBytes };
 }
 
 // Coerce one row to canonical shape (uses ecd_* keys only)
@@ -142,7 +181,16 @@ async function flushNow(jobId) {
   if (!rowBuffer.length) return;
 
   const batch = rowBuffer.splice(0, rowBuffer.length);
+  const { methodStr, minRep, maxRep, minIter, maxIter, approxBytes } = summarizeBatch(batch);
+  const id = ++flushSeq;
+
+  postMessage({
+    type: "log",
+    line: `⤴︎ [flush #${id}] sending ${batch.length} rows (~${approxBytes}B) · methods: ${methodStr} · reps:[${minRep ?? "—"}-${maxRep ?? "—"}] · iters:[${minIter ?? "—"}-${maxIter ?? "—"}]`
+  });
+
   inflight = true;
+  const t0 = (typeof performance !== "undefined" ? performance.now() : Date.now());
   try {
     const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/rows`, {
       method: "POST",
@@ -150,9 +198,12 @@ async function flushNow(jobId) {
         "content-type": "application/json",
         ...(AUTH ? { authorization: AUTH } : {}),
       },
-      keepalive: true,
+      keepalive: true, // NOTE: large bodies with keepalive can be dropped by browsers (~64KB). OK if your batches are small.
       body: JSON.stringify({ rows: batch }),
     });
+
+    const t1 = (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const ms = Math.round(t1 - t0);
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -160,10 +211,17 @@ async function flushNow(jobId) {
     }
 
     retryDelay = RETRY_BASE_MS;
-    postMessage({ type: "log", line: `⤴︎ uploaded ${batch.length} rows (remaining: ${rowBuffer.length})` });
+    postMessage({
+      type: "log",
+      line: `✅ [flush #${id}] ok ${res.status} in ${ms}ms · ${batch.length} rows · remaining buffer: ${rowBuffer.length}`
+    });
   } catch (err) {
+    // put batch back and retry later
     rowBuffer.unshift(...batch);
-    postMessage({ type: "log", line: `upload failed: ${String(err)} — retrying in ${retryDelay}ms` });
+    postMessage({
+      type: "log",
+      line: `❌ [flush #${id}] failed: ${String(err)} — retrying in ${retryDelay}ms (buffer: ${rowBuffer.length} rows)`
+    });
     setTimeout(() => flushNow(jobId), retryDelay);
     retryDelay = Math.min(Math.floor(retryDelay * 1.8), RETRY_MAX_MS);
   } finally {
