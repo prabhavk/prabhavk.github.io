@@ -33,6 +33,7 @@ async function upsertJobMetadata(jobId, cfg) {
         max_iter: cfg.maxIter,
         D_pi: cfg.D_pi,   // [a1,a2,a3,a4]
         D_M: cfg.D_M,     // [b1,b2,b3,b4]
+        status: "started",
       }),
     });
     if (!res.ok) {
@@ -42,6 +43,22 @@ async function upsertJobMetadata(jobId, cfg) {
     postMessage({ type: "log", line: "ℹ︎ job config saved" });
   } catch (err) {
     postMessage({ type: "log", line: `⚠️ failed to save job config: ${String(err)}` });
+  }
+}
+
+async function setJobStatus(jobId, status) {
+  try {
+    await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/status`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(AUTH ? { authorization: AUTH } : {}),
+      },
+      keepalive: true, // helps if tab closes
+      body: JSON.stringify({ status }),
+    });
+  } catch (e) {
+    postMessage({ type: "log", line: `job status update failed: ${String(e)}` });
   }
 }
 
@@ -209,7 +226,7 @@ self.onmessage = async (e) => {
     const D_pi = Array.isArray(params?.D_pi) && params.D_pi.length === 4 ? params.D_pi.map(Number) : [100,100,100,100];
     const D_M  = Array.isArray(params?.D_M)  && params.D_M.length  === 4 ? params.D_M.map(Number)  : [100,2,2,2];
 
-    // ① Save job config before running
+    // ① Save job config (status=started)
     await upsertJobMetadata(jobIdForThisRun, { thr, reps, maxIter, D_pi, D_M });
 
     postMessage({ type: "log", line: `WASM dispatch: EM_main` });
@@ -247,9 +264,15 @@ self.onmessage = async (e) => {
     await flushNow(jobIdForThisRun);
     shipArtifacts();
     postMessage({ type: "done", rc });
+
+    // ③ mark completed
+    setJobStatus(jobIdForThisRun, "completed");
   } catch (err) {
     await flushNow(jobIdForThisRun);
     postMessage({ type: "log", line: `❌ ${String(err)}` });
     postMessage({ type: "done", rc: 1 });
+
+    // ③ mark failed
+    setJobStatus(jobIdForThisRun, "failed");
   }
 };
