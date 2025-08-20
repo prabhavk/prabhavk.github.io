@@ -7134,20 +7134,20 @@ void EMManager::EM_main() {
 	this->P->max_log_likelihood_best = -1 * pow(10,10);
 	cout << "Starting EM with initial parameters set using parsimony" << endl;	
 	this->P->EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results(this->num_repetitions);
-	emtr::debug_counts(this->P->EMTR_results, "after-parsimony");
+	// emtr::debug_counts(this->P->EMTR_results, "after-parsimony");
 
 	
 	cout << "Starting EM with initial parameters sampled from Dirichlet distribution" << endl;
 	this->P->EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(this->num_repetitions);
-	emtr::debug_counts(this->P->EMTR_results, "after-dirichlet");
+	// emtr::debug_counts(this->P->EMTR_results, "after-dirichlet");
 		
 	this->P->RestoreBestProbability();
 	this->P->ReparameterizeGMM();
 	cout << "Starting EM with initial parameters set using reparameterized MLE" << endl;
     this->P->EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(this->num_repetitions);
-	emtr::debug_counts(this->P->EMTR_results, "after-ssh");
+	// emtr::debug_counts(this->P->EMTR_results, "after-ssh");
 
-	std::printf("[FLUSH]\trows=%zu\n", this->P->EMTR_results.size()); std::fflush(stdout);
+	// std::printf("[FLUSH]\trows=%zu\n", this->P->EMTR_results.size()); std::fflush(stdout);
 	emtr::flush_rows_json(this->P->EMTR_results);
 }
 

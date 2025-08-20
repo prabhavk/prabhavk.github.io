@@ -4,7 +4,7 @@
 const API_BASE = "";                // "" => same origin; or e.g. "https://emtr-web.vercel.app"
 const AUTH = "";                    // optional: "Bearer <token)" if you add auth later
 
-const MAX_BATCH = 50;               // flush threshold (row count per POST)
+const MAX_BATCH = 200;               // flush threshold (row count per POST)
 const FLUSH_INTERVAL_MS = 1000;     // idle flush (debounce)
 const RETRY_BASE_MS = 1500;         // backoff start
 const RETRY_MAX_MS = 15000;         // backoff cap
