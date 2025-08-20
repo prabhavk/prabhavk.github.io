@@ -2,7 +2,7 @@
 
 // ---------- Upload config ----------
 const API_BASE = "";                // "" => same origin; or e.g. "https://emtr-web.vercel.app"
-const AUTH = "";                    // optional: "Bearer <token>" if you add auth later
+const AUTH = "";                    // optional: "Bearer <token)" if you add auth later
 
 const MAX_BATCH = 200;              // flush threshold
 const FLUSH_INTERVAL_MS = 1000;     // idle flush
@@ -15,6 +15,7 @@ let rowBuffer = [];
 let flushTimer = null;
 let inflight = false;
 let retryDelay = RETRY_BASE_MS;
+let startedAtMs = 0;                // ⏱ timing
 
 // ---------- helpers ----------
 async function upsertJobMetadata(jobId, cfg) {
@@ -68,7 +69,7 @@ async function setJobStatus(jobId, status) {
   }
 }
 
-// Coerce one row to canonical shape
+// Coerce one row to canonical shape (uses ecd_* keys only)
 function normalizeRow(raw) {
   const toNum = (v) => (v == null || v === "" ? NaN : Number(v));
   const toInt = (v) => (v == null || v === "" ? NaN : parseInt(v, 10));
@@ -172,6 +173,7 @@ async function flushNow(jobId) {
 // ---------- WASM worker entry ----------
 self.onmessage = async (e) => {
   const { params, seqBytes, topoBytes, jobId } = e.data;
+  startedAtMs = Date.now();                           // ⏱ start timing
   jobIdForThisRun = jobId || `job-${Date.now()}`;
 
   const v = (self.NEXT_PUBLIC_COMMIT_SHA || Date.now());
@@ -269,16 +271,24 @@ self.onmessage = async (e) => {
 
     await flushNow(jobIdForThisRun);
     shipArtifacts();
-    postMessage({ type: "done", rc });
 
-    // ③ mark completed
+    // ⏱ success timing
+    const elapsedMs = Date.now() - startedAtMs;
+    const seconds = (elapsedMs / 1000).toFixed(2);
+    postMessage({ type: "log", line: `⏱ finished in ${seconds}s` });
+
+    postMessage({ type: "done", rc });
     await setJobStatus(jobIdForThisRun, "completed");
   } catch (err) {
     await flushNow(jobIdForThisRun);
+
+    // ⏱ failure timing
+    const elapsedMs = Date.now() - startedAtMs;
+    const seconds = (elapsedMs / 1000).toFixed(2);
+    postMessage({ type: "log", line: `⏱ aborted after ${seconds}s` });
+
     postMessage({ type: "log", line: `❌ ${String(err)}` });
     postMessage({ type: "done", rc: 1 });
-
-    // ③ mark failed
     await setJobStatus(jobIdForThisRun, "failed");
   }
 };
