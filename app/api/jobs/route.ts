@@ -4,19 +4,41 @@ import { db } from "@/lib/pscale";
 
 export const runtime = "edge";
 
+type Num = number;
+
+interface JobPayload {
+  job_id: string;
+  thr: Num;
+  reps: Num;
+  max_iter: Num;
+  D_pi?: Num[]; // length 4 if present
+  D_M?: Num[];  // length 4 if present
+}
+
+function asNumberArray(x: unknown): number[] | null {
+  if (!Array.isArray(x)) return null;
+  const arr = x.map((v) => Number(v));
+  return arr.every((v) => Number.isFinite(v)) ? arr : null;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const ct = req.headers.get("content-type") || "";
     if (!ct.toLowerCase().includes("application/json")) {
-      return NextResponse.json({ ok: false, error: "Content-Type must be application/json" }, { status: 415 });
+      return NextResponse.json(
+        { ok: false, error: "Content-Type must be application/json" },
+        { status: 415 }
+      );
     }
-    const body = await req.json();
-    const job_id = String(body.job_id ?? "").trim();
-    const thr = Number(body.thr);
-    const reps = Number(body.reps);
-    const max_iter = Number(body.max_iter);
-    const D_pi = Array.isArray(body.D_pi) ? body.D_pi.map(Number) : [];
-    const D_M  = Array.isArray(body.D_M)  ? body.D_M.map(Number)  : [];
+
+    const raw = (await req.json()) as Partial<JobPayload>;
+    const job_id = String(raw.job_id ?? "").trim();
+    const thr = Number(raw.thr);
+    const reps = Number(raw.reps);
+    const max_iter = Number(raw.max_iter);
+
+    const D_pi = asNumberArray(raw.D_pi) ?? [];
+    const D_M  = asNumberArray(raw.D_M)  ?? [];
 
     if (!job_id || !Number.isFinite(thr) || !Number.isInteger(reps) || !Number.isInteger(max_iter)) {
       return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 });
@@ -39,8 +61,8 @@ export async function POST(req: NextRequest) {
     );
 
     return NextResponse.json({ ok: true });
-  } catch (e) {
-    const msg = e && typeof e === "object" && "message" in e ? String((e as any).message) : "Unknown error";
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }
