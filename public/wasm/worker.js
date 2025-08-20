@@ -47,8 +47,7 @@ async function upsertJobMetadata(jobId, cfg) {
   }
 }
 
-// PATCH /api/jobs/[jobId] with status + timing
-async function patchJob(jobId, payload) {
+async function setJobStatus(jobId, payload) {
   try {
     const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, {
       method: "PATCH",
@@ -61,9 +60,13 @@ async function patchJob(jobId, payload) {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      postMessage({ type: "log", line: `⚠️ job patch failed: HTTP ${res.status} :: ${text.slice(0,200)}` });
+      postMessage({
+        type: "log",
+        line: `⚠️ job patch failed: HTTP ${res.status} :: ${text.slice(0,200)}`
+      });
     } else {
-      if (payload?.status) postMessage({ type: "log", line: `ℹ︎ job status -> ${payload.status}` });
+      if (payload?.status)
+        postMessage({ type: "log", line: `ℹ︎ job status -> ${payload.status}` });
     }
   } catch (e) {
     postMessage({ type: "log", line: `⚠️ job patch error: ${String(e)}` });
@@ -277,9 +280,8 @@ self.onmessage = async (e) => {
     const elapsedMs = Date.now() - startedAtMs;
     const minutes = (elapsedMs / 60000).toFixed(2);
     postMessage({ type: "log", line: `⏱ finished in ${minutes}m` });
-
     postMessage({ type: "done", rc });
-    await patchJob(jobIdForThisRun, {
+    await setJobStatus(jobIdForThisRun, {
       status: "completed",
       finished_at: new Date().toISOString(),
       dur_minutes: minutes,
@@ -291,10 +293,9 @@ self.onmessage = async (e) => {
     const elapsedMs = Date.now() - startedAtMs;
     const minutes = (elapsedMs / 60000).toFixed(2);
     postMessage({ type: "log", line: `⏱ aborted after ${minutes}m` });
-
     postMessage({ type: "log", line: `❌ ${String(err)}` });
     postMessage({ type: "done", rc: 1 });
-    await patchJob(jobIdForThisRun, {
+    await setJobStatus(jobIdForThisRun, {
       status: "failed",
       finished_at: new Date().toISOString(),
       dur_minutes: minutes,
