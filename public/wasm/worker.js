@@ -27,11 +27,11 @@ function normalizeRow(raw) {
   const method_src = raw.method
 
   // ----- alias mapping (accept multiple key spellings from native stdout) -----
-  const ll_pars_src =
-    raw.ll_pars ??
+  const ll_init_src =
+    raw.ll_init ??
     raw.ll_initial ??
     raw.ll_ssh ??
-    raw.ll_parsimony ??
+    raw.ll_initimony ??
     raw.logLikelihood_ssh ??
     raw.loglikelihood_ssh;
 
@@ -61,7 +61,7 @@ function normalizeRow(raw) {
     root: String(root_src ?? ""),
     rep: Number.isInteger(raw.rep) ? raw.rep : toInt(rep_src),
     iter: Number.isInteger(raw.iter) ? raw.iter : toInt(iter_src),
-    ll_pars: toNum(ll_pars_src),
+    ll_init: toNum(ll_init_src),
     ecd_ll_first: toNum(ecd_first_src),
     ecd_ll_final: toNum(ecd_final_src),
     ll_final: toNum(ll_final_src),
