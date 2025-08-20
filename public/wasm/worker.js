@@ -2,7 +2,7 @@
 
 // ---------- Upload config ----------
 const API_BASE = "";                // "" => same origin; or e.g. "https://emtr-web.vercel.app"
-const AUTH = "";                    // optional: "Bearer <token)" if you add auth later
+const AUTH = "";                    // optional: "Bearer <token>" if you add auth later
 
 const MAX_BATCH = 200;              // flush threshold
 const FLUSH_INTERVAL_MS = 1000;     // idle flush
@@ -48,17 +48,23 @@ async function upsertJobMetadata(jobId, cfg) {
 
 async function setJobStatus(jobId, status) {
   try {
-    await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/status`, {
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/status`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(AUTH ? { authorization: AUTH } : {}),
       },
-      keepalive: true, // helps if tab closes
+      keepalive: true,
       body: JSON.stringify({ status }),
     });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      postMessage({ type: "log", line: `⚠️ status "${status}" failed: HTTP ${res.status} :: ${text.slice(0,200)}` });
+    } else {
+      postMessage({ type: "log", line: `ℹ︎ job status -> ${status}` });
+    }
   } catch (e) {
-    postMessage({ type: "log", line: `job status update failed: ${String(e)}` });
+    postMessage({ type: "log", line: `⚠️ job status update failed: ${String(e)}` });
   }
 }
 
@@ -266,13 +272,13 @@ self.onmessage = async (e) => {
     postMessage({ type: "done", rc });
 
     // ③ mark completed
-    setJobStatus(jobIdForThisRun, "completed");
+    await setJobStatus(jobIdForThisRun, "completed");
   } catch (err) {
     await flushNow(jobIdForThisRun);
     postMessage({ type: "log", line: `❌ ${String(err)}` });
     postMessage({ type: "done", rc: 1 });
 
     // ③ mark failed
-    setJobStatus(jobIdForThisRun, "failed");
+    await setJobStatus(jobIdForThisRun, "failed");
   }
 };
