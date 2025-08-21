@@ -197,7 +197,7 @@ export default function WmwPage() {
         </div>
 
         <p className="text-xs text-gray-500 mt-4">
-          Winner is the method with larger median log-likelihood when the one-sided test is significant (p = 1 − Φ(|z|)).
+          Winner is the method with larger median log-likelihood when the one-sided test is significant).
         </p>
       </section>
     </div>
