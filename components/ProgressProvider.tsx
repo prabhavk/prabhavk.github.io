@@ -40,19 +40,19 @@ export default function ProgressProvider({ children }: { children: React.ReactNo
   const scrollerRef = useRef<HTMLElement | null>(null);
   const attachScroller = useCallback((el: HTMLElement | null) => {
     scrollerRef.current = el ?? null;
-  }, []); // ⬅️ stable function identity
+  }, []);
 
-  function clear() {
+  const clear = useCallback(() => {
     setLogs([]);
     setStatus("idle");
     setJobId(undefined);
     if (pollRef.current) window.clearInterval(pollRef.current);
     pollRef.current = null;
-  }
+  }, []);
 
-  function append(line: string) {
+  const append = useCallback((line: string) => {
     setLogs((prev) => [...prev, line]);
-  }
+  }, []);
 
   // Auto-scroll to bottom whenever logs/status change
   useLayoutEffect(() => {
@@ -61,33 +61,42 @@ export default function ProgressProvider({ children }: { children: React.ReactNo
 
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 
-    if (nearBottom || status === "running") {
+    if (nearBottom || status === "started") {
       // wait for layout/paint to account for the new line
       requestAnimationFrame(() => {
-        const elStyle = el.style as CSSStyleDeclaration;
-        const prev = elStyle.scrollBehavior;
-        elStyle.scrollBehavior = status === "running" ? "smooth" : "auto";
+        const prev = el.style.scrollBehavior;
+        // smooth scrolling only while actively "started"
+        el.style.scrollBehavior = status === "started" ? "smooth" : "auto";
         el.scrollTop = el.scrollHeight;
-        elStyle.scrollBehavior = prev || "";
+        el.style.scrollBehavior = prev || "";
       });
     }
-  }, [logs, status]); // ⬅️ runs after layout thanks to useLayoutEffect
+  }, [logs, status]);
 
   // Call this when you kick off EMTR
-  function start(id: string) {
-  setJobId(id);
-  setStatus("started");
-  setLogs([]);
+  const start = useCallback((id: string) => {
+    setJobId(id);
+    setStatus("started");
+    setLogs([]);
+    if (pollRef.current) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
 
-  // stop & clear any leftover demo timer, if it ever existed
-  if (pollRef.current) {
-    window.clearInterval(pollRef.current);
-    pollRef.current = null;
-  }
-}
+  // Call this when the worker finishes or errors
+  const stop = useCallback(() => {
+    setStatus("idle"); // or set to "done"/"error" if you want transient states
+    if (pollRef.current) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
 
   return (
-    <Ctx.Provider value={{ jobId, status, logs, start, append, clear, attachScroller }}>
+    <Ctx.Provider
+      value={{ jobId, status, logs, start, append, stop, clear, attachScroller }}
+    >
       {children}
     </Ctx.Provider>
   );
