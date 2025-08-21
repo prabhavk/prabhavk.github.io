@@ -32,7 +32,6 @@ export default function InputPage() {
   const [threshold, setThreshold] = useState("0.01");
   const [numReps, setNumReps] = useState("50");
   const [maxIter, setMaxIter] = useState("1000");
-  const [sshRounds, setSSHRounds] = useState("1"); // string for input control, convert on submit
   const [pi, setPi] = useState(["100", "100", "100", "100"]);
   const [M, setM] = useState(["100", "2", "2", "2"]);
 
@@ -45,7 +44,7 @@ export default function InputPage() {
     };
   }, []);
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
     if (!sequenceFile || !topologyFile) {
@@ -56,7 +55,6 @@ export default function InputPage() {
     const thr = Number(threshold);
     const reps = Number(numReps);
     const iters = Number(maxIter);
-    const ssh_rounds = Number(sshRounds);
 
     if (!Number.isFinite(thr) || thr <= 0) {
       append("❗ Convergence threshold must be a positive number.");
@@ -68,10 +66,6 @@ export default function InputPage() {
     }
     if (!Number.isInteger(iters) || iters <= 0) {
       append("❗ Max iterations must be a positive integer.");
-      return;
-    }
-    if (!Number.isInteger(ssh_rounds) || ssh_rounds <= 0) {
-      append("❗ SSH rounds must be a positive integer.");
       return;
     }
 
@@ -91,7 +85,7 @@ export default function InputPage() {
     start(jobId);
     append(`🆔 jobId = ${jobId}`);
     append(
-      `🌲 Starting EMTR (WASM): seq=${sequenceFile.name}, topo=${topologyFile.name}, thr=${thr}, reps=${reps}, maxIter=${iters}, sshRounds=${ssh_rounds}`
+      `🌲 Starting EMTR (WASM): seq=${sequenceFile.name}, topo=${topologyFile.name}, thr=${thr}, reps=${reps}, maxIter=${iters}`
     );
 
     const v = Date.now();
@@ -122,7 +116,6 @@ export default function InputPage() {
         thr,
         reps,
         maxIter: iters,
-        sshRounds: ssh_rounds, // ← send the new param
         D_pi,
         D_M,
       },
@@ -139,10 +132,10 @@ export default function InputPage() {
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Files */}
         <div className="space-y-2">
-          <label className="block text-sm font-medium text-white">Sequence file (.phyx / .phy)</label>
+          <label className="block text-sm font-medium text-white">Sequence file (.phyx)</label>
           <input
             type="file"
-            accept=".phyx,.phy"
+            accept=".phyx"
             onChange={(e) => setSequenceFile(e.target.files?.[0] ?? null)}
             className="block w-full border p-2 text-white"
           />
@@ -159,7 +152,7 @@ export default function InputPage() {
         </div>
 
         {/* Numeric parameters */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
             <label className="block text-sm font-medium text-white">Convergence threshold</label>
             <input
@@ -191,18 +184,6 @@ export default function InputPage() {
               value={maxIter}
               onChange={(e) => setMaxIter(e.target.value)}
               placeholder="e.g., 1000"
-              min={1}
-              step={1}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-white">SSH rounds</label>
-            <input
-              type="number"
-              className="w-full border p-2 text-white"
-              value={sshRounds}
-              onChange={(e) => setSSHRounds(e.target.value)}
-              placeholder="e.g., 1"
               min={1}
               step={1}
             />

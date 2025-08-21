@@ -67,8 +67,7 @@ private:
 	string probabilityFileName_diri_root;
 	string probabilityFileName_best;
 	double max_ll_pars;
-	double max_ll_diri;
-	int ssh_rounds;
+	double max_ll_diri;	
 	string MSTFileName;
 	string GMMparametersFileName;
 	string distance_measure_for_NJ = "Hamming";
@@ -102,7 +101,7 @@ private:
               string topologyFileNameToSet,
               int num_repetitions,
               int max_iter,
-			  int ssh_rounds,
+			//   int ssh_rounds,
               double conv_threshold,
 			  double pi_a_1,
 			  double pi_a_2,
@@ -131,6 +130,8 @@ private:
 	void main(string init_criterion, bool root_search);
 	void MR_SSH(int num_rounds);
 	void EM_main();
+	void EM_pars_ssh();
+	void EM_diri_ssh();
     void EMparsimony();
 	void EMdirichlet();
 	void SetprobFileforSSH();

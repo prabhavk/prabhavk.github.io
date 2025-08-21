@@ -11,7 +11,6 @@ interface JobPayload {
   thr: number;
   reps: number;
   max_iter: number;
-  ssh_rounds: number;
   D_pi?: number[]; // length 4
   D_M?: number[];  // length 4
   status?: Status; // defaults to "started"
@@ -46,7 +45,6 @@ export async function POST(req: NextRequest) {
     const thr = Number(raw.thr);
     const reps = Number(raw.reps);
     const max_iter = Number(raw.max_iter);
-    const ssh_rounds = Number(raw.ssh_rounds);
 
     const D_pi_in = asNumberArray(raw.D_pi);
     const D_M_in  = asNumberArray(raw.D_M);
@@ -56,7 +54,6 @@ export async function POST(req: NextRequest) {
         ? raw.status
         : "started";
 
-    // Basic numeric checks
     if (!job_id || job_id.length > 128) {
       return NextResponse.json({ ok: false, error: "Invalid job_id" }, { status: 400 });
     }
@@ -69,13 +66,7 @@ export async function POST(req: NextRequest) {
     if (!Number.isInteger(max_iter) || max_iter < 1) {
       return NextResponse.json({ ok: false, error: "max_iter must be a positive integer" }, { status: 400 });
     }
-    if (!Number.isInteger(ssh_rounds) || ssh_rounds < 1) {
-      return NextResponse.json({ ok: false, error: "ssh_rounds must be a positive integer" }, { status: 400 });
-    }
 
-    // Dirichlet priors:
-    // - If provided, must be valid arrays of 4 positive numbers.
-    // - If omitted, fall back to defaults to satisfy NOT NULL columns.
     if (raw.D_pi && !isValidDirichlet4(D_pi_in)) {
       return NextResponse.json(
         { ok: false, error: "D_pi must be an array of 4 positive numbers" },
@@ -94,10 +85,10 @@ export async function POST(req: NextRequest) {
     const conn = db();
     await conn.execute(
       `INSERT INTO emtr_jobs
-         (job_id, status, thr, reps, max_iter, ssh_rounds,
+         (job_id, status, thr, reps, max_iter,
           d_pi_1, d_pi_2, d_pi_3, d_pi_4,
           d_m_1,  d_m_2,  d_m_3,  d_m_4)
-       VALUES (?,?,?,?,?,?,
+       VALUES (?,?,?,?,?,
                ?,?,?,?,
                ?,?,?,?)
        ON DUPLICATE KEY UPDATE
@@ -105,12 +96,10 @@ export async function POST(req: NextRequest) {
          thr=VALUES(thr),
          reps=VALUES(reps),
          max_iter=VALUES(max_iter),
-         ssh_rounds=VALUES(ssh_rounds),
          d_pi_1=VALUES(d_pi_1), d_pi_2=VALUES(d_pi_2), d_pi_3=VALUES(d_pi_3), d_pi_4=VALUES(d_pi_4),
-         d_m_1=VALUES(d_m_1),   d_m_2=VALUES(d_m_2),  d_m_3=VALUES(d_m_3),  d_m_4=VALUES(d_m_4)`
-      ,
+         d_m_1=VALUES(d_m_1),   d_m_2=VALUES(d_m_2),  d_m_3=VALUES(d_m_3),  d_m_4=VALUES(d_m_4)`,
       [
-        job_id, status, thr, reps, max_iter, ssh_rounds,
+        job_id, status, thr, reps, max_iter,
         D_pi[0], D_pi[1], D_pi[2], D_pi[3],
         D_M[0],  D_M[1],  D_M[2],  D_M[3],
       ]
@@ -118,10 +107,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      job: {
-        job_id, status, thr, reps, max_iter, ssh_rounds,
-        D_pi, D_M,
-      },
+      job: { job_id, status, thr, reps, max_iter, D_pi, D_M },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";

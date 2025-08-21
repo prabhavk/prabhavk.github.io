@@ -9,7 +9,7 @@ import React, {
   useCallback,
 } from "react";
 
-type Status = "idle" | "running" | "done" | "error";
+type Status = "idle" | "started" | "done" | "error";
 
 type ProgressCtx = {
   jobId?: string;
@@ -17,6 +17,7 @@ type ProgressCtx = {
   logs: string[];
   start: (jobId: string) => void;
   append: (line: string) => void;
+  stop: () => void;
   clear: () => void;
   attachScroller: (el: HTMLElement | null) => void;
 };

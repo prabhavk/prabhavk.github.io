@@ -6,15 +6,10 @@ import dynamic from "next/dynamic";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
-// Plotly default categorical palette (ensures labels match trace colors)
-const PLOTLY_COLORWAY = [
-  "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-  "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
-] as const;
-
 type MethodName = "Parsimony" | "Dirichlet" | "SSH";
-const METHOD_INDEX: Record<MethodName, number> = { Parsimony: 0, Dirichlet: 1, SSH: 2 };
-const methodColor = (m: MethodName) => PLOTLY_COLORWAY[METHOD_INDEX[m]];
+
+// Enforce this order everywhere
+const METHOD_ORDER: MethodName[] = ["Dirichlet", "Parsimony", "SSH"];
 
 // Nodes
 const NODES = Array.from({ length: 17 }, (_, i) => `h_${21 + i}`);
@@ -27,7 +22,6 @@ type SeriesResp = {
 };
 type ApiErr = { error: string };
 
-// minimal trace typing
 type ViolinTrace = {
   type: "violin";
   name: MethodName;
@@ -37,9 +31,13 @@ type ViolinTrace = {
   points?: "all" | "none" | "outliers" | "suspectedoutliers";
   jitter?: number;
   scalemode?: "width" | "count" | "area";
+  showlegend?: boolean;
+  line?: { color?: string };
+  fillcolor?: string;
+  opacity?: number;
+  marker?: { color?: string };
 };
 
-// ------- tiny guards -------
 function hasProp<K extends string>(obj: unknown, key: K): obj is Record<K, unknown> {
   return typeof obj === "object" && obj !== null && key in obj;
 }
@@ -54,14 +52,11 @@ export default function ViolinPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Read the job chosen on the Precomputed Results page
   useEffect(() => {
     try {
       const saved = localStorage.getItem("emtr:selectedJobId") ?? "";
       setJob(saved);
-    } catch {
-      /* ignore */
-    }
+    } catch {/* ignore */}
   }, []);
 
   const load = useCallback(async () => {
@@ -81,9 +76,7 @@ export default function ViolinPage() {
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) {
         const body = await res.text().catch(() => "");
-        throw new Error(
-          `Expected JSON from ${u.pathname}, got ${ct || "unknown"} (HTTP ${res.status}). ${body.slice(0, 160)}`
-        );
+        throw new Error(`Expected JSON, got ${ct || "unknown"} (HTTP ${res.status}). ${body.slice(0, 160)}`);
       }
 
       const json: unknown = await res.json();
@@ -97,15 +90,11 @@ export default function ViolinPage() {
     }
   }, [job, root]);
 
-  // Auto-load when job/root change
-  useEffect(() => {
-    if (job) void load();
-  }, [job, root, load]);
+  useEffect(() => { if (job) void load(); }, [job, root, load]);
 
-  const traces: ViolinTrace[] = useMemo(() => {
+  const violinTraces: ViolinTrace[] = useMemo(() => {
     if (!data) return [];
-    // No explicit colors: Plotly will use its default colorway (matching labels we render)
-    return (["Parsimony", "Dirichlet", "SSH"] as MethodName[]).map((m) => ({
+    return METHOD_ORDER.map((m) => ({
       type: "violin",
       name: m,
       y: data.series[m],
@@ -114,12 +103,35 @@ export default function ViolinPage() {
       points: "all",
       jitter: 0.3,
       scalemode: "width",
+      showlegend: false,
+      line: { color: "#000" },               // black outlines
+      fillcolor: "rgba(0,0,0,0.5)",          // black fill (semi-transparent)
+      opacity: 0.8,
+      marker: { color: "#000" },             // black points
     }));
+  }, [data]);
+
+  const medianLineTrace = useMemo(() => {
+    if (!data) return null;
+    const y = METHOD_ORDER.map((m) => median(data.series[m]));
+    return {
+      type: "scatter" as const,
+      mode: "lines+markers" as const,
+      x: METHOD_ORDER,
+      y,
+      line: { color: "black", width: 2 },
+      marker: { color: "black", size: 6 },
+      name: "median",
+      showlegend: false,
+      hoverinfo: "x+y",
+    };
   }, [data]);
 
   return (
     <div className="p-6 max-w-[1200px] mx-auto">
-      <h1 className="text-2xl font-bold mb-4">Violin Plots of <code>ll_final</code></h1>
+      <h1 className="text-2xl font-bold mb-4">
+        Violin Plots of <code>ll_final</code>
+      </h1>
 
       <div className="flex flex-wrap gap-3 items-end mb-4">
         <label className="flex flex-col">
@@ -150,36 +162,36 @@ export default function ViolinPage() {
         <div className="p-4 border rounded text-red-600">{err}</div>
       ) : data ? (
         <>
-          {/* Quick counts with badges colored to Plotly's default hues */}
+          {/* Method badges in desired order; all black */}
           <div className="grid grid-cols-3 gap-3 mb-4">
-            {(["Parsimony","Dirichlet","SSH"] as const).map((m) => (
+            {METHOD_ORDER.map((m) => (
               <div key={m} className="p-3 border rounded bg-white flex items-center justify-between">
                 <div className="font-semibold flex items-center gap-2">
-                  <span
-                    className="inline-block w-3 h-3 rounded-full"
-                    style={{ backgroundColor: methodColor(m) }}
-                    aria-hidden
-                  />
-                  <span style={{ color: methodColor(m) }}>{m}</span>
+                  <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: "#000" }} aria-hidden />
+                  <span style={{ color: "#000" }}>{m}</span>
                 </div>
-                <div className="text-sm" style={{ color: methodColor(m) }}>
+                <div className="text-sm" style={{ color: "#000" }}>
                   {data.counts[m]} repetitions
                 </div>
               </div>
             ))}
           </div>
 
-          {/* Violin chart */}
+          {/* Violin chart with medians joined by black line */}
           <div className="bg-white border rounded p-2">
             <Plot
-              data={traces}
+              data={medianLineTrace ? [...violinTraces, medianLineTrace] : violinTraces}
               layout={{
                 title: { text: `ll_final · root=${root}` },
-                colorway: PLOTLY_COLORWAY as unknown as string[], // keep mapping stable
-                xaxis: { title: { text: "Method" } },
+                xaxis: {
+                  title: { text: "Method" },
+                  categoryorder: "array",
+                  categoryarray: METHOD_ORDER, // Dirichlet, Parsimony, SSH
+                },
                 yaxis: { title: { text: "ll_final" } },
                 margin: { l: 60, r: 20, t: 40, b: 50 },
                 height: 480,
+                showlegend: false,
               }}
               config={{ displayModeBar: false, responsive: true }}
               style={{ width: "100%", height: "100%" }}
@@ -193,4 +205,13 @@ export default function ViolinPage() {
       )}
     </div>
   );
+}
+
+/** median of finite numbers; returns NaN if empty after filtering */
+function median(arr: number[]): number {
+  const a = arr.filter((v) => Number.isFinite(v)).slice().sort((x, y) => x - y);
+  const n = a.length;
+  if (!n) return NaN;
+  const mid = Math.floor(n / 2);
+  return n % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 }
