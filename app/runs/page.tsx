@@ -11,7 +11,6 @@ type RunRow = {
   thr: number | null;
   reps: number | null;
   max_iter: number | null;
-  ssh_rounds: number | null;        // ← NEW: show SSH rounds
 
   d_pi_1: number | null;
   d_pi_2: number | null;
@@ -21,9 +20,6 @@ type RunRow = {
   d_m_2: number | null;
   d_m_3: number | null;
   d_m_4: number | null;
-
-  // If your API returns description, you can uncomment this and add a column.
-  // description?: string | null;
 };
 
 type ApiOk = { page: number; pageSize: number; total: number; rows: RunRow[] };
@@ -64,7 +60,6 @@ const COLUMNS: ColumnDef[] = [
   { key: "thr",         label: "thr",         numeric: true },
   { key: "reps",        label: "reps",        numeric: true },
   { key: "max_iter",    label: "max_iter",    numeric: true },
-  { key: "ssh_rounds",  label: "ssh_rounds",  numeric: true }, // ← NEW: visible column
   { key: "d_pi_1",      label: "d_pi_1",      numeric: true },
   { key: "d_pi_2",      label: "d_pi_2",      numeric: true },
   { key: "d_pi_3",      label: "d_pi_3",      numeric: true },
@@ -216,8 +211,6 @@ export default function RunsPage() {
             <option value="reps:asc">reps ↑</option>
             <option value="thr:desc">thr ↓</option>
             <option value="thr:asc">thr ↑</option>
-            <option value="ssh_rounds:desc">ssh_rounds ↓</option> {/* NEW */}
-            <option value="ssh_rounds:asc">ssh_rounds ↑</option>   {/* NEW */}
           </select>
         </div>
         <div className="flex gap-2">
