@@ -30,9 +30,30 @@ type ApiErr = { error: string };
 
 const NODES = Array.from({ length: 17 }, (_, i) => `h_${21 + i}`);
 
-// Light → dark for small → large values
-const BLUE_SCALE = "Blues";
-const RED_SCALE = "Reds";
+// Explicit light→dark sequential scales to guarantee orientation
+const BLUES_SCALE: [number, string][] = [
+  [0, "#f7fbff"],
+  [0.125, "#deebf7"],
+  [0.25, "#c6dbef"],
+  [0.375, "#9ecae1"],
+  [0.5, "#6baed6"],
+  [0.625, "#4292c6"],
+  [0.75, "#2171b5"],
+  [0.875, "#08519c"],
+  [1, "#08306b"],
+];
+
+const REDS_SCALE: [number, string][] = [
+  [0, "#fff5f0"],
+  [0.125, "#fee0d2"],
+  [0.25, "#fcbba1"],
+  [0.375, "#fc9272"],
+  [0.5, "#fb6a4a"],
+  [0.625, "#ef3b2c"],
+  [0.75, "#cb181d"],
+  [0.875, "#a50f15"],
+  [1, "#67000d"],
+];
 
 // ------- type guards -------
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -207,7 +228,7 @@ export default function SpiralPage() {
         {
           title: "ll_init",
           values: (r) => r.ll_init,
-          colorScale: BLUE_SCALE, // light -> dark
+          colorScale: BLUES_SCALE, // light -> dark
           cmin: mn,
           cmax: mx,
         },
@@ -228,7 +249,7 @@ export default function SpiralPage() {
         {
           title: "ll_final",
           values: (r) => r.ll_final,
-          colorScale: RED_SCALE, // light -> dark
+          colorScale: REDS_SCALE, // light -> dark
           cmin: mn,
           cmax: mx,
         },
@@ -249,7 +270,7 @@ export default function SpiralPage() {
         {
           title: "ecd_ll_first",
           values: (r) => r.ecd_ll_first,
-          colorScale: BLUE_SCALE, // light -> dark
+          colorScale: BLUES_SCALE, // light -> dark
           cmin: mn,
           cmax: mx,
         },
@@ -270,7 +291,7 @@ export default function SpiralPage() {
         {
           title: "ecd_ll_final",
           values: (r) => r.ecd_ll_final,
-          colorScale: RED_SCALE, // light -> dark
+          colorScale: REDS_SCALE, // light -> dark
           cmin: mn,
           cmax: mx,
         },
@@ -299,7 +320,7 @@ export default function SpiralPage() {
               type="button"
               onClick={() => setMethod(m)}
               className={`px-3 py-2 rounded border ${
-                method === m ? "bg:white text-black bg-white" : "bg-gray-800 text-white hover:bg-gray-700"
+                method === m ? "bg-white text-black" : "bg-gray-800 text-white hover:bg-gray-700"
               }`}
             >
               {m}
@@ -320,16 +341,16 @@ export default function SpiralPage() {
             className="w-40"
             aria-label="Twist degrees per rank"
           />
-          <input
-            type="number"
-            className="w-20 border rounded px-2 py-1 bg-black text-white border-gray-600"
-            min={0}
-            max={180}
-            step={1}
-            value={twistDeg}
-            onChange={(e) => setTwistDeg(Number(e.target.value))}
-          />
         </div>
+        <input
+          type="number"
+          className="w-20 border rounded px-2 py-1 bg-black text-white border-gray-600"
+          min={0}
+          max={180}
+          step={1}
+          value={twistDeg}
+          onChange={(e) => setTwistDeg(Number(e.target.value))}
+        />
 
         {/* Resample */}
         <button
@@ -435,7 +456,7 @@ function buildMarkersTrace(
   cfg: {
     title: string;
     values: (r: SpiralRow) => number | null;
-    colorScale: string;
+    colorScale: [number, string][];
     cmin: number;
     cmax: number;
   },
@@ -476,8 +497,8 @@ function buildMarkersTrace(
     marker: {
       size: 10,
       color: colors,
-      colorscale: cfg.colorScale, // light (low) → dark (high)
-      reversescale: false,        // <-- ensure orientation is NOT reversed
+      colorscale: cfg.colorScale, // explicit light→dark
+      reversescale: false,        // do NOT flip
       cmin: cfg.cmin,
       cmax: cfg.cmax,
       showscale: true,
