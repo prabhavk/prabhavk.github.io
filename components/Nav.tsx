@@ -11,7 +11,7 @@ const tabs: Tab[] = [
   { href: "/runs",   label: "Precomputed Results",   mode: "deep"  },
   { href: "/wmw",    label: "Wilcoxon-Mann-Whitney", mode: "deep"  },
   { href: "/violin", label: "Violin Plots",          mode: "deep"  },
-  { href: "/flower", label: "Flower Plots",          mode: "deep"  },
+  { href: "/spiral", label: "Spiral Plots",          mode: "deep"  },
 ];
 
 export default function Nav() {
@@ -26,7 +26,6 @@ export default function Nav() {
   // const active = "bg-gray-200 text-black shadow-md";
   const active    = "bg-gray-200 text-black shadow-md hover:bg-white hover:!text-black";
   const idleDefault = "bg-gray-700 text-white hover:bg-yellow-500";
-  // Force black text on hover for runs tab (the `!` ensures it wins)
   const idleRuns    = "bg-gray-700 text-white hover:bg-white hover:!text-black";
 
   const isActive = (t: Tab) =>

@@ -110,101 +110,96 @@ export default function WmwPage() {
   const alphaStr = useMemo(() => alpha.toString(), [alpha]);
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-bold mb-3">Wilcoxon–Mann–Whitney (one-sided)</h1>
-      <div className="text-sm text-gray-600 mb-4">
-        Selected job: <span className="font-mono">{jobId || "(none)"}</span>
-      </div>
+    <div className="p-6 max-w-6xl mx-auto space-y-6">
+      <section>
+        <h1 className="text-2xl font-bold mb-3">Wilcoxon–Mann–Whitney (one-sided)</h1>
+        <div className="text-sm text-white mb-4">
+          Job: <span className="font-mono text-white">{jobId || "(none)"}</span>
+        </div>
 
-      <div className="flex items-end gap-3 mb-4">
-        <label className="flex flex-col">
-          <span className="text-sm">α (significance)</span>
-          <input
-            type="number"
-            step="0.001"
-            min={0.001}
-            max={0.5}
-            value={alphaStr}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              if (Number.isFinite(v)) setAlpha(v);
-            }}
-            className="border rounded-md px-3 py-2 w-28"
-          />
-        </label>
+        <div className="flex items-end gap-3 mb-4">
+          <label className="flex flex-col">
+            <span className="text-sm">α (significance)</span>
+            <input
+              type="number"
+              step="0.001"
+              min={0.001}
+              max={0.5}
+              value={alphaStr}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v)) setAlpha(v);
+              }}
+              className="border rounded-md px-3 py-2 w-28"
+            />
+          </label>
 
-        <button
-          type="button"
-          onClick={() => void computeAll()}
-          className="px-4 py-2 rounded-md bg-black text-white disabled:opacity-50"
-          disabled={!jobId || loading}
-        >
-          {loading ? "Computing…" : "Compute"}
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => void computeAll()}
+            className="px-4 py-2 rounded-md bg-black text-white disabled:opacity-50"
+            disabled={!jobId || loading}
+          >
+            <div className="Compute rounded-md hover:bg-gray-600">
+              {loading ? "Computing…" : "Compute"}
+            </div>            
+          </button>
+        </div>
 
-      <div className="overflow-auto border rounded-xl">
-        <table className="min-w-full text-sm">
-          <thead className="bg-black text-white">
-            <tr>
-              <Th rowSpan={2}>root</Th>
-              <Th colSpan={3} className="text-center">Parsimony vs Dirichlet</Th>
-              <Th colSpan={3} className="text-center">Parsimony vs SSH</Th>
-              <Th colSpan={3} className="text-center">Dirichlet vs SSH</Th>
-            </tr>
-            <tr>
-              {/* PD */}
-              <Th className="text-center">z-score</Th>
-              <Th className="text-center">p-value</Th>
-              <Th className="text-center">winner</Th>
-              {/* PS */}
-              <Th className="text-center">z-score</Th>
-              <Th className="text-center">p-value</Th>
-              <Th className="text-center">winner</Th>
-              {/* DS */}
-              <Th className="text-center">z-score</Th>
-              <Th className="text-center">p-value</Th>
-              <Th className="text-center">winner</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {error ? (
+        <div className="overflow-auto border rounded-xl">
+          <table className="min-w-full text-sm">
+            <thead className="bg-black text-white">
               <tr>
-                <td colSpan={10} className="p-6 text-center text-red-600">{error}</td>
+                <Th rowSpan={2}>root</Th>
+                <Th colSpan={3} className="text-center">Parsimony vs Dirichlet</Th>
+                <Th colSpan={3} className="text-center">Parsimony vs SSH</Th>
+                <Th colSpan={3} className="text-center">Dirichlet vs SSH</Th>
               </tr>
-            ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={10} className="p-6 text-center">No results yet. Click <em>Compute</em>.</td>
+                <Th className="text-center">z-score</Th>
+                <Th className="text-center">p-value</Th>
+                <Th className="text-center">winner</Th>
+                <Th className="text-center">z-score</Th>
+                <Th className="text-center">p-value</Th>
+                <Th className="text-center">winner</Th>
+                <Th className="text-center">z-score</Th>
+                <Th className="text-center">p-value</Th>
+                <Th className="text-center">winner</Th>
               </tr>
-            ) : (
-              rows.map((r) => (
-                <tr key={r.node} className="hover:bg-gray-50">
-                  <Td mono>{r.node}</Td>
-
-                  {/* PD group: z, p, winner */}
-                  <Td num center>{fmtZ(r.pdZ)}</Td>
-                  <Td num center>{fmtP(r.pdP)}</Td>
-                  <Td center>{fmtWinner(r.pdWinner)}</Td>
-
-                  {/* PS group: z, p, winner */}
-                  <Td num center>{fmtZ(r.psZ)}</Td>
-                  <Td num center>{fmtP(r.psP)}</Td>
-                  <Td center>{fmtWinner(r.psWinner)}</Td>
-
-                  {/* DS group: z, p, winner */}
-                  <Td num center>{fmtZ(r.dsZ)}</Td>
-                  <Td num center>{fmtP(r.dsP)}</Td>
-                  <Td center>{fmtWinner(r.dsWinner)}</Td>
+            </thead>
+            <tbody>
+              {error ? (
+                <tr>
+                  <td colSpan={10} className="p-6 text-center text-red-600">{error}</td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+              ) : rows.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="p-6 text-center">No results yet. Click <em>Compute</em>.</td>
+                </tr>
+              ) : (
+                rows.map((r) => (
+                  <tr key={r.node} className="hover:bg-gray-50 hover:text-black">
+                    <Td mono>{r.node}</Td>
+                    <Td num center>{fmtZ(r.pdZ)}</Td>
+                    <Td num center>{fmtP(r.pdP)}</Td>
+                    <Td center>{fmtWinner(r.pdWinner)}</Td>
+                    <Td num center>{fmtZ(r.psZ)}</Td>
+                    <Td num center>{fmtP(r.psP)}</Td>
+                    <Td center>{fmtWinner(r.psWinner)}</Td>
+                    <Td num center>{fmtZ(r.dsZ)}</Td>
+                    <Td num center>{fmtP(r.dsP)}</Td>
+                    <Td center>{fmtWinner(r.dsWinner)}</Td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
 
-      <p className="text-xs text-gray-500 mt-4">
-        Winner is the method with larger median log-likelihood when the one-sided test is significant (p = 1 − Φ(|z|)).
-      </p>
+        <p className="text-xs text-gray-500 mt-4">
+          Winner is the method with larger median log-likelihood when the one-sided test is significant (p = 1 − Φ(|z|)).
+        </p>
+      </section>
     </div>
   );
 }

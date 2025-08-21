@@ -252,7 +252,7 @@ export default function InputPage() {
           </div>
         </div>
 
-        <button className="bg-gray-500 text-white px-4 py-2 rounded  hover:bg-gray-500 hover:text-black">
+        <button className="bg-gray-400 text-white px-4 py-2 rounded  hover:bg-gray-500 hover:text-white">
           Start EMTR
         </button>
       </form>
