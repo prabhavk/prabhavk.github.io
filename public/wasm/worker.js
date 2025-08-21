@@ -186,7 +186,7 @@ async function flushNow(jobId, { final }) {
 
   postMessage({
     type: "log",
-    line: `⤴︎ [flush #${id}] sending ${batch.length} rows (~${approxBytes}B) · methods: ${methodStr} · reps:[${minRep ?? "—"}-${maxRep ?? "—"}] · iters:[${minIter ?? "—"}-${maxIter ?? "—"}]`
+    line: `⤴︎ [#${id}] transmitting ${batch.length} rows (~${approxBytes}B) · methods: ${methodStr} · reps:[${minRep ?? "—"}-${maxRep ?? "—"}] · iters:[${minIter ?? "—"}-${maxIter ?? "—"}]`
   });
 
   inflight = true;
@@ -214,7 +214,7 @@ async function flushNow(jobId, { final }) {
     retryDelay = RETRY_BASE_MS;
     postMessage({
       type: "log",
-      line: `✅ [flush #${id}] ok ${res.status} in ${ms}ms · remaining buffer: ${rowBuffer.length}`
+      line: `[#${id}] ok ${res.status} in ${ms}ms · remaining buffer: ${rowBuffer.length}`
     });
   } catch (err) {
     // put batch back and retry later
@@ -244,7 +244,7 @@ async function drainAll(jobId) {
       await new Promise(r => setTimeout(r, 50));
     }
   }
-  postMessage({ type: "log", line: `✅ [final drain] done` });
+  postMessage({ type: "log", line: `[final drain] done` });
 }
 
 // Accept any [ROW...] tag; parse JSON from first '{'

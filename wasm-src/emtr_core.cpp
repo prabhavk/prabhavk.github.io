@@ -4828,7 +4828,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_MR_SSH_store_results(in
 		}
 	}
 		
-	cout << "max log likelihood obtained using SSH parameters is " << setprecision(10) << this->max_log_likelihood_ssh << endl;	
+	cout << "max log likelihood obtained using SSH parameters after round " << round << " is " << setprecision(10) << this->max_log_likelihood_ssh << endl;	
 }
 
 void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int num_repetitions) {
