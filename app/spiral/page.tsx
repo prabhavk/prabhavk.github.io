@@ -8,7 +8,7 @@ import type { Data, Layout, Config, ScatterData } from "plotly.js";
 
 const Plot = dynamic<PlotParams>(() => import("react-plotly.js"), { ssr: false });
 
-type MethodName = "Parsimony" | "Dirichlet" | "SSH";
+type MethodName = "Dirichlet" | "Parsimony" | "SSH";
 
 type SpiralRow = {
   root: string;
@@ -30,6 +30,7 @@ type ApiErr = { error: string };
 
 const NODES = Array.from({ length: 17 }, (_, i) => `h_${21 + i}`);
 
+// Light → dark for small → large values
 const BLUE_SCALE = "Blues";
 const RED_SCALE = "Reds";
 
@@ -44,7 +45,7 @@ function isApiSpiral(x: unknown): x is ApiSpiral {
   return (
     isRecord(x) &&
     typeof x["job_id"] === "string" &&
-    (x["method"] === "Parsimony" || x["method"] === "Dirichlet" || x["method"] === "SSH") &&
+    (x["method"] === "Dirichlet" || x["method"] === "Parsimony" || x["method"] === "SSH") &&
     Array.isArray(x["rows"]) &&
     Array.isArray(x["reps"])
   );
@@ -52,12 +53,15 @@ function isApiSpiral(x: unknown): x is ApiSpiral {
 
 export default function SpiralPage() {
   const [job, setJob] = useState<string>("");
-  const [method, setMethod] = useState<MethodName>("Parsimony");
+  const [method, setMethod] = useState<MethodName>("Dirichlet");
   const [rows, setRows] = useState<SpiralRow[]>([]);
   const [repsAll, setRepsAll] = useState<number[]>([]);
   const [selectedReps, setSelectedReps] = useState<number[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // User-controlled twist in degrees per rank (0 => radial)
+  const [twistDeg, setTwistDeg] = useState<number>(18); // ≈ π/10 per-rank
 
   // read selected job (same key used across the app)
   useEffect(() => {
@@ -89,10 +93,7 @@ export default function SpiralPage() {
       if (!ct.includes("application/json")) {
         const body = await res.text().catch(() => "");
         throw new Error(
-          `Expected JSON from ${u.pathname}, got ${ct || "unknown"} (HTTP ${res.status}). ${body.slice(
-            0,
-            160
-          )}`
+          `Expected JSON from ${u.pathname}, got ${ct || "unknown"} (HTTP ${res.status}). ${body.slice(0, 160)}`
         );
       }
 
@@ -144,20 +145,22 @@ export default function SpiralPage() {
     const out = new Map<CoordKey, XY>();
     const nArms = NODES.length; // 17
     const dTheta = (2 * Math.PI) / nArms; // arm spacing
-    const r0 = 0.6; // base radius
+    const r0 = 0.6;  // base radius
     const dr = 0.35; // per-rank radial step
-    const dTwist = Math.PI / 10; // twist per rank
+
+    // degrees -> radians per rank
+    const dTwist = (Math.PI / 180) * twistDeg;
 
     NODES.forEach((node, armIdx) => {
       const base = armIdx * dTheta;
       for (let k = 0; k < 5; k++) {
         const r = r0 + k * dr;
-        const th = -(base + k * dTwist); // NEGATED => clockwise
+        const th = -(base + k * dTwist); // NEGATED => clockwise; 0 => radial
         out.set(`${node}#${k}`, { x: r * Math.cos(th), y: r * Math.sin(th) });
       }
     });
     return out;
-  }, []);
+  }, [twistDeg]);
 
   // stable rank 0..4 for whichever reps were selected
   const repRanks = useMemo(() => {
@@ -204,7 +207,7 @@ export default function SpiralPage() {
         {
           title: "ll_init",
           values: (r) => r.ll_init,
-          colorScale: BLUE_SCALE,
+          colorScale: BLUE_SCALE, // light -> dark
           cmin: mn,
           cmax: mx,
         },
@@ -225,7 +228,7 @@ export default function SpiralPage() {
         {
           title: "ll_final",
           values: (r) => r.ll_final,
-          colorScale: RED_SCALE,
+          colorScale: RED_SCALE, // light -> dark
           cmin: mn,
           cmax: mx,
         },
@@ -246,7 +249,7 @@ export default function SpiralPage() {
         {
           title: "ecd_ll_first",
           values: (r) => r.ecd_ll_first,
-          colorScale: BLUE_SCALE,
+          colorScale: BLUE_SCALE, // light -> dark
           cmin: mn,
           cmax: mx,
         },
@@ -267,7 +270,7 @@ export default function SpiralPage() {
         {
           title: "ecd_ll_final",
           values: (r) => r.ecd_ll_final,
-          colorScale: RED_SCALE,
+          colorScale: RED_SCALE, // light -> dark
           cmin: mn,
           cmax: mx,
         },
@@ -280,23 +283,23 @@ export default function SpiralPage() {
   }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
 
   return (
-    <div className="p-6 max-w-[1400px] mx-auto space-y-4">
+    <div className="min-h-screen bg-black text-white p-6 max-w-[1400px] mx-auto space-y-4">
       <h1 className="text-2xl font-bold">Spiral Plots</h1>
 
       <div className="flex flex-wrap gap-3 items-end">
-        <div className="text-sm text-gray-700">
+        <div className="text-sm text-gray-300">
           Job: <span className="font-mono">{job || "(none)"}</span>
         </div>
 
         {/* Method selector */}
         <div className="flex gap-2 ml-4">
-          {(["Parsimony", "Dirichlet", "SSH"] as const).map((m) => (
+          {(["Dirichlet", "Parsimony", "SSH"] as const).map((m) => (
             <button
               key={m}
               type="button"
               onClick={() => setMethod(m)}
               className={`px-3 py-2 rounded border ${
-                method === m ? "bg-black text-white" : "bg-white hover:bg-gray-100"
+                method === m ? "bg:white text-black bg-white" : "bg-gray-800 text-white hover:bg-gray-700"
               }`}
             >
               {m}
@@ -304,11 +307,35 @@ export default function SpiralPage() {
           ))}
         </div>
 
+        {/* Twist control */}
+        <div className="flex items-center gap-2 ml-6">
+          <label className="text-sm font-medium">Twist (°/rank)</label>
+          <input
+            type="range"
+            min={0}
+            max={60}
+            step={1}
+            value={twistDeg}
+            onChange={(e) => setTwistDeg(Number(e.target.value))}
+            className="w-40"
+            aria-label="Twist degrees per rank"
+          />
+          <input
+            type="number"
+            className="w-20 border rounded px-2 py-1 bg-black text-white border-gray-600"
+            min={0}
+            max={180}
+            step={1}
+            value={twistDeg}
+            onChange={(e) => setTwistDeg(Number(e.target.value))}
+          />
+        </div>
+
         {/* Resample */}
         <button
           type="button"
           onClick={onResample}
-          className="ml-auto px-4 py-2 rounded bg-black text-white disabled:opacity-50"
+          className="ml-auto px-4 py-2 rounded bg-white text-black hover:bg-gray-100 disabled:opacity-50"
           disabled={!repsAll.length || loading}
         >
           Resample 5 reps
@@ -316,23 +343,23 @@ export default function SpiralPage() {
       </div>
 
       {loading ? (
-        <div className="p-4 border rounded">Loading…</div>
+        <div className="p-4 border border-gray-700 rounded bg-black text-white">Loading…</div>
       ) : err ? (
-        <div className="p-4 border rounded text-red-600">{err}</div>
+        <div className="p-4 border border-gray-700 rounded text-red-400 bg-black">{err}</div>
       ) : !rows.length || !selectedReps.length ? (
-        <div className="p-4 border rounded">No data</div>
+        <div className="p-4 border border-gray-700 rounded bg-black text-white">No data</div>
       ) : (
         <>
           {/* Row 1: ll_init | ll_final */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <ChartCard title={`${method}: ll_init (before)`} traces={initTraces} />
-            <ChartCard title={`${method}: ll_final (after)`} traces={finalTraces} />
+            <ChartCard title={`${method}: ll_init`} traces={initTraces} />
+            <ChartCard title={`${method}: ll_final`} traces={finalTraces} />
           </div>
 
           {/* Row 2: ecd_ll_first | ecd_ll_final */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <ChartCard title={`${method}: ecd_ll_first (before)`} traces={ecdFirstTraces} />
-            <ChartCard title={`${method}: ecd_ll_final (after)`} traces={ecdFinalTraces} />
+            <ChartCard title={`${method}: ecd_ll_first`} traces={ecdFirstTraces} />
+            <ChartCard title={`${method}: ecd_ll_final`} traces={ecdFinalTraces} />
           </div>
         </>
       )}
@@ -343,8 +370,7 @@ export default function SpiralPage() {
 
   function extent(nums: number[]): [number, number] {
     if (!nums.length) return [0, 1];
-    let mn = nums[0],
-      mx = nums[0];
+    let mn = nums[0], mx = nums[0];
     for (const v of nums) {
       if (v < mn) mn = v;
       if (v > mx) mx = v;
@@ -373,7 +399,6 @@ function buildConnectionsTrace(
   const xs: number[] = [];
   const ys: number[] = [];
 
-  // connect selected replicates for each node (in ascending rank)
   for (const node of NODES) {
     const perRep = byRootRep.get(node);
     if (!perRep) continue;
@@ -383,14 +408,13 @@ function buildConnectionsTrace(
       .map((rep) => ({ rep, rank: repRanks.get(rep) ?? 0 }))
       .sort((a, b) => a.rank - b.rank);
 
-    if (present.length < 2) continue; // nothing to connect
+    if (present.length < 2) continue;
 
     for (const { rank } of present) {
       const { x, y } = coordFor(node, rank);
       xs.push(x);
       ys.push(y);
     }
-    // separator between nodes
     xs.push(NaN);
     ys.push(NaN);
   }
@@ -400,7 +424,7 @@ function buildConnectionsTrace(
     mode: "lines",
     x: xs,
     y: ys,
-    line: { color: "rgba(0,0,0,0.35)", width: 1, dash: "dot" },
+    line: { color: "rgba(255,255,255,0.35)", width: 1, dash: "dot" },
     hoverinfo: "skip",
     showlegend: false,
     name: "replicate-links",
@@ -452,11 +476,18 @@ function buildMarkersTrace(
     marker: {
       size: 10,
       color: colors,
-      colorscale: cfg.colorScale,
+      colorscale: cfg.colorScale, // light (low) → dark (high)
+      reversescale: false,        // <-- ensure orientation is NOT reversed
       cmin: cfg.cmin,
       cmax: cfg.cmax,
       showscale: true,
-      colorbar: { title: { text: cfg.title }, thickness: 12 },
+      colorbar: {
+        title: { text: cfg.title, font: { color: "white" } },
+        tickfont: { color: "white" },
+        thickness: 12,
+        bgcolor: "black",
+        outlinecolor: "white",
+      },
     },
     name: cfg.title,
     showlegend: false,
@@ -472,17 +503,19 @@ function ChartCard({
   traces: Partial<Data>[];
 }) {
   const layout: Partial<Layout> = {
-    title: { text: title },
-    xaxis: { visible: false, scaleanchor: "y" },
-    yaxis: { visible: false },
+    title: { text: title, font: { color: "white" } },
+    xaxis: { visible: false, scaleanchor: "y", color: "white" },
+    yaxis: { visible: false, color: "white" },
     margin: { l: 20, r: 60, t: 40, b: 20 },
     height: 520,
     showlegend: false,
+    paper_bgcolor: "black",
+    plot_bgcolor: "black",
   };
   const config: Partial<Config> = { displayModeBar: false, responsive: true };
 
   return (
-    <div className="bg-white border rounded p-2">
+    <div className="bg-black border border-gray-700 rounded p-2">
       <Plot data={traces} layout={layout} config={config} style={{ width: "100%", height: "100%" }} />
     </div>
   );
