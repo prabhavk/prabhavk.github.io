@@ -80,7 +80,7 @@ export default function SpiralPage() {
     setLoading(true);
     setErr(null);
     try {
-      const u = new URL("/api/flower", window.location.origin); // API path kept as /api/flower per your backend
+      const u = new URL("/api/spiral", window.location.origin);
       u.searchParams.set("job", job);
       u.searchParams.set("method", method);
       const res = await fetch(u.toString(), { cache: "no-store" });
@@ -98,7 +98,7 @@ export default function SpiralPage() {
 
       const json: unknown = await res.json();
       if (!res.ok || isApiErr(json)) throw new Error(isApiErr(json) ? json.error : `HTTP ${res.status}`);
-      if (!isApiSpiral(json)) throw new Error("Invalid /api/flower response");
+      if (!isApiSpiral(json)) throw new Error("Invalid /api/spiral response");
       setRows(json.rows);
       setRepsAll(json.reps);
       setSelectedReps(sampleReps(json.reps, 5));
