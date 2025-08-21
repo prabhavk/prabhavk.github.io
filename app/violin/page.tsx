@@ -33,7 +33,7 @@ function isErr(x: unknown): x is ApiErr {
 
 export default function ViolinPage() {
   const [job, setJob] = useState<string>("");
-  const [root, setRoot] = useState<string>(NODES[0]);
+  const [root, setRoot] = useState<string>("h_32");
   const [data, setData] = useState<SeriesResp | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -188,8 +188,7 @@ export default function ViolinPage() {
       ) : err ? (
         <div className="p-4 border rounded text-red-600">{err}</div>
       ) : data ? (
-        <>
-          {/* Simple black badges to match the plot styling */}
+        <>          
           <div className="grid grid-cols-3 gap-3 mb-4">
             {METHOD_ORDER.map((m) => (
               <div key={m} className="p-3 border rounded bg-white flex items-center justify-between">
