@@ -76,7 +76,7 @@ export default function ProgressProvider({ children }: { children: React.ReactNo
   // Call this when you kick off EMTR
   function start(id: string) {
   setJobId(id);
-  setStatus("running");
+  setStatus("started");
   setLogs([]);
 
   // stop & clear any leftover demo timer, if it ever existed
