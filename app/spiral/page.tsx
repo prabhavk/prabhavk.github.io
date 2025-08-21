@@ -1,14 +1,16 @@
-// app/flower/page.tsx
+// app/spiral/page.tsx
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import type { PlotParams } from "react-plotly.js";
+import type { Data, Layout, Config, ScatterData } from "plotly.js";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
+const Plot = dynamic<PlotParams>(() => import("react-plotly.js"), { ssr: false });
 
 type MethodName = "Parsimony" | "Dirichlet" | "SSH";
 
-type FlowerRow = {
+type SpiralRow = {
   root: string;
   rep: number;
   ll_init: number | null;
@@ -17,10 +19,10 @@ type FlowerRow = {
   ll_final: number | null;
 };
 
-type ApiFlower = {
+type ApiSpiral = {
   job_id: string;
   method: MethodName;
-  rows: FlowerRow[];
+  rows: SpiralRow[];
   reps: number[];
 };
 
@@ -38,7 +40,7 @@ function isRecord(x: unknown): x is Record<string, unknown> {
 function isApiErr(x: unknown): x is ApiErr {
   return isRecord(x) && typeof x["error"] === "string";
 }
-function isApiFlower(x: unknown): x is ApiFlower {
+function isApiSpiral(x: unknown): x is ApiSpiral {
   return (
     isRecord(x) &&
     typeof x["job_id"] === "string" &&
@@ -48,10 +50,10 @@ function isApiFlower(x: unknown): x is ApiFlower {
   );
 }
 
-export default function FlowerPage() {
+export default function SpiralPage() {
   const [job, setJob] = useState<string>("");
   const [method, setMethod] = useState<MethodName>("Parsimony");
-  const [rows, setRows] = useState<FlowerRow[]>([]);
+  const [rows, setRows] = useState<SpiralRow[]>([]);
   const [repsAll, setRepsAll] = useState<number[]>([]);
   const [selectedReps, setSelectedReps] = useState<number[]>([]);
   const [loading, setLoading] = useState(false);
@@ -62,7 +64,9 @@ export default function FlowerPage() {
     try {
       const saved = localStorage.getItem("emtr:selectedJobId");
       if (saved) setJob(saved);
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const load = useCallback(async () => {
@@ -76,13 +80,25 @@ export default function FlowerPage() {
     setLoading(true);
     setErr(null);
     try {
-      const u = new URL("/api/spiral", window.location.origin);
+      const u = new URL("/api/flower", window.location.origin); // API path kept as /api/flower per your backend
       u.searchParams.set("job", job);
       u.searchParams.set("method", method);
       const res = await fetch(u.toString(), { cache: "no-store" });
+
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const body = await res.text().catch(() => "");
+        throw new Error(
+          `Expected JSON from ${u.pathname}, got ${ct || "unknown"} (HTTP ${res.status}). ${body.slice(
+            0,
+            160
+          )}`
+        );
+      }
+
       const json: unknown = await res.json();
       if (!res.ok || isApiErr(json)) throw new Error(isApiErr(json) ? json.error : `HTTP ${res.status}`);
-      if (!isApiFlower(json)) throw new Error("Invalid /api/spiral response");
+      if (!isApiSpiral(json)) throw new Error("Invalid /api/flower response");
       setRows(json.rows);
       setRepsAll(json.reps);
       setSelectedReps(sampleReps(json.reps, 5));
@@ -100,20 +116,20 @@ export default function FlowerPage() {
     if (job) void load();
   }, [job, method, load]);
 
-  function onResample() {
+  const onResample = useCallback(() => {
     setSelectedReps(sampleReps(repsAll, 5));
-  }
+  }, [repsAll]);
 
   // filter to selected reps
   const filtered = useMemo(() => {
-    if (!rows.length || !selectedReps.length) return [];
+    if (!rows.length || !selectedReps.length) return [] as SpiralRow[];
     const set = new Set(selectedReps);
     return rows.filter((r) => set.has(r.rep));
   }, [rows, selectedReps]);
 
   // root -> rep -> row
   const byRootRep = useMemo(() => {
-    const map = new Map<string, Map<number, FlowerRow>>();
+    const map = new Map<string, Map<number, SpiralRow>>();
     for (const r of filtered) {
       if (!map.has(r.root)) map.set(r.root, new Map());
       map.get(r.root)!.set(r.rep, r);
@@ -151,7 +167,7 @@ export default function FlowerPage() {
     return r;
   }, [selectedReps]);
 
-  // ---- make helpers stable (fix ESLint deps) ----
+  // ---- stable helpers ----
   const coordFor = useCallback(
     (node: string, rank: number): XY => {
       const key: CoordKey = `${node}#${rank}`;
@@ -161,7 +177,7 @@ export default function FlowerPage() {
   );
 
   const collectMetric = useCallback(
-    (values: (row: FlowerRow) => number | null): number[] => {
+    (values: (row: SpiralRow) => number | null): number[] => {
       const out: number[] = [];
       for (const node of NODES) {
         const perRep = byRootRep.get(node);
@@ -178,8 +194,8 @@ export default function FlowerPage() {
     [byRootRep, selectedReps]
   );
 
-  // ----- Build each plot’s traces (one spiral-lines + one markers with colorbar) -----
-  const initTraces = useMemo(() => {
+  // ----- Build each plot’s traces (dotted replicate links + markers with colorbar) -----
+  const initTraces = useMemo<Partial<ScatterData>[]>(() => {
     const vals = collectMetric((r) => r.ll_init);
     const [mn, mx] = extent(vals);
     return [
@@ -200,10 +216,10 @@ export default function FlowerPage() {
     ];
   }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
 
-  const finalTraces = useMemo(() => {
+  const finalTraces = useMemo<Partial<ScatterData>[]>(() => {
     const vals = collectMetric((r) => r.ll_final);
     const [mn, mx] = extent(vals);
-    return [      
+    return [
       buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
       buildMarkersTrace(
         {
@@ -221,10 +237,10 @@ export default function FlowerPage() {
     ];
   }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
 
-  const ecdFirstTraces = useMemo(() => {
+  const ecdFirstTraces = useMemo<Partial<ScatterData>[]>(() => {
     const vals = collectMetric((r) => r.ecd_ll_first);
     const [mn, mx] = extent(vals);
-    return [      
+    return [
       buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
       buildMarkersTrace(
         {
@@ -242,10 +258,10 @@ export default function FlowerPage() {
     ];
   }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
 
-  const ecdFinalTraces = useMemo(() => {
+  const ecdFinalTraces = useMemo<Partial<ScatterData>[]>(() => {
     const vals = collectMetric((r) => r.ecd_ll_final);
     const [mn, mx] = extent(vals);
-    return [      
+    return [
       buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
       buildMarkersTrace(
         {
@@ -268,7 +284,7 @@ export default function FlowerPage() {
       <h1 className="text-2xl font-bold">Spiral Plots</h1>
 
       <div className="flex flex-wrap gap-3 items-end">
-        <div className="text-sm text-white">
+        <div className="text-sm text-gray-700">
           Job: <span className="font-mono">{job || "(none)"}</span>
         </div>
 
@@ -280,7 +296,7 @@ export default function FlowerPage() {
               type="button"
               onClick={() => setMethod(m)}
               className={`px-3 py-2 rounded border ${
-                method === m ? "bg-black text-white" : "bg-white text-black hover:bg-gray-400 hover:text-black"
+                method === m ? "bg-black text-white" : "bg-white hover:bg-gray-100"
               }`}
             >
               {m}
@@ -292,7 +308,7 @@ export default function FlowerPage() {
         <button
           type="button"
           onClick={onResample}
-          className="ml-auto px-4 py-2 rounded bg-black text-white disabled:opacity-50 hover:bg-white hover:text-black"
+          className="ml-auto px-4 py-2 rounded bg-black text-white disabled:opacity-50"
           disabled={!repsAll.length || loading}
         >
           Resample 5 reps
@@ -350,10 +366,10 @@ export default function FlowerPage() {
 
 function buildConnectionsTrace(
   coordFor: (node: string, rank: number) => { x: number; y: number },
-  byRootRep: Map<string, Map<number, FlowerRow>>,
+  byRootRep: Map<string, Map<number, SpiralRow>>,
   selectedReps: number[],
   repRanks: Map<number, number>
-): Partial<Plotly.ScatterData> {
+): Partial<ScatterData> {
   const xs: number[] = [];
   const ys: number[] = [];
 
@@ -394,16 +410,16 @@ function buildConnectionsTrace(
 function buildMarkersTrace(
   cfg: {
     title: string;
-    values: (r: FlowerRow) => number | null;
+    values: (r: SpiralRow) => number | null;
     colorScale: string;
     cmin: number;
     cmax: number;
   },
   coordFor: (node: string, rank: number) => { x: number; y: number },
-  byRootRep: Map<string, Map<number, FlowerRow>>,
+  byRootRep: Map<string, Map<number, SpiralRow>>,
   selectedReps: number[],
   repRanks: Map<number, number>
-): Partial<Plotly.ScatterData> {
+): Partial<ScatterData> {
   const xs: number[] = [];
   const ys: number[] = [];
   const colors: number[] = [];
@@ -453,23 +469,21 @@ function ChartCard({
   traces,
 }: {
   title: string;
-  traces: Partial<Plotly.Data>[];
+  traces: Partial<Data>[];
 }) {
+  const layout: Partial<Layout> = {
+    title: { text: title },
+    xaxis: { visible: false, scaleanchor: "y" },
+    yaxis: { visible: false },
+    margin: { l: 20, r: 60, t: 40, b: 20 },
+    height: 520,
+    showlegend: false,
+  };
+  const config: Partial<Config> = { displayModeBar: false, responsive: true };
+
   return (
     <div className="bg-white border rounded p-2">
-      <Plot
-        data={traces as Partial<Plotly.Data>[]}
-        layout={{
-          title: { text: title },
-          xaxis: { visible: false, scaleanchor: "y" },
-          yaxis: { visible: false },
-          margin: { l: 20, r: 60, t: 40, b: 20 },
-          height: 520,
-          showlegend: false,
-        }}
-        config={{ displayModeBar: false, responsive: true }}
-        style={{ width: "100%", height: "100%" }}
-      />
+      <Plot data={traces} layout={layout} config={config} style={{ width: "100%", height: "100%" }} />
     </div>
   );
 }

@@ -23,6 +23,16 @@ type ApiFlower = {
   reps: number[];
 };
 
+// Raw DB row can have strings for numerics depending on driver
+type DBRow = {
+  root: string;
+  rep: number | string;
+  ll_init: number | string | null;
+  ecd_ll_first: number | string | null;
+  ecd_ll_final: number | string | null;
+  ll_final: number | string | null;
+};
+
 function normalizeMethod(s: string): MethodName | null {
   const m = s.trim().toLowerCase();
   if (m.includes("pars")) return "Parsimony";
@@ -31,22 +41,32 @@ function normalizeMethod(s: string): MethodName | null {
   return null;
 }
 
+function toNumOrNull(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const job = searchParams.get("job") ?? "";
     const methodInput = searchParams.get("method") ?? "";
 
-    if (!job) return NextResponse.json({ error: "Missing ?job=<job_id>" }, { status: 400 });
+    if (!job) {
+      return NextResponse.json({ error: "Missing ?job=<job_id>" }, { status: 400 });
+    }
 
     const norm = normalizeMethod(methodInput);
-    if (!norm) return NextResponse.json({ error: "Invalid ?method" }, { status: 400 });
+    if (!norm) {
+      return NextResponse.json({ error: "Invalid ?method" }, { status: 400 });
+    }
 
     // Match DB 'method' case-insensitively
     const methodLike = norm.toLowerCase(); // parsimony | dirichlet | ssh
 
     // Pull all reps/rows for job+method; only from completed jobs
-    const rows = await query<FlowerRow>(
+    const rowsRaw = await query<DBRow>(
       `
       SELECT r.root,
              r.rep,
@@ -64,9 +84,21 @@ export async function GET(req: NextRequest) {
       [job, methodLike]
     );
 
+    // Normalize numeric shapes so the client never sees strings/bigints
+    const rows: FlowerRow[] = rowsRaw.map((r) => ({
+      root: String(r.root),
+      rep: Number(r.rep), // parse even if it came as string
+      ll_init: toNumOrNull(r.ll_init),
+      ecd_ll_first: toNumOrNull(r.ecd_ll_first),
+      ecd_ll_final: toNumOrNull(r.ecd_ll_final),
+      ll_final: toNumOrNull(r.ll_final),
+    }));
+
     // Distinct reps present
     const repSet = new Set<number>();
-    for (const r of rows) { if (Number.isFinite(r.rep)) repSet.add(r.rep); }
+    for (const r of rows) {
+      if (Number.isFinite(r.rep)) repSet.add(r.rep);
+    }
     const reps = Array.from(repSet).sort((a, b) => a - b);
 
     const payload: ApiFlower = {

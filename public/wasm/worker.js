@@ -33,6 +33,7 @@ async function upsertJobMetadata(jobId, cfg) {
         thr: cfg.thr,
         reps: cfg.reps,
         max_iter: cfg.maxIter,
+        ssh_rounds: cfg.sshRounds ?? cfg.ssh_rounds ?? 1, // ← NEW
         D_pi: cfg.D_pi,   // [a1,a2,a3,a4]
         D_M: cfg.D_M,     // [b1,b2,b3,b4]
         status: "started",
@@ -313,39 +314,50 @@ self.onmessage = async (e) => {
     const thr = Number(params.thr);
     const reps = params.reps | 0;
     const maxIter = params.maxIter | 0;
+    const sshRounds = (params.sshRounds | 0) || 1; // ← NEW
     const D_pi = Array.isArray(params?.D_pi) && params.D_pi.length === 4 ? params.D_pi.map(Number) : [100,100,100,100];
     const D_M  = Array.isArray(params?.D_M)  && params.D_M.length  === 4 ? params.D_M.map(Number)  : [100,2,2,2];
 
     // ① Save job config (status=started)
-    await upsertJobMetadata(jobIdForThisRun, { thr, reps, maxIter, D_pi, D_M });
+    await upsertJobMetadata(jobIdForThisRun, { thr, reps, maxIter, sshRounds, D_pi, D_M });
 
-    postMessage({ type: "log", line: `WASM dispatch: EM_main` });
+    postMessage({ type: "log", line: `WASM dispatch: EM_main (reps=${reps}, maxIter=${maxIter}, sshRounds=${sshRounds}, thr=${thr})` });
 
     // ② Run EM and stream rows
     let rc = 0;
     if (typeof Module.EMManager === "function") {
+      // NEW ORDER: sequence, topology, reps, maxIter, ssh_rounds, thr, pi..., M...
       const mgr = new Module.EMManager(
         "/work/sequence.phyx",
         "/work/topology.csv",
         reps,
         maxIter,
+        sshRounds,
         thr,
         D_pi[0], D_pi[1], D_pi[2], D_pi[3],
         D_M[0],  D_M[1],  D_M[2],  D_M[3]
       );
       mgr.EM_main();
     } else {
+      // Keep the arity/types list; pass values in the NEW order.
       const EM_main_entry_c = Module.cwrap(
         "EM_main_entry_c",
         "number",
-        ["string","string","number","number","number",
-         "number","number","number","number",
-         "number","number","number","number"]
+        [
+          "string","string", // seq, topo
+          "number","number","number","number", // reps, maxIter, ssh_rounds, thr
+          "number","number","number","number", // pi1..pi4
+          "number","number","number","number"  // M1..M4
+        ]
       );
       if (!EM_main_entry_c) throw new Error("EM_main_entry_c not exported");
       rc = EM_main_entry_c(
-        "/work/sequence.phyx", "/work/topology.csv",
-        thr, reps, maxIter,
+        "/work/sequence.phyx",
+        "/work/topology.csv",
+        reps,
+        maxIter,
+        sshRounds,
+        thr,
         D_pi[0], D_pi[1], D_pi[2], D_pi[3],
         D_M[0],  D_M[1],  D_M[2],  D_M[3]
       );

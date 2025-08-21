@@ -1,12 +1,13 @@
+// app/(input)/page.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useProgress } from "@/components/ProgressProvider";
 
-const REQUIRE_MAP_SAFE = true; // set to false if your EM uses posterior means, not MAP
-const ALPHA_MIN = 1e-6;       // numeric guardrail
-const ALPHA_MAX = 1e6;        // numeric guardrail
-const KAPPA_MAX = 1e8;        // sum(α) guardrail
+const REQUIRE_MAP_SAFE = true;
+const ALPHA_MIN = 1e-6;
+const ALPHA_MAX = 1e6;
+const KAPPA_MAX = 1e8;
 
 function validateDirichlet(a: number[], requireMapSafe = REQUIRE_MAP_SAFE): string | null {
   if (!Array.isArray(a) || a.length !== 4) return "Must have exactly 4 α values.";
@@ -31,10 +32,9 @@ export default function InputPage() {
   const [threshold, setThreshold] = useState("0.01");
   const [numReps, setNumReps] = useState("50");
   const [maxIter, setMaxIter] = useState("1000");
-
-  // Dirichlet priors
-  const [pi, setPi] = useState(["100", "100", "100", "100"]); // α for π
-  const [M, setM] = useState(["100", "2", "2", "2"]);         // α for one row of M
+  const [sshRounds, setSSHRounds] = useState("1"); // string for input control, convert on submit
+  const [pi, setPi] = useState(["100", "100", "100", "100"]);
+  const [M, setM] = useState(["100", "2", "2", "2"]);
 
   const workerRef = useRef<Worker | null>(null);
 
@@ -45,7 +45,7 @@ export default function InputPage() {
     };
   }, []);
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
     if (!sequenceFile || !topologyFile) {
@@ -56,6 +56,7 @@ export default function InputPage() {
     const thr = Number(threshold);
     const reps = Number(numReps);
     const iters = Number(maxIter);
+    const ssh_rounds = Number(sshRounds);
 
     if (!Number.isFinite(thr) || thr <= 0) {
       append("❗ Convergence threshold must be a positive number.");
@@ -69,8 +70,11 @@ export default function InputPage() {
       append("❗ Max iterations must be a positive integer.");
       return;
     }
+    if (!Number.isInteger(ssh_rounds) || ssh_rounds <= 0) {
+      append("❗ SSH rounds must be a positive integer.");
+      return;
+    }
 
-    // Dirichlet α validation
     const D_pi = pi.map(Number);
     const D_M  = M.map(Number);
     let err = validateDirichlet(D_pi);
@@ -80,11 +84,14 @@ export default function InputPage() {
       return;
     }
 
+    // Use job_id everywhere (also for download filename prefix)
     const jobId = `wasm-${Date.now()}`;
+    try { localStorage.setItem("emtr:selectedJobId", jobId); } catch {}
+
     start(jobId);
     append(`🆔 jobId = ${jobId}`);
     append(
-      `🌲 Starting EMTR (WASM): seq=${sequenceFile.name}, topo=${topologyFile.name}, thr=${thr}, reps=${reps}, maxIter=${iters}`
+      `🌲 Starting EMTR (WASM): seq=${sequenceFile.name}, topo=${topologyFile.name}, thr=${thr}, reps=${reps}, maxIter=${iters}, sshRounds=${ssh_rounds}`
     );
 
     const v = Date.now();
@@ -95,9 +102,7 @@ export default function InputPage() {
       const msg = ev.data;
       if (msg.type === "log") append(msg.line);
       if (msg.type === "artifact") {
-        const blob = new Blob([new Uint8Array(msg.bytes)], {
-          type: "application/octet-stream",
-        });
+        const blob = new Blob([new Uint8Array(msg.bytes)], { type: "application/octet-stream" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -112,14 +117,14 @@ export default function InputPage() {
       }
     };
 
-    // Send params (incl. Dirichlet α’s)
     w.postMessage({
       params: {
         thr,
         reps,
         maxIter: iters,
-        D_pi, // [pi1, pi2, pi3, pi4]
-        D_M,  // [M1, M2, M3, M4]
+        sshRounds: ssh_rounds, // ← send the new param
+        D_pi,
+        D_M,
       },
       seqBytes: await sequenceFile.arrayBuffer(),
       topoBytes: await topologyFile.arrayBuffer(),
@@ -134,21 +139,17 @@ export default function InputPage() {
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Files */}
         <div className="space-y-2">
-          <label className="block text-sm font-medium text-white">
-            Sequence file (.phyx)
-          </label>
+          <label className="block text-sm font-medium text-white">Sequence file (.phyx / .phy)</label>
           <input
             type="file"
-            accept=".phyx"
+            accept=".phyx,.phy"
             onChange={(e) => setSequenceFile(e.target.files?.[0] ?? null)}
             className="block w-full border p-2 text-white"
           />
         </div>
 
         <div className="space-y-2">
-          <label className="block text-sm font-medium text-white">
-            Topology file (.csv)
-          </label>
+          <label className="block text-sm font-medium text-white">Topology file (.csv)</label>
           <input
             type="file"
             accept=".csv"
@@ -158,23 +159,20 @@ export default function InputPage() {
         </div>
 
         {/* Numeric parameters */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <div>
-            <label className="block text-sm font-medium text-white">
-              Convergence threshold
-            </label>
+            <label className="block text-sm font-medium text-white">Convergence threshold</label>
             <input
+              type="number"
+              step="any"
               className="w-full border p-2 text-white"
               value={threshold}
               onChange={(e) => setThreshold(e.target.value)}
               placeholder="e.g., 0.01"
-              inputMode="decimal"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-white">
-              Repetitions
-            </label>
+            <label className="block text-sm font-medium text-white">Repetitions</label>
             <input
               type="number"
               className="w-full border p-2 text-white"
@@ -182,27 +180,37 @@ export default function InputPage() {
               onChange={(e) => setNumReps(e.target.value)}
               placeholder="e.g., 50"
               min={1}
+              step={1}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-white">
-              Max iterations
-            </label>
+            <label className="block text-sm font-medium text-white">Max iterations</label>
             <input
               type="number"
               className="w-full border p-2 text-white"
               value={maxIter}
               onChange={(e) => setMaxIter(e.target.value)}
-              placeholder="e.g., 200"
+              placeholder="e.g., 1000"
               min={1}
+              step={1}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-white">SSH rounds</label>
+            <input
+              type="number"
+              className="w-full border p-2 text-white"
+              value={sshRounds}
+              onChange={(e) => setSSHRounds(e.target.value)}
+              placeholder="e.g., 1"
+              min={1}
+              step={1}
             />
           </div>
 
-          {/* Dirichlet priors (span full width on md+) */}
+          {/* Dirichlet priors */}
           <div className="space-y-2 md:col-span-3">
-            <label className="block text-sm font-medium text-white">
-              Dirichlet α for π
-            </label>
+            <label className="block text-sm font-medium text-white">Dirichlet α for π</label>
             <div className="grid grid-cols-4 gap-2">
               {pi.map((v, i) => (
                 <input
@@ -220,15 +228,11 @@ export default function InputPage() {
                 />
               ))}
             </div>
-            <p className="text-xs text-gray-300">
-              Use α ≥ 1 (defaults: 100,100,100,100).
-            </p>
+            <p className="text-xs text-gray-300">Use α ≥ 1 (defaults: 100,100,100,100).</p>
           </div>
 
           <div className="space-y-2 md:col-span-3">
-            <label className="block text-sm font-medium text-white">
-              Dirichlet α for rows of M
-            </label>
+            <label className="block text-sm font-medium text-white">Dirichlet α for rows of M</label>
             <div className="grid grid-cols-4 gap-2">
               {M.map((v, i) => (
                 <input
@@ -246,13 +250,11 @@ export default function InputPage() {
                 />
               ))}
             </div>
-            <p className="text-xs text-gray-300">
-              Defaults: 100,2,2,2 (strong self-transition prior).
-            </p>
+            <p className="text-xs text-gray-300">Defaults: 100,2,2,2 (strong self-transition prior).</p>
           </div>
         </div>
 
-        <button className="bg-gray-400 text-white px-4 py-2 rounded  hover:bg-gray-500 hover:text-white">
+        <button className="bg-gray-400 text-white px-4 py-2 rounded hover:bg-gray-500 hover:text-white">
           Start EMTR
         </button>
       </form>

@@ -11,6 +11,7 @@ const SORT_WHITELIST = new Set([
   "reps",
   "thr",
   "max_iter",
+  "ssh_rounds",
   "job_id",
 ]);
 
@@ -26,6 +27,7 @@ export type RunRow = {
   thr: number | null;
   reps: number | null;
   max_iter: number | null;
+  ssh_rounds: number | null;
   d_pi_1: number | null;
   d_pi_2: number | null;
   d_pi_3: number | null;
@@ -76,7 +78,7 @@ export async function GET(req: NextRequest) {
 
     const rows = await query<RunRow>(
       `SELECT
-         job_id, status, created_at, finished_at, dur_minutes, thr, reps, max_iter,
+         job_id, status, created_at, finished_at, dur_minutes, thr, reps, max_iter, ssh_rounds,
          d_pi_1, d_pi_2, d_pi_3, d_pi_4,
          d_m_1, d_m_2, d_m_3, d_m_4
        FROM emtr_jobs

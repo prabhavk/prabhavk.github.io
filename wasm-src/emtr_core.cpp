@@ -1839,6 +1839,8 @@ public:
 	double max_log_likelihood_pars;
 	double max_log_likelihood_ssh;
 	double max_log_likelihood_best;
+	double p_min_SSH = 0;
+	double p_max_SSH = 0;
 	emtr::Md I4by4;	
 	cliqueTree * cliqueT;
 	bool debug;
@@ -1962,6 +1964,7 @@ public:
 	void ReadRootedTree(string treeFileName);
 	void SetGMMparameters();
 	void ReparameterizeGMM();
+	void Store_p_min_and_p_max_for_SSH();
 	void Set_pi_for_neighbors_of_root();
 	array<double,4> get_pi_child();
 	void ReadProbabilities();
@@ -2057,6 +2060,7 @@ public:
 	char GetDNAfromIndex(int dna_index);			
 	double BIC;
 	double AIC;
+	vector <int> ssh_rounds_for_storing;
 	void ComputeBIC();
 	void ComputeAIC();
 	void TestSEM();
@@ -2085,8 +2089,13 @@ public:
 	void EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results(int num_repetitions);
 	void EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
 	void EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(int num_repetitions);
-	void EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
+	void EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);	
 	void EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int num_repetitions);
+	void set_SSH_store_conditions(int total_rounds);
+	bool evaluate_ssh_store_condition_for_round(int round);
+	void store_ssh_result(std::vector<Row>& results,const std::string& method,const std::string& root,int repetition,int iter,double ll_initial,double ecd_ll_first,double ecd_ll_final,double ll_final,int num_repetitions,int round);
+	void EM_rooted_at_each_internal_vertex_started_with_MR_SSH_store_results_exp_intervals(int num_repetitions, int round);
+	void EM_rooted_at_each_internal_vertex_started_with_MR_SSH_store_results(int num_repetitions, int round);
 	void EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetitions);
 	void EM_root_search_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
 	void EM_root_search_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
@@ -2574,6 +2583,11 @@ void SEM::SetGMMparameters() {
 	this->ReadProbabilities();	
 }
 
+
+void SEM::Store_p_min_and_p_max_for_SSH() {
+	
+}
+
 void SEM::ReparameterizeGMM() {
 	
 	// Compute pi, P(u,v) and P(v,u) for each vertex and edge using the method described in ssh paper	
@@ -2581,12 +2595,17 @@ void SEM::ReparameterizeGMM() {
 	// 1. Set pi for root
 	
 	for (int p_id = 0; p_id < 4; ++p_id) {
-		if(this->rootProbability[p_id] == 0) {throw mt_error("invalid probability");}
+		if(this->rootProbability[p_id] == 0) {
+			// cout << "probability zero" << endl;
+			throw mt_error("invalid probability");
+		}
 		this->root->root_prob_hss[p_id] = this->rootProbability[p_id];
 	}
+	// cout << "root probability set" << endl;
 
 	// Store transition matrices in transition_prob_hss map, store root prob in node as root_prob_hss
 	SEM_vertex * p; SEM_vertex * c; array <double,4> pi_p; array <double,4> pi_c;
+	M_hss->clear();
 	for (pair<SEM_vertex*, SEM_vertex*> edge : this->edgesForPreOrderTreeTraversal) {
 		p = edge.first;
 		c = edge.second;
@@ -4672,6 +4691,145 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repet
 	// (*this->logFile) << "max log likelihood obtained using Parsimony parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;	
 }
 
+void SEM::set_SSH_store_conditions(int total_rounds){
+	this->ssh_rounds_for_storing = {1};
+	int i = 1; int store_round = 0;
+	while (store_round < total_rounds){
+		store_round = i++*10; ;
+		this->ssh_rounds_for_storing.push_back(store_round);
+	}
+}
+
+
+bool SEM::evaluate_ssh_store_condition_for_round(int round){
+	for (int stored_round:this->ssh_rounds_for_storing) {
+		if (round == stored_round) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void SEM::EM_rooted_at_each_internal_vertex_started_with_MR_SSH_store_results_exp_intervals(int num_repetitions, int round) {
+	int n = this->numberOfObservedVertices;
+	int num_vertices = this->vertexMap->size();	
+		
+	this->max_log_likelihood_ssh = -1 * pow(10,5);
+	
+	vector<int> vertex_indices_to_visit;
+	vertex_indices_to_visit.reserve(std::max(0, num_vertices - n));
+	
+	for (int v_ind = n; v_ind < num_vertices; ++v_ind) vertex_indices_to_visit.push_back(v_ind);
+
+	unsigned seed = chrono::system_clock::now().time_since_epoch().count();
+    mt19937 rng(seed);
+
+    // Shuffle the vector
+	cout << "randomizing the order in which nodes will be visited" << endl;
+    shuffle(vertex_indices_to_visit.begin(), vertex_indices_to_visit.end(), rng);	
+    int num_vertices_to_visit = vertex_indices_to_visit.size();
+	for (int v_i = 0; v_i < vertex_indices_to_visit.size(); v_i++){
+        const int v_ind = vertex_indices_to_visit[v_i];
+		SEM_vertex * v = (*this->vertexMap)[v_ind];
+		cout << "node " << v_i+1 << " of " << num_vertices_to_visit << ":" << v->name << endl;
+		if(v->degree != 3) throw mt_error("Expect internal nodes to have degree three");
+		
+		for (int rep = 0; rep < num_repetitions; rep++) {
+			auto tup = this->EM_started_with_SSH_parameters_rooted_at(v);
+			const int    iter                    = std::get<0>(tup);
+            const double logLikelihood_ssh       = std::get<1>(tup);
+            const double loglikelihood_ecd_first = std::get<2>(tup);
+            const double loglikelihood_ecd_final = std::get<3>(tup);
+            const double logLikelihood_final     = std::get<4>(tup);
+
+			// only push after 1 and multiples of 10 
+			//emtr::push_result(
+			if (this->evaluate_ssh_store_condition_for_round(round)) {
+				emtr::push_result(
+                this->EMTR_results,                 // vector<tuple<string,string,int,int,double,double,double,double>>
+                "ssh" + to_string(round),		    // init_method
+                v->name,                            // root
+                rep + 1,                            // repetition (1-based)
+                iter,
+                logLikelihood_ssh,                  // ll_initial
+                loglikelihood_ecd_first,
+                loglikelihood_ecd_final,
+                logLikelihood_final
+            	);
+			}
+
+			if (this->max_log_likelihood_ssh < logLikelihood_final) {				
+				this->max_log_likelihood_ssh = logLikelihood_final;
+				if (this->max_log_likelihood_best < this->max_log_likelihood_ssh) {
+					this->max_log_likelihood_best = this->max_log_likelihood_ssh;
+					this->StoreRootAndRootProbability();
+					this->StoreTransitionMatrices();
+				}
+			}
+		}
+	}
+		
+	cout << "max log likelihood obtained using SSH parameters after round " << round << " is " << setprecision(10) << this->max_log_likelihood_ssh << endl;	
+}
+
+void SEM::EM_rooted_at_each_internal_vertex_started_with_MR_SSH_store_results(int num_repetitions, int round) {
+	int n = this->numberOfObservedVertices;
+	int num_vertices = this->vertexMap->size();	
+		
+	this->max_log_likelihood_ssh = -1 * pow(10,5);
+	
+	vector<int> vertex_indices_to_visit;
+	vertex_indices_to_visit.reserve(std::max(0, num_vertices - n));
+	
+	for (int v_ind = n; v_ind < num_vertices; ++v_ind) vertex_indices_to_visit.push_back(v_ind);
+
+	unsigned seed = chrono::system_clock::now().time_since_epoch().count();
+    mt19937 rng(seed);
+
+    // Shuffle the vector
+	cout << "randomizing the order in which nodes will be visited" << endl;
+    shuffle(vertex_indices_to_visit.begin(), vertex_indices_to_visit.end(), rng);	
+    int num_vertices_to_visit = vertex_indices_to_visit.size();
+	for (int v_i = 0; v_i < vertex_indices_to_visit.size(); v_i++){
+        const int v_ind = vertex_indices_to_visit[v_i];
+		SEM_vertex * v = (*this->vertexMap)[v_ind];
+		cout << "node " << v_i+1 << " of " << num_vertices_to_visit << ":" << v->name << endl;
+		if(v->degree != 3) throw mt_error("Expect internal nodes to have degree three");
+		
+		for (int rep = 0; rep < num_repetitions; rep++) {
+			auto tup = this->EM_started_with_SSH_parameters_rooted_at(v);
+			const int    iter                    = std::get<0>(tup);
+            const double logLikelihood_ssh       = std::get<1>(tup);
+            const double loglikelihood_ecd_first = std::get<2>(tup);
+            const double loglikelihood_ecd_final = std::get<3>(tup);
+            const double logLikelihood_final     = std::get<4>(tup);
+
+			emtr::push_result(
+                this->EMTR_results,                 // vector<tuple<string,string,int,int,double,double,double,double>>
+                "ssh_mr" + to_string(round),		                        // init_method
+                v->name,                            // root
+                rep + 1,                            // repetition (1-based)
+                iter,
+                logLikelihood_ssh,                 // ll_initial
+                loglikelihood_ecd_first,
+                loglikelihood_ecd_final,
+                logLikelihood_final
+            );
+
+
+			if (this->max_log_likelihood_ssh < logLikelihood_final) {				
+				this->max_log_likelihood_ssh = logLikelihood_final;
+				if (this->max_log_likelihood_best < this->max_log_likelihood_ssh) {
+					this->max_log_likelihood_best = this->max_log_likelihood_ssh;
+					this->StoreRootAndRootProbability();
+					this->StoreTransitionMatrices();
+				}
+			}
+		}
+	}
+		
+	cout << "max log likelihood obtained using SSH parameters is " << setprecision(10) << this->max_log_likelihood_ssh << endl;	
+}
 
 void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int num_repetitions) {
 	int n = this->numberOfObservedVertices;
@@ -7083,6 +7241,7 @@ EMManager::EMManager(string sequenceFileNameToSet,
 					 string topologyFileNameToSet,
 					 int num_repetitions,
 					 int max_iter,
+					 int ssh_rounds,
 					 double conv_threshold,
 					 double pi_a_1,
 					 double pi_a_2,
@@ -7095,10 +7254,11 @@ EMManager::EMManager(string sequenceFileNameToSet,
 									 // add parameters for root probability
 		this->prefix_for_output_files = "";		        
 		this->topologyFileName = topologyFileNameToSet;
-		this->supertree_method = "mstbackbone";
+		this->ssh_rounds = ssh_rounds;
+		this->supertree_method = "";
         this->num_repetitions = num_repetitions;        
 		this->verbose = 0;
-		this->distance_measure_for_NJ = "Hamming";
+		this->distance_measure_for_NJ = "";
 		this->flag_topology = 1;
 		this->conv_thresh = conv_threshold;
 		this->max_EM_iter = max_iter;		
@@ -7122,6 +7282,8 @@ EMManager::EMManager(string sequenceFileNameToSet,
 		this->P->SetVertexVector();
         this->P->SetPrefixForOutputFiles(this->prefix_for_output_files);
 		cout << "number of repetitions is set to " << this->num_repetitions << endl;
+		cout << "number of SSH rounds is set to " << this->ssh_rounds << endl;
+
     }
 
 EMManager::~EMManager(){
@@ -7134,20 +7296,19 @@ void EMManager::EM_main() {
 	this->P->max_log_likelihood_best = -1 * pow(10,10);
 	cout << "Starting EM with initial parameters set using parsimony" << endl;	
 	this->P->EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results(this->num_repetitions);
-	// emtr::debug_counts(this->P->EMTR_results, "after-parsimony");
-
-	
+	emtr::debug_counts(this->P->EMTR_results, "after-parsimony");	
 	cout << "Starting EM with initial parameters sampled from Dirichlet distribution" << endl;
 	this->P->EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(this->num_repetitions);
-	// emtr::debug_counts(this->P->EMTR_results, "after-dirichlet");
-		
-	this->P->RestoreBestProbability();
-	this->P->ReparameterizeGMM();
-	cout << "Starting EM with initial parameters set using reparameterized MLE" << endl;
-    this->P->EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(this->num_repetitions);
-	// emtr::debug_counts(this->P->EMTR_results, "after-ssh");
-
-	// std::printf("[FLUSH]\trows=%zu\n", this->P->EMTR_results.size()); std::fflush(stdout);
+	emtr::debug_counts(this->P->EMTR_results, "after-dirichlet");
+	this->P->set_SSH_store_conditions(this->ssh_rounds);
+	cout << "Starting EM using multi round SSH for " << this->ssh_rounds << " rounds "  << endl;
+	int ssh_round = 0;
+	while (ssh_round++ < this->ssh_rounds) {		
+		this->P->RestoreBestProbability();
+		this->P->ReparameterizeGMM();
+		this->P->EM_rooted_at_each_internal_vertex_started_with_MR_SSH_store_results(this->num_repetitions,ssh_round);		
+	}
+	emtr::debug_counts(this->P->EMTR_results, "after-mr-ssh");
 	emtr::flush_rows_json(this->P->EMTR_results);
 }
 
@@ -7184,6 +7345,14 @@ void EMManager::EMssh() {
     this->P->SetGMMparameters();
 	this->P->ReparameterizeGMM();    
     this->P->EM_rooted_at_each_internal_vertex_started_with_SSH_par(this->num_repetitions);
+}
+
+
+void EMManager::MR_SSH(int num_rounds) {
+	this->P->RestoreBestProbability();
+	this->P->ReparameterizeGMM();
+	this->P->EM_rooted_at_each_internal_vertex_started_with_SSH_par(this->num_repetitions);
+	// Perform SSH for num_rounds or until convergence of log likelihood score
 }
 
 void EMManager::SetDNAMap() {

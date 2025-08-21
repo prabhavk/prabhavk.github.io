@@ -203,8 +203,7 @@ literal "false"
 \end_inset
 
 ,
- and to my postdoc advisors for not completing this analysis as part of the initial review process,
- and ask my colleagues for their understanding.
+ and to my postdoc advisors for not completing this analysis as part of the initial review process.
 \end_layout
 
 \begin_layout Section
@@ -331,12 +330,31 @@ Results
 \end_layout
 
 \begin_layout Subsection
-Analysis of EM results
+Initial parameters used by EM
 \end_layout
 
-\begin_layout Subsubsection
-GMM parameters initialized using parsimony,
- Dirichlet and SSH
+\begin_layout Subsection
+Distribution of final log likelihood values
+\end_layout
+
+\begin_layout Subsection
+Wilcoxon-Mann-Whitney one-tailed test
+\end_layout
+
+\begin_layout Subsection
+Visualizing change in log likelihood
+\end_layout
+
+\begin_layout Subsection
+Visualizing change in expected complete-data log likelihood 
+\end_layout
+
+\begin_layout Subsection
+Parameters set for convergence of EM
+\end_layout
+
+\begin_layout Subsection
+Parameters set for Dirichlet distribution
 \end_layout
 
 \begin_layout Standard
@@ -694,20 +712,16 @@ Log likelihood values obtained by EM with parameters initialized using reparamet
 
 \end_layout
 
-\begin_layout Subsubsection
-Parameters used to generate Dirichlet distributions
-\end_layout
-
-\begin_layout Subsubsection
-Threshold to assess convergence of expected complete data log likelihood
-\end_layout
-
-\begin_layout Subsubsection
-Number of EM iterations required for convergence
-\end_layout
-
 \begin_layout Subsection
-Statistical significance of recall values 
+Significance of recall values reported in 
+\begin_inset CommandInset citation
+LatexCommand cite
+key "Kalaghatgi2020"
+literal "false"
+
+\end_inset
+
+
 \end_layout
 
 \begin_layout Section
@@ -840,7 +854,7 @@ $1.0$
 \end_layout
 
 \begin_layout Subsection
-Availability of EMtr 
+Availability of EMTR 
 \end_layout
 
 \begin_layout Section
