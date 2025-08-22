@@ -1,10 +1,11 @@
 // app/spiral/page.tsx
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type { PlotParams } from "react-plotly.js";
-import type { Data, Layout, Config, ScatterData } from "plotly.js";
+import type { Data, Layout, Config, ScatterData, PlotlyHTMLElement } from "plotly.js";
+import { buildExportPrefix } from "@/lib/exportName";
 
 const Plot = dynamic<PlotParams>(() => import("react-plotly.js"), { ssr: false });
 
@@ -28,32 +29,106 @@ type ApiSpiral = {
 
 type ApiErr = { error: string };
 
+// 17 internal nodes: h_21..h_37
 const NODES = Array.from({ length: 17 }, (_, i) => `h_${21 + i}`);
 
-// Explicit light→dark sequential scales to guarantee orientation
+// Color scales (sequential: light for small, dark for large)
 const BLUES_SCALE: [number, string][] = [
-  [0, "#f7fbff"],
-  [0.125, "#deebf7"],
+  [0.0,  "#f7fbff"],
+  [0.125,"#deebf7"],
   [0.25, "#c6dbef"],
-  [0.375, "#9ecae1"],
-  [0.5, "#6baed6"],
-  [0.625, "#4292c6"],
+  [0.375,"#9ecae1"],
+  [0.5,  "#6baed6"],
+  [0.625,"#4292c6"],
   [0.75, "#2171b5"],
-  [0.875, "#08519c"],
-  [1, "#08306b"],
+  [0.875,"#08519c"],
+  [1.0,  "#08306b"],
 ];
 
 const REDS_SCALE: [number, string][] = [
-  [0, "#fff5f0"],
-  [0.125, "#fee0d2"],
+  [0.0,  "#fff5f0"],
+  [0.125,"#fee0d2"],
   [0.25, "#fcbba1"],
-  [0.375, "#fc9272"],
-  [0.5, "#fb6a4a"],
-  [0.625, "#ef3b2c"],
+  [0.375,"#fc9272"],
+  [0.5,  "#fb6a4a"],
+  [0.625,"#ef3b2c"],
   [0.75, "#cb181d"],
-  [0.875, "#a50f15"],
-  [1, "#67000d"],
+  [0.875,"#a50f15"],
+  [1.0,  "#67000d"],
 ];
+
+/* -------------------- Choreography -------------------- */
+type ChoreoBounce = {
+  type: "bounce";
+  name?: string;
+  min: number;       // deg/rank
+  max: number;       // deg/rank
+  step: number;      // deg per tick
+  everyMs: number;   // tick interval
+  repeats: number;   // number of direction reversals to perform before advancing
+  startAt?: "min" | "max"; // default "min"
+};
+type ChoreoHold = {
+  type: "hold";
+  name?: string;
+  at: number;        // deg/rank
+  durationMs: number;
+};
+type ChoreoSeg = ChoreoBounce | ChoreoHold;
+
+/** Peacock-inspired choreographies */
+const PEACOCK_CHOREOS: Record<
+  "FanDisplay" | "CourtshipStrut" | "RainRipple" | "IridescentFlutter" | "RoyalGlide",
+  ChoreoSeg[]
+> = {
+  FanDisplay: [
+    { type: "hold",   name: "present",  at: 0,   durationMs: 500 },
+    { type: "bounce", name: "fan-open", min: -4,  max: 4,  step: 1, everyMs: 260, repeats: 4, startAt: "min" },
+    { type: "bounce", name: "display",  min: -12, max: 12, step: 2, everyMs: 200, repeats: 6, startAt: "min" },
+    { type: "hold",   name: "proud",    at: 12,  durationMs: 700 },
+    { type: "bounce", name: "sweep",    min: -16, max: 16, step: 3, everyMs: 160, repeats: 8, startAt: "min" },
+    { type: "hold",   name: "still",    at: 0,   durationMs: 600 },
+  ],
+  CourtshipStrut: [
+    { type: "bounce", name: "start",   min: -6,  max: 6,  step: 1, everyMs: 300, repeats: 3, startAt: "min" },
+    { type: "bounce", name: "stride",  min: -10, max: 10, step: 2, everyMs: 220, repeats: 4, startAt: "min" },
+    { type: "hold",   name: "beat",    at: -8,  durationMs: 500 },
+    { type: "bounce", name: "parade",  min: -16, max: 16, step: 3, everyMs: 160, repeats: 6, startAt: "min" },
+    { type: "hold",   name: "pose",    at: 0,   durationMs: 800 },
+  ],
+  RainRipple: [
+    { type: "bounce", name: "drizzle", min: -3,  max: 3,  step: 1, everyMs: 180, repeats: 6, startAt: "min" },
+    { type: "bounce", name: "splash",  min: -12, max: 12, step: 4, everyMs: 120, repeats: 4, startAt: "min" },
+    { type: "hold",   name: "drop",    at: 0,   durationMs: 500 },
+    { type: "bounce", name: "ripples", min: -8,  max: 8,  step: 2, everyMs: 160, repeats: 5, startAt: "min" },
+    { type: "hold",   name: "shimmer", at: 6,   durationMs: 400 },
+    { type: "bounce", name: "afterglow", min: -16, max: 16, step: 2, everyMs: 200, repeats: 4, startAt: "min" },
+  ],
+  IridescentFlutter: [
+    { type: "bounce", name: "flicker-1", min: -2,  max: 2,  step: 1, everyMs: 90,  repeats: 8, startAt: "min" },
+    { type: "hold",   name: "blink",     at: 0,   durationMs: 200 },
+    { type: "bounce", name: "flicker-2", min: -5,  max: 5,  step: 1, everyMs: 110, repeats: 8, startAt: "min" },
+    { type: "hold",   name: "blink",     at: 0,   durationMs: 200 },
+    { type: "bounce", name: "gleam",     min: -10, max: 10, step: 3, everyMs: 130, repeats: 6, startAt: "min" },
+    { type: "hold",   name: "flash",     at: 0,   durationMs: 300 },
+    { type: "bounce", name: "flare",     min: -16, max: 16, step: 4, everyMs: 110, repeats: 4, startAt: "min" },
+  ],
+  RoyalGlide: [
+    { type: "hold",   name: "poise",   at: -12, durationMs: 600 },
+    { type: "bounce", name: "arc-L",   min: -14, max: 14, step: 2, everyMs: 340, repeats: 6, startAt: "min" },
+    { type: "hold",   name: "crest",   at: 12,  durationMs: 600 },
+    { type: "bounce", name: "arc-S",   min: -8,  max: 8,  step: 1, everyMs: 420, repeats: 6, startAt: "min" },
+    { type: "hold",   name: "center",  at: 0,   durationMs: 800 },
+    { type: "bounce", name: "royal",   min: -16, max: 16, step: 2, everyMs: 300, repeats: 8, startAt: "min" },
+  ],
+};
+
+const CHOREO_BY_METHOD: Record<MethodName, ChoreoSeg[]> = {
+  Dirichlet: PEACOCK_CHOREOS.CourtshipStrut,
+  Parsimony: PEACOCK_CHOREOS.RainRipple,
+  SSH:       PEACOCK_CHOREOS.FanDisplay,
+};
+/* ----------------------------------------------------- */
 
 // ------- type guards -------
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -81,8 +156,23 @@ export default function SpiralPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // User-controlled twist in degrees per rank (0 => radial)
-  const [twistDeg, setTwistDeg] = useState<number>(18); // ≈ π/10 per-rank
+  // Derived choreography for current method
+  const CHOREO = useMemo<ChoreoSeg[]>(() => CHOREO_BY_METHOD[method], [method]);
+
+  // Twist & “dance” control (single toggle)
+  const [twistDeg, setTwistDeg] = useState<number>(() => {
+    const first = CHOREO_BY_METHOD.Dirichlet[0];
+    if (first?.type === "bounce") return first.startAt === "max" ? first.max : first.min;
+    if (first?.type === "hold") return first.at;
+    return -16;
+  });
+  const [dancing, setDancing] = useState<boolean>(false);
+
+  // Choreography runner refs
+  const segIdxRef = useRef<number>(0);
+  const timerRef = useRef<number | null>(null);
+  const dirRef = useRef<1 | -1>(1);        // current direction for bounce
+  const reversalsLeftRef = useRef<number>(0);
 
   // read selected job (same key used across the app)
   useEffect(() => {
@@ -142,6 +232,15 @@ export default function SpiralPage() {
     setSelectedReps(sampleReps(repsAll, 5));
   }, [repsAll]);
 
+  // When switching methods: stop dancing & reset to starting pose
+  useEffect(() => {
+    setDancing(false);
+    segIdxRef.current = 0;
+    const first = CHOREO[0];
+    if (first?.type === "bounce") setTwistDeg(first.startAt === "max" ? first.max : first.min);
+    else if (first?.type === "hold") setTwistDeg(first.at);
+  }, [CHOREO]);
+
   // filter to selected reps
   const filtered = useMemo(() => {
     if (!rows.length || !selectedReps.length) return [] as SpiralRow[];
@@ -169,8 +268,7 @@ export default function SpiralPage() {
     const r0 = 0.6;  // base radius
     const dr = 0.35; // per-rank radial step
 
-    // degrees -> radians per rank
-    const dTwist = (Math.PI / 180) * twistDeg;
+    const dTwist = (Math.PI / 180) * twistDeg; // degrees -> radians per rank
 
     NODES.forEach((node, armIdx) => {
       const base = armIdx * dTheta;
@@ -225,17 +323,8 @@ export default function SpiralPage() {
     return [
       buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
       buildMarkersTrace(
-        {
-          title: "ll_init",
-          values: (r) => r.ll_init,
-          colorScale: BLUES_SCALE, // light -> dark
-          cmin: mn,
-          cmax: mx,
-        },
-        coordFor,
-        byRootRep,
-        selectedReps,
-        repRanks
+        { title: "ll_init", values: (r) => r.ll_init, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
+        coordFor, byRootRep, selectedReps, repRanks
       ),
     ];
   }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
@@ -246,17 +335,8 @@ export default function SpiralPage() {
     return [
       buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
       buildMarkersTrace(
-        {
-          title: "ll_final",
-          values: (r) => r.ll_final,
-          colorScale: REDS_SCALE, // light -> dark
-          cmin: mn,
-          cmax: mx,
-        },
-        coordFor,
-        byRootRep,
-        selectedReps,
-        repRanks
+        { title: "ll_final", values: (r) => r.ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
+        coordFor, byRootRep, selectedReps, repRanks
       ),
     ];
   }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
@@ -267,17 +347,8 @@ export default function SpiralPage() {
     return [
       buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
       buildMarkersTrace(
-        {
-          title: "ecd_ll_first",
-          values: (r) => r.ecd_ll_first,
-          colorScale: BLUES_SCALE, // light -> dark
-          cmin: mn,
-          cmax: mx,
-        },
-        coordFor,
-        byRootRep,
-        selectedReps,
-        repRanks
+        { title: "ecd_ll_first", values: (r) => r.ecd_ll_first, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
+        coordFor, byRootRep, selectedReps, repRanks
       ),
     ];
   }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
@@ -288,20 +359,142 @@ export default function SpiralPage() {
     return [
       buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
       buildMarkersTrace(
-        {
-          title: "ecd_ll_final",
-          values: (r) => r.ecd_ll_final,
-          colorScale: REDS_SCALE, // light -> dark
-          cmin: mn,
-          cmax: mx,
-        },
-        coordFor,
-        byRootRep,
-        selectedReps,
-        repRanks
+        { title: "ecd_ll_final", values: (r) => r.ecd_ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
+        coordFor, byRootRep, selectedReps, repRanks
       ),
     ];
   }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
+
+  /* -------------------- Choreography runner -------------------- */
+  const stopTimer = useCallback(() => {
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const startCurrentSegment = useCallback(() => {
+    stopTimer();
+
+    const seg = CHOREO[segIdxRef.current % CHOREO.length];
+    if (!seg) return;
+
+    if (seg.type === "hold") {
+      setTwistDeg(seg.at);
+      const t = window.setTimeout(() => {
+        segIdxRef.current = (segIdxRef.current + 1) % CHOREO.length;
+        startCurrentSegment();
+      }, Math.max(50, seg.durationMs));
+      // reuse timerRef for timeouts as well
+      timerRef.current = t as unknown as number;
+      return;
+    }
+
+    // bounce
+    const startAt = seg.startAt === "max" ? seg.max : seg.min;
+    setTwistDeg(startAt);
+    dirRef.current = startAt === seg.max ? -1 : 1;
+    reversalsLeftRef.current = Math.max(0, seg.repeats);
+
+    const tick = () => {
+      setTwistDeg((prev) => {
+        let next = prev + dirRef.current * seg.step;
+        if (next > seg.max) {
+          next = seg.max;
+          dirRef.current = -1;
+          reversalsLeftRef.current -= 1;
+        } else if (next < seg.min) {
+          next = seg.min;
+          dirRef.current = 1;
+          reversalsLeftRef.current -= 1;
+        }
+
+        if (reversalsLeftRef.current <= 0) {
+          stopTimer();
+          segIdxRef.current = (segIdxRef.current + 1) % CHOREO.length;
+          setTimeout(startCurrentSegment, 0);
+        }
+        return next;
+      });
+    };
+
+    timerRef.current = window.setInterval(tick, Math.max(20, seg.everyMs));
+  }, [CHOREO, stopTimer]);
+
+  useEffect(() => {
+    if (!dancing) {
+      stopTimer();
+      return;
+    }
+    const entry = CHOREO[segIdxRef.current % CHOREO.length];
+    if (entry?.type === "bounce") setTwistDeg(entry.startAt === "max" ? entry.max : entry.min);
+    else if (entry?.type === "hold") setTwistDeg(entry.at);
+    startCurrentSegment();
+    return () => stopTimer();
+  }, [dancing, CHOREO, startCurrentSegment, stopTimer]);
+
+  // Stop button handler: stop & reset to very first pose of current choreography
+  const onStopDance = useCallback(() => {
+    setDancing(false);
+    segIdxRef.current = 0;
+    const first = CHOREO[0];
+    if (first?.type === "bounce") setTwistDeg(first.startAt === "max" ? first.max : first.min);
+    else if (first?.type === "hold") setTwistDeg(first.at);
+  }, [CHOREO]);
+
+  /* ------------------------------------------------------------- */
+
+  // Refs to each plotly graphDiv for export
+  const initGDRef = useRef<PlotlyHTMLElement | null>(null);
+  const finalGDRef = useRef<PlotlyHTMLElement | null>(null);
+  const ecdFirstGDRef = useRef<PlotlyHTMLElement | null>(null);
+  const ecdFinalGDRef = useRef<PlotlyHTMLElement | null>(null);
+
+  // Export prefix (shared naming) — method appended in filename
+  const exportPrefix = useMemo(
+    () => buildExportPrefix({ job, twistDeg }),
+    [job, twistDeg]
+  );
+  const filenameFor = useCallback(
+    (metric: string) => `${exportPrefix}__${method}__${metric}.png`,
+    [exportPrefix, method]
+  );
+
+  // Minimal toImage options type to avoid `any`
+  type ToImageOpts = { format?: "png" | "svg" | "jpeg" | "webp"; height?: number; width?: number; scale?: number };
+
+  const toImage = useCallback(async (gd: PlotlyHTMLElement, opts: ToImageOpts) => {
+    const w = window as unknown as { Plotly?: { toImage: (el: PlotlyHTMLElement, o: ToImageOpts) => Promise<string> } };
+    if (!w.Plotly?.toImage) throw new Error("Plotly.toImage not available");
+    return w.Plotly.toImage(gd, opts);
+  }, []);
+
+  const downloadURI = (uri: string, name: string) => {
+    const a = document.createElement("a");
+    a.href = uri;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  const downloadAllPlots = useCallback(async () => {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "").replace("T", "_").slice(0, 15);
+
+    const grab = async (gd: PlotlyHTMLElement | null, metric: string) => {
+      if (!gd) return;
+      const url = await toImage(gd, { format: "png", scale: 2 });
+      downloadURI(url, `${exportPrefix}__${method}__${metric}__t${stamp}.png`);
+    };
+
+    await Promise.all([
+      grab(initGDRef.current, "ll_init"),
+      grab(finalGDRef.current, "ll_final"),
+      grab(ecdFirstGDRef.current, "ecd_ll_first"),
+      grab(ecdFinalGDRef.current, "ecd_ll_final"),
+    ]);
+  }, [toImage, exportPrefix, method]);
+
 
   return (
     <div className="min-h-screen bg-black text-white p-6 max-w-[1400px] mx-auto space-y-4">
@@ -312,7 +505,7 @@ export default function SpiralPage() {
           Job: <span className="font-mono">{job || "(none)"}</span>
         </div>
 
-        {/* Method selector */}
+        {/* Method selector — switching disables dance */}
         <div className="flex gap-2 ml-4">
           {(["Dirichlet", "Parsimony", "SSH"] as const).map((m) => (
             <button
@@ -328,39 +521,56 @@ export default function SpiralPage() {
           ))}
         </div>
 
-        {/* Twist control */}
-        <div className="flex items-center gap-2 ml-6">
-          <label className="text-sm font-medium">Twist (°/rank)</label>
-          <input
-            type="range"
-            min={0}
-            max={60}
-            step={1}
-            value={twistDeg}
-            onChange={(e) => setTwistDeg(Number(e.target.value))}
-            className="w-40"
-            aria-label="Twist degrees per rank"
-          />
+        {/* Status (read-only) */}
+        <div className="ml-6 text-sm">
+          Twist: <span className="font-mono">{twistDeg.toFixed(0)}°/rank</span>{" "}
+          <span className="text-xs text-gray-500">
+            segment {(segIdxRef.current % CHOREO.length) + 1}/{CHOREO.length}
+          </span>
         </div>
-        <input
-          type="number"
-          className="w-20 border rounded px-2 py-1 bg-black text-white border-gray-600"
-          min={0}
-          max={180}
-          step={1}
-          value={twistDeg}
-          onChange={(e) => setTwistDeg(Number(e.target.value))}
-        />
 
-        {/* Resample */}
-        <button
-          type="button"
-          onClick={onResample}
-          className="ml-auto px-4 py-2 rounded bg-white text-black hover:bg-gray-100 disabled:opacity-50"
-          disabled={!repsAll.length || loading}
-        >
-          Resample 5 reps
-        </button>
+        {/* Dance controls */}
+        <div className="ml-auto flex gap-2">
+          {dancing ? (
+            <button
+              type="button"
+              onClick={onStopDance}
+              className="px-4 py-2 rounded bg-red-500 text-white hover:bg-red-600"
+              title="Stop and reset to starting pose"
+            >
+              Stop Dance
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setDancing(true)}
+              className="px-4 py-2 rounded bg-white text-black hover:bg-gray-100"
+              title="Run the choreography"
+            >
+              Start Dance
+            </button>
+          )}
+
+          {/* Resample (enabled when reps loaded & not loading) */}
+          <button
+            type="button"
+            onClick={onResample}
+            className="px-4 py-2 rounded bg-white text-black hover:bg-gray-100 disabled:opacity-50"
+            disabled={!repsAll.length || loading}
+          >
+            Resample 5 reps
+          </button>
+
+          {/* Download all four plots for the current pose */}
+          <button
+            type="button"
+            onClick={() => void downloadAllPlots()}
+            className="px-4 py-2 rounded bg-white text-black hover:bg-gray-100"
+            title="Download ll_init, ll_final, ecd_ll_first, ecd_ll_final as PNGs"
+          >
+            Download all 4
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -373,14 +583,22 @@ export default function SpiralPage() {
         <>
           {/* Row 1: ll_init | ll_final */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <ChartCard title={`${method}: ll_init`} traces={initTraces} />
-            <ChartCard title={`${method}: ll_final`} traces={finalTraces} />
+            <ChartCard title={`${method}: ll_init`} traces={initTraces} onReady={(gd) => (initGDRef.current = gd)} />
+            <ChartCard title={`${method}: ll_final`} traces={finalTraces} onReady={(gd) => (finalGDRef.current = gd)} />
           </div>
 
           {/* Row 2: ecd_ll_first | ecd_ll_final */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <ChartCard title={`${method}: ecd_ll_first`} traces={ecdFirstTraces} />
-            <ChartCard title={`${method}: ecd_ll_final`} traces={ecdFinalTraces} />
+            <ChartCard
+              title={`${method}: ecd_ll_first`}
+              traces={ecdFirstTraces}
+              onReady={(gd) => (ecdFirstGDRef.current = gd)}
+            />
+            <ChartCard
+              title={`${method}: ecd_ll_final`}
+              traces={ecdFinalTraces}
+              onReady={(gd) => (ecdFinalGDRef.current = gd)}
+            />
           </div>
         </>
       )}
@@ -497,8 +715,8 @@ function buildMarkersTrace(
     marker: {
       size: 10,
       color: colors,
-      colorscale: cfg.colorScale, // explicit light→dark
-      reversescale: false,        // do NOT flip
+      colorscale: cfg.colorScale,
+      reversescale: false,
       cmin: cfg.cmin,
       cmax: cfg.cmax,
       showscale: true,
@@ -506,8 +724,7 @@ function buildMarkersTrace(
         title: { text: cfg.title, font: { color: "white" } },
         tickfont: { color: "white" },
         thickness: 12,
-        bgcolor: "black",
-        outlinecolor: "white",
+        tickformat: ".3f",
       },
     },
     name: cfg.title,
@@ -519,9 +736,11 @@ function buildMarkersTrace(
 function ChartCard({
   title,
   traces,
+  onReady,
 }: {
   title: string;
   traces: Partial<Data>[];
+  onReady?: (el: PlotlyHTMLElement | null) => void;
 }) {
   const layout: Partial<Layout> = {
     title: { text: title, font: { color: "white" } },
@@ -537,7 +756,14 @@ function ChartCard({
 
   return (
     <div className="bg-black border border-gray-700 rounded p-2">
-      <Plot data={traces} layout={layout} config={config} style={{ width: "100%", height: "100%" }} />
+      <Plot
+        data={traces}
+        layout={layout}
+        config={config}
+        style={{ width: "100%", height: "100%" }}
+        onInitialized={(_figure: unknown, gd: PlotlyHTMLElement) => onReady?.(gd)}
+        onUpdate={(_figure: unknown, gd: PlotlyHTMLElement) => onReady?.(gd)}
+      />
     </div>
   );
 }

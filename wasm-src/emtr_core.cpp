@@ -4492,8 +4492,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results
 				this->max_log_likelihood_diri = logLikelihood_final;
 				if (this->max_log_likelihood_best < this->max_log_likelihood_diri) {
 					this->max_log_likelihood_best = this->max_log_likelihood_diri;
-					this->StoreRootAndRootProbability();
-					this->StoreTransitionMatrices();
+					this->StoreBestProbability();					
 				}
 			}
 		}
@@ -4560,8 +4559,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repet
 				this->max_log_likelihood_diri = logLikelihood_final;
 				if (this->max_log_likelihood_best < this->max_log_likelihood_diri) {
 					this->max_log_likelihood_best = this->max_log_likelihood_diri;
-					this->StoreRootAndRootProbability();
-					this->StoreTransitionMatrices();
+					this->StoreBestProbability();
 				}				
 			}
 		}
@@ -4621,8 +4619,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results
 				this->max_log_likelihood_pars = logLikelihood_final;
 				if (this->max_log_likelihood_best < this->max_log_likelihood_pars) {
 					this->max_log_likelihood_best = this->max_log_likelihood_pars;
-					this->StoreRootAndRootProbability();
-					this->StoreTransitionMatrices();
+					this->StoreBestProbability();
 				}
 			}
 		}
@@ -4691,8 +4688,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repet
 				this->max_log_likelihood_pars = logLikelihood_final;
 				if (this->max_log_likelihood_best < this->max_log_likelihood_pars) {
 					this->max_log_likelihood_best = this->max_log_likelihood_pars;
-					this->StoreRootAndRootProbability();
-					this->StoreTransitionMatrices();
+					this->StoreBestProbability();
 				}
 			}
 		}
@@ -4893,8 +4889,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int n
 				this->max_log_likelihood_ssh = logLikelihood_final;
 				if (this->max_log_likelihood_best < this->max_log_likelihood_ssh) {
 					this->max_log_likelihood_best = this->max_log_likelihood_ssh;
-					this->StoreRootAndRootProbability();
-					this->StoreTransitionMatrices();
+					this->StoreBestProbability();
 				}
 			}
 		}
