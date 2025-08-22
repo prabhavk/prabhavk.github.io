@@ -1,0 +1,62 @@
+CREATE TABLE `emtr_jobs` (
+  `job_id`     varchar(128) NOT NULL,
+  `status`     enum('started','completed','failed') NOT NULL DEFAULT 'started',
+  `thr`        double NOT NULL,
+  `reps`       int NOT NULL,
+  `max_iter`   int NOT NULL,
+  `d_pi`       json NOT NULL,  -- Dirichlet prior for root (length 4 array)
+  `d_m`        json NOT NULL,  -- Dirichlet prior for transition rows (length 4 array)
+  `created_at` timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `finished_at` datetime(6) NULL,
+  `dur_minutes` decimal(10,2) NULL,
+  PRIMARY KEY (`job_id`),
+  KEY `idx_status_created` (`status`,`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+
+CREATE TABLE IF NOT EXISTS emtr_best_rep (
+  job_id            VARCHAR(64) NOT NULL,
+  method            ENUM('parsimony','dirichlet','ssh') NOT NULL,
+
+  rep               INT UNSIGNED NULL,
+  root_name         VARCHAR(64)  NULL,
+  ll_final          DOUBLE       NULL,
+
+  root_prob_init    JSON NULL,   -- length-4 array
+  root_prob_final   JSON NULL,   -- length-4 array
+  trans_prob_init   JSON NULL,   -- map
+  trans_prob_final  JSON NULL,   -- map
+  ecd_ll_per_iter   JSON NULL,   -- map or array
+  raw_json          JSON NULL,   -- original full struct for safety/debug
+
+  created_at        TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at        TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+
+  PRIMARY KEY (job_id, method),
+  KEY idx_best_ll   (job_id, ll_final),
+  KEY idx_best_rep  (job_id, rep)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS emtr_llchange (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  job_id        VARCHAR(64)     NOT NULL,
+  method        ENUM('parsimony','dirichlet','ssh') NOT NULL,
+  root          VARCHAR(64)     NOT NULL,
+  rep           INT UNSIGNED    NOT NULL,
+  iter          INT UNSIGNED    NOT NULL,
+
+  ll_init       DOUBLE NULL,
+  ecd_ll_first  DOUBLE NULL,
+  ecd_ll_final  DOUBLE NULL,
+  ll_final      DOUBLE NULL,
+
+  created_at    TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+
+  PRIMARY KEY (id),
+  KEY idx_ll_job                 (job_id),
+  KEY idx_ll_job_method          (job_id, method),
+  KEY idx_ll_job_root            (job_id, root),
+  KEY idx_ll_job_method_rep_iter (job_id, method, rep, iter)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
