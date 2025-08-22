@@ -455,10 +455,10 @@ export default function SpiralPage() {
     () => buildExportPrefix({ job, twistDeg }),
     [job, twistDeg]
   );
-  const filenameFor = useCallback(
-    (metric: string) => `${exportPrefix}__${method}__${metric}.png`,
-    [exportPrefix, method]
-  );
+  // const filenameFor = useCallback(
+  //   (metric: string) => `${exportPrefix}__${method}__${metric}.png`,
+  //   [exportPrefix, method]
+  // );
 
   // Minimal toImage options type to avoid `any`
   type ToImageOpts = { format?: "png" | "svg" | "jpeg" | "webp"; height?: number; width?: number; scale?: number };
@@ -513,7 +513,7 @@ export default function SpiralPage() {
               type="button"
               onClick={() => setMethod(m)}
               className={`px-3 py-2 rounded border ${
-                method === m ? "bg-white text-black" : "bg-gray-800 text-white hover:bg-gray-700"
+                method === m ? "bg-white text-black" : "bg-gray-800 text-white hover:bg-yellow-700"
               }`}
             >
               {m}
@@ -521,13 +521,13 @@ export default function SpiralPage() {
           ))}
         </div>
 
-        {/* Status (read-only) */}
+        {/* Status (read-only)
         <div className="ml-6 text-sm">
           Twist: <span className="font-mono">{twistDeg.toFixed(0)}°/rank</span>{" "}
           <span className="text-xs text-gray-500">
             segment {(segIdxRef.current % CHOREO.length) + 1}/{CHOREO.length}
           </span>
-        </div>
+        </div> */}
 
         {/* Dance controls */}
         <div className="ml-auto flex gap-2">

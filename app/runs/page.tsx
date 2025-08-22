@@ -78,7 +78,7 @@ export default function RunsPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(5);
   const [sort, setSort] = useState("finished_at:desc");
   const [q, setQ] = useState("");
   const [from, setFrom] = useState("");

@@ -103,7 +103,7 @@ export async function POST(
       ]);
 
       const sql = `
-        INSERT INTO emtr_rows
+        INSERT INTO emtr_ll_change
           (job_id, method, root, rep, iter, ll_init, ecd_ll_first, ecd_ll_final, ll_final)
         VALUES ${placeholders}
       `;

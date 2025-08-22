@@ -19,6 +19,11 @@ let retryDelay = RETRY_BASE_MS;
 let startedAtMs = 0;
 let flushSeq = 0;
 
+// Track [EM_BEST] handling
+let bestSeenCount = 0;            // how many times we successfully sent
+let lastBestObj = null;           // last parsed best object
+let bestUploaded = false;         // whether last best object was uploaded OK
+
 // ---------- helpers ----------
 async function upsertJobMetadata(jobId, cfg) {
   try {
@@ -207,8 +212,79 @@ async function drainAll(jobId) {
   postMessage({ type: "log", line: `[transmission complete]` });
 }
 
+/* ---------------- [EM_BEST] handling ---------------- */
+
+function normalizeBestObject(raw) {
+  // Expect shape like: { parsimony: {...}, dirichlet: {...}, ssh: {...} }
+  if (!raw || typeof raw !== "object") return null;
+  const out = {};
+
+  // Pass-through preferred keys
+  if (raw.parsimony) out.parsimony = raw.parsimony;
+  if (raw.dirichlet) out.dirichlet = raw.dirichlet;
+  if (raw.ssh)       out.ssh       = raw.ssh;
+
+  // Accept a few alternates just in case
+  if (!out.parsimony && raw.Parsimony) out.parsimony = raw.Parsimony;
+  if (!out.dirichlet && raw.Dirichlet) out.dirichlet = raw.Dirichlet;
+  if (!out.ssh && raw.SSH)             out.ssh       = raw.SSH;
+
+  // Single-struct fallback
+  if (!out.parsimony && !out.dirichlet && !out.ssh) {
+    const method = String(raw.method || "").toLowerCase();
+    if (method.includes("pars")) out.parsimony = raw;
+    else if (method.includes("dir")) out.dirichlet = raw;
+    else if (method.includes("ssh")) out.ssh = raw;
+  }
+
+  if (!out.parsimony && !out.dirichlet && !out.ssh) return null;
+  return out;
+}
+
+async function uploadBest(jobId, bestRaw) {
+  const shaped = normalizeBestObject(bestRaw);
+  if (!shaped) {
+    postMessage({ type: "log", line: "⚠️ [EM_BEST] payload shape not recognized; skipping" });
+    return false;
+  }
+
+  const size = JSON.stringify(shaped).length;
+  postMessage({ type: "log", line: `→ [EM_BEST] upload start (~${size}B)` });
+
+  try {
+    const res = await fetch(`${API_BASE}/api/best`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(AUTH ? { authorization: AUTH } : {}),
+      },
+      keepalive: true,
+      body: JSON.stringify({ job_id: jobId, ...shaped }),
+    });
+
+    const text = await res.text().catch(() => "");
+    if (!res.ok) {
+      postMessage({
+        type: "log",
+        line: `⚠️ [EM_BEST] upload failed: HTTP ${res.status} ${res.statusText} :: ${text.slice(0, 300)}`
+      });
+      return false;
+    }
+
+    bestSeenCount += 1;
+    postMessage({ type: "log", line: `✅ [EM_BEST] upserted (${bestSeenCount})` });
+    return true;
+  } catch (e) {
+    postMessage({ type: "log", line: `❌ [EM_BEST] upload error: ${String(e)}` });
+    return false;
+  }
+}
+
 function handlePrint(txt) {
   const line = String(txt).trim();
+  if (!line) return;
+
+  // Streamed rows
   if (jobIdForThisRun && line.startsWith("[ROW")) {
     const brace = line.indexOf("{");
     if (brace !== -1) {
@@ -221,6 +297,28 @@ function handlePrint(txt) {
       }
     }
   }
+
+  // Best-parameters JSON
+  if (jobIdForThisRun && line.startsWith("[EM_BEST]")) {
+    const brace = line.indexOf("{");
+    if (brace !== -1) {
+      try {
+        const parsed = JSON.parse(line.slice(brace));
+        lastBestObj = parsed;
+        bestUploaded = false;
+        uploadBest(jobIdForThisRun, parsed).then((ok) => {
+          bestUploaded = ok;
+          if (!ok) postMessage({ type: "log", line: "⏳ [EM_BEST] will retry at end" });
+        });
+        postMessage({ type: "log", line: "… [EM_BEST] parsed" });
+        return;
+      } catch (e) {
+        postMessage({ type: "log", line: `em_best-parse-error: ${String(e)} :: ${line.slice(0,200)}` });
+      }
+    }
+  }
+
+  // Everything else to UI log
   postMessage({ type: "log", line });
 }
 
@@ -229,6 +327,9 @@ self.onmessage = async (e) => {
   const { params, seqBytes, topoBytes, jobId } = e.data;
   startedAtMs = Date.now();
   jobIdForThisRun = jobId || `job-${Date.now()}`;
+  bestSeenCount = 0;
+  lastBestObj = null;
+  bestUploaded = false;
 
   const v = (self.NEXT_PUBLIC_COMMIT_SHA || Date.now());
   const createEmtr = (await import(`/wasm/emtr.js?v=${v}`)).default;
@@ -313,6 +414,12 @@ self.onmessage = async (e) => {
     await drainAll(jobIdForThisRun);
     shipArtifacts();
 
+    // Retry [EM_BEST] once at end if earlier upload failed
+    if (lastBestObj && !bestUploaded) {
+      postMessage({ type: "log", line: "↻ [EM_BEST] retrying at end-of-run…" });
+      bestUploaded = await uploadBest(jobIdForThisRun, lastBestObj);
+    }
+
     const elapsedMs = Date.now() - startedAtMs;
     const minutes = (elapsedMs / 60000).toFixed(2);
     postMessage({ type: "log", line: `⏱ finished in ${minutes}m` });
@@ -324,6 +431,12 @@ self.onmessage = async (e) => {
     });
   } catch (err) {
     await drainAll(jobIdForThisRun);
+
+    // Retry [EM_BEST] once on failure, too
+    if (lastBestObj && !bestUploaded) {
+      postMessage({ type: "log", line: "↻ [EM_BEST] retrying after failure…" });
+      bestUploaded = await uploadBest(jobIdForThisRun, lastBestObj);
+    }
 
     const elapsedMs = Date.now() - startedAtMs;
     const minutes = (elapsedMs / 60000).toFixed(2);
