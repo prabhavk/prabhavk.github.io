@@ -89,7 +89,7 @@ export async function GET(
     const { rows } = await conn.execute<Row>(
       `
       SELECT root, LOWER(method) AS method, rep, ll_final
-      FROM emtr_ll_change
+      FROM emtr_llchange
       WHERE job_id = ?
         AND LOWER(method) IN ('parsimony','dirichlet','ssh')
       ORDER BY root, method, rep
