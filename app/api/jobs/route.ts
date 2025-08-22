@@ -85,19 +85,23 @@ export async function POST(req: NextRequest) {
     const conn = db();
     await conn.execute(
       `INSERT INTO emtr_jobs
-         (job_id, status, thr, reps, max_iter, d_pi, d_m)
-       VALUES (?,?,?,?,?, CAST(? AS JSON), CAST(? AS JSON))
+         (job_id, status, thr, reps, max_iter,
+          d_pi_1, d_pi_2, d_pi_3, d_pi_4,
+          d_m_1,  d_m_2,  d_m_3,  d_m_4)
+       VALUES (?,?,?,?,?,
+               ?,?,?,?,
+               ?,?,?,?)
        ON DUPLICATE KEY UPDATE
          status=VALUES(status),
          thr=VALUES(thr),
          reps=VALUES(reps),
          max_iter=VALUES(max_iter),
-         d_pi=VALUES(d_pi),
-         d_m=VALUES(d_m)`,
+         d_pi_1=VALUES(d_pi_1), d_pi_2=VALUES(d_pi_2), d_pi_3=VALUES(d_pi_3), d_pi_4=VALUES(d_pi_4),
+         d_m_1=VALUES(d_m_1),   d_m_2=VALUES(d_m_2),  d_m_3=VALUES(d_m_3),  d_m_4=VALUES(d_m_4)`,
       [
         job_id, status, thr, reps, max_iter,
-        JSON.stringify(D_pi),
-        JSON.stringify(D_M),
+        D_pi[0], D_pi[1], D_pi[2], D_pi[3],
+        D_M[0],  D_M[1],  D_M[2],  D_M[3],
       ]
     );
 

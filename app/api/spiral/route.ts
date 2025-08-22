@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
              r.ecd_ll_first,
              r.ecd_ll_final,
              r.ll_final
-        FROM emtr_ll_change r
+        FROM emtr_llchange r
         JOIN emtr_jobs j ON j.job_id = r.job_id
        WHERE r.job_id = ?
          AND LOWER(r.method) = ?

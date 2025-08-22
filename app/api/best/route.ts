@@ -31,6 +31,11 @@ type BestRow = {
   raw_json: string | null;
 };
 
+type JobParamRow = {
+  d_pi_1: number | null; d_pi_2: number | null; d_pi_3: number | null; d_pi_4: number | null;
+  d_m_1:  number | null; d_m_2:  number | null; d_m_3:  number | null; d_m_4:  number | null;
+};
+
 /* -------------------- Helpers -------------------- */
 
 function asObj(x: unknown): Record<string, unknown> | null {
@@ -38,16 +43,9 @@ function asObj(x: unknown): Record<string, unknown> | null {
 }
 
 function coerceBestRow(u: unknown): BestRow {
-  const o = (u && typeof u === "object" ? (u as Record<string, unknown>) : {}) as Record<
-    string,
-    unknown
-  >;
-
-  const toStr = (v: unknown): string | null =>
-    v === null || v === undefined ? null : String(v);
-  const toNum = (v: unknown): number | null =>
-    v === null || v === undefined ? null : Number(v);
-
+  const o = (u && typeof u === "object" ? (u as Record<string, unknown>) : {}) as Record<string, unknown>;
+  const toStr = (v: unknown): string | null => (v == null ? null : String(v));
+  const toNum = (v: unknown): number | null => (v == null ? null : Number(v));
   return {
     method: toStr(o.method),
     rep: toNum(o.rep),
@@ -62,25 +60,26 @@ function coerceBestRow(u: unknown): BestRow {
   };
 }
 
-function rowsFromResult<T>(
-  rs: unknown,
-  map: (u: unknown) => T
-): T[] {
+function coerceJobParamRow(u: unknown): JobParamRow {
+  const o = (u && typeof u === "object" ? (u as Record<string, unknown>) : {}) as Record<string, unknown>;
+  const toNum = (v: unknown): number | null => (v == null ? null : Number(v));
+  return {
+    d_pi_1: toNum(o.d_pi_1), d_pi_2: toNum(o.d_pi_2), d_pi_3: toNum(o.d_pi_3), d_pi_4: toNum(o.d_pi_4),
+    d_m_1:  toNum(o.d_m_1),  d_m_2:  toNum(o.d_m_2),  d_m_3:  toNum(o.d_m_3),  d_m_4:  toNum(o.d_m_4),
+  };
+}
+
+function rowsFromResult<T>(rs: unknown, map: (u: unknown) => T): T[] {
   const base = rs && typeof rs === "object" ? (rs as { rows?: unknown }) : null;
   if (!base || !Array.isArray(base.rows)) return [];
-  return base.rows.map(map);
+  return (base.rows as unknown[]).map(map);
 }
 
 function parseMaybeJson<T>(v: unknown): T | null {
   if (v == null) return null;
   if (typeof v === "string") {
-    try {
-      return JSON.parse(v) as T;
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(v) as T; } catch { return null; }
   }
-  // Already parsed (driver may return JSON columns as objects)
   return (v as T) ?? null;
 }
 
@@ -122,11 +121,7 @@ async function upsertOne(
        raw_json=VALUES(raw_json),
        updated_at=CURRENT_TIMESTAMP(6)`,
     [
-      job_id,
-      methodKey,
-      rep,
-      root_name,
-      ll_final,
+      job_id, methodKey, rep, root_name, ll_final,
       JSON.stringify(root_prob_init),
       JSON.stringify(root_prob_final),
       JSON.stringify(trans_prob_init),
@@ -143,10 +138,7 @@ export async function POST(req: NextRequest) {
   try {
     const ct = req.headers.get("content-type") || "";
     if (!ct.toLowerCase().includes("application/json")) {
-      return NextResponse.json(
-        { ok: false, error: "Content-Type must be application/json" },
-        { status: 415 }
-      );
+      return NextResponse.json({ ok: false, error: "Content-Type must be application/json" }, { status: 415 });
     }
 
     const body: unknown = await req.json();
@@ -154,41 +146,19 @@ export async function POST(req: NextRequest) {
     if (!obj) return NextResponse.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
 
     const job_id = String(obj.job_id ?? "").trim();
-    if (!job_id) {
-      return NextResponse.json({ ok: false, error: "job_id is required" }, { status: 400 });
-    }
+    if (!job_id) return NextResponse.json({ ok: false, error: "job_id is required" }, { status: 400 });
 
     const pars = asObj(obj.pars);
     const diri = asObj(obj.dirichlet);
-    const ssh = asObj(obj.ssh);
-
+    const ssh  = asObj(obj.ssh);
     if (!pars && !diri && !ssh) {
-      return NextResponse.json(
-        { ok: false, error: "No best structs found (pars/dirichlet/ssh missing)" },
-        { status: 400 }
-      );
+      return NextResponse.json({ ok: false, error: "No best structs found (pars/dirichlet/ssh missing)" }, { status: 400 });
     }
 
     const conn = db();
-
-    if (pars) {
-      await upsertOne(conn, job_id, "parsimony", {
-        ...pars,
-        method: (pars.method as string) ?? "Parsimony",
-      } as EMStruct);
-    }
-    if (diri) {
-      await upsertOne(conn, job_id, "dirichlet", {
-        ...diri,
-        method: (diri.method as string) ?? "Dirichlet",
-      } as EMStruct);
-    }
-    if (ssh) {
-      await upsertOne(conn, job_id, "ssh", {
-        ...ssh,
-        method: (ssh.method as string) ?? "SSH",
-      } as EMStruct);
-    }
+    if (pars) await upsertOne(conn, job_id, "parsimony", { ...pars, method: (pars.method as string) ?? "Parsimony" } as EMStruct);
+    if (diri) await upsertOne(conn, job_id, "dirichlet", { ...diri, method: (diri.method as string) ?? "Dirichlet" } as EMStruct);
+    if (ssh)  await upsertOne(conn, job_id, "ssh",       { ...ssh,  method: (ssh.method  as string) ?? "SSH" } as EMStruct);
 
     return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
   } catch (e) {
@@ -197,7 +167,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/* -------------------- GET: fetch best structs by job -------------------- */
+/* -------------------- GET: fetch best structs by job + Dirichlet params -------------------- */
 
 export async function GET(req: NextRequest) {
   try {
@@ -208,7 +178,27 @@ export async function GET(req: NextRequest) {
     }
 
     const conn = db();
-    const rs = await conn.execute(
+
+    // 1) Fetch Dirichlet hyperparameters from emtr_jobs as 8 independent numeric columns
+    const rsJob = await conn.execute(
+      `SELECT d_pi_1, d_pi_2, d_pi_3, d_pi_4,
+              d_m_1,  d_m_2,  d_m_3,  d_m_4
+         FROM emtr_jobs
+        WHERE job_id = ?
+        LIMIT 1`,
+      [job_id]
+    );
+    const jobRows = rowsFromResult<JobParamRow>(rsJob, coerceJobParamRow);
+    const jobParams = jobRows[0];
+    const D_pi = jobParams
+      ? [jobParams.d_pi_1, jobParams.d_pi_2, jobParams.d_pi_3, jobParams.d_pi_4].map((v) => (Number.isFinite(v as number) ? (v as number) : null))
+      : [null, null, null, null];
+    const D_M = jobParams
+      ? [jobParams.d_m_1, jobParams.d_m_2, jobParams.d_m_3, jobParams.d_m_4].map((v) => (Number.isFinite(v as number) ? (v as number) : null))
+      : [null, null, null, null];
+
+    // 2) Fetch best reps
+    const rsBest = await conn.execute(
       `SELECT method, rep, root_name, ll_final,
               root_prob_init, root_prob_final,
               trans_prob_init, trans_prob_final,
@@ -217,8 +207,7 @@ export async function GET(req: NextRequest) {
         WHERE job_id = ?`,
       [job_id]
     );
-
-    const rows = rowsFromResult<BestRow>(rs, coerceBestRow);
+    const rows = rowsFromResult<BestRow>(rsBest, coerceBestRow);
 
     let pars: EMStruct | null = null;
     let dirichlet: EMStruct | null = null;
@@ -226,15 +215,10 @@ export async function GET(req: NextRequest) {
 
     for (const row of rows) {
       const method = String(row.method ?? "").toLowerCase();
-
-      // Prefer the raw_json blob if present; otherwise reconstruct from JSON columns.
+      // Prefer the raw_json blob if present; else reconstruct
       let em: EMStruct | null = null;
       if (row.raw_json) {
-        try {
-          em = JSON.parse(row.raw_json) as EMStruct;
-        } catch {
-          em = null;
-        }
+        try { em = JSON.parse(row.raw_json) as EMStruct; } catch { em = null; }
       }
       if (!em) {
         em = {
@@ -246,19 +230,16 @@ export async function GET(req: NextRequest) {
           root_prob_final: parseMaybeJson<number[]>(row.root_prob_final),
           trans_prob_init: parseMaybeJson<Record<string, unknown>>(row.trans_prob_init),
           trans_prob_final: parseMaybeJson<Record<string, unknown>>(row.trans_prob_final),
-          ecd_ll_per_iter: parseMaybeJson<Record<string, number> | number[]>(
-            row.ecd_ll_per_iter
-          ),
+          ecd_ll_per_iter: parseMaybeJson<Record<string, number> | number[]>(row.ecd_ll_per_iter),
         };
       }
-
       if (method === "parsimony") pars = em;
       else if (method === "dirichlet") dirichlet = em;
       else if (method === "ssh") ssh = em;
     }
 
     return NextResponse.json(
-      { ok: true, job_id, pars, dirichlet, ssh },
+      { ok: true, job_id, D_pi, D_M, pars, dirichlet, ssh },
       { headers: { "cache-control": "no-store" } }
     );
   } catch (e) {

@@ -103,7 +103,7 @@ export async function GET(req: NextRequest) {
     const rows = await query<DBRow>(
       `
       SELECT method, ll_final
-        FROM emtr_ll_change
+        FROM emtr_llchange
        WHERE job_id = ?
          ${nodeFilter}
          AND ll_final IS NOT NULL
