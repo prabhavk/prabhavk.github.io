@@ -45,7 +45,11 @@ function asObj(x: unknown): Record<string, unknown> | null {
 function coerceBestRow(u: unknown): BestRow {
   const o = (u && typeof u === "object" ? (u as Record<string, unknown>) : {}) as Record<string, unknown>;
   const toStr = (v: unknown): string | null => (v == null ? null : String(v));
-  const toNum = (v: unknown): number | null => (v == null ? null : Number(v));
+  const toNum = (v: unknown): number | null => {
+    if (v == null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
   return {
     method: toStr(o.method),
     rep: toNum(o.rep),
@@ -62,7 +66,11 @@ function coerceBestRow(u: unknown): BestRow {
 
 function coerceJobParamRow(u: unknown): JobParamRow {
   const o = (u && typeof u === "object" ? (u as Record<string, unknown>) : {}) as Record<string, unknown>;
-  const toNum = (v: unknown): number | null => (v == null ? null : Number(v));
+  const toNum = (v: unknown): number | null => {
+    if (v == null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
   return {
     d_pi_1: toNum(o.d_pi_1), d_pi_2: toNum(o.d_pi_2), d_pi_3: toNum(o.d_pi_3), d_pi_4: toNum(o.d_pi_4),
     d_m_1:  toNum(o.d_m_1),  d_m_2:  toNum(o.d_m_2),  d_m_3:  toNum(o.d_m_3),  d_m_4:  toNum(o.d_m_4),
@@ -81,6 +89,40 @@ function parseMaybeJson<T>(v: unknown): T | null {
     try { return JSON.parse(v) as T; } catch { return null; }
   }
   return (v as T) ?? null;
+}
+
+/** Accept worker payloads of different shapes and normalize to {pars?, dirichlet?, ssh?}. */
+function normalizeIncoming(obj: Record<string, unknown>): {
+  pars?: EMStruct;
+  dirichlet?: EMStruct;
+  ssh?: EMStruct;
+} {
+  const out: { pars?: EMStruct; dirichlet?: EMStruct; ssh?: EMStruct } = {};
+
+  const getStruct = (k: string): EMStruct | undefined => {
+    const v = asObj(obj[k]);
+    return v ? (v as unknown as EMStruct) : undefined;
+  };
+
+  // Common keyed variants
+  const pars1 = getStruct("pars") ?? getStruct("parsimony");
+  const dir1  = getStruct("dirichlet");
+  const ssh1  = getStruct("ssh");
+
+  if (pars1) out.pars = pars1;
+  if (dir1)  out.dirichlet = dir1;
+  if (ssh1)  out.ssh = ssh1;
+
+  // Single-method struct at top-level (no keys)
+  if (!out.pars && !out.dirichlet && !out.ssh) {
+    const maybeSingle = obj as Partial<EMStruct>;
+    const m = typeof maybeSingle.method === "string" ? maybeSingle.method.toLowerCase() : "";
+    if (m.includes("pars")) out.pars = maybeSingle as EMStruct;
+    else if (m.includes("dir")) out.dirichlet = maybeSingle as EMStruct;
+    else if (m.includes("ssh")) out.ssh = maybeSingle as EMStruct;
+  }
+
+  return out;
 }
 
 /* -------------------- DB upsert -------------------- */
@@ -148,17 +190,17 @@ export async function POST(req: NextRequest) {
     const job_id = String(obj.job_id ?? "").trim();
     if (!job_id) return NextResponse.json({ ok: false, error: "job_id is required" }, { status: 400 });
 
-    const pars = asObj(obj.pars);
-    const diri = asObj(obj.dirichlet);
-    const ssh  = asObj(obj.ssh);
-    if (!pars && !diri && !ssh) {
+    // Normalize any worker shape into {pars?, dirichlet?, ssh?}
+    const { pars, dirichlet, ssh } = normalizeIncoming(obj);
+
+    if (!pars && !dirichlet && !ssh) {
       return NextResponse.json({ ok: false, error: "No best structs found (pars/dirichlet/ssh missing)" }, { status: 400 });
     }
 
     const conn = db();
-    if (pars) await upsertOne(conn, job_id, "parsimony", { ...pars, method: (pars.method as string) ?? "Parsimony" } as EMStruct);
-    if (diri) await upsertOne(conn, job_id, "dirichlet", { ...diri, method: (diri.method as string) ?? "Dirichlet" } as EMStruct);
-    if (ssh)  await upsertOne(conn, job_id, "ssh",       { ...ssh,  method: (ssh.method  as string) ?? "SSH" } as EMStruct);
+    if (pars)      await upsertOne(conn, job_id, "parsimony", { ...pars,      method: pars.method ?? "Parsimony" });
+    if (dirichlet) await upsertOne(conn, job_id, "dirichlet", { ...dirichlet, method: dirichlet.method ?? "Dirichlet" });
+    if (ssh)       await upsertOne(conn, job_id, "ssh",       { ...ssh,       method: ssh.method ?? "SSH" });
 
     return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
   } catch (e) {
@@ -179,7 +221,7 @@ export async function GET(req: NextRequest) {
 
     const conn = db();
 
-    // 1) Fetch Dirichlet hyperparameters from emtr_jobs as 8 independent numeric columns
+    // 1) Fetch Dirichlet hyperparameters from emtr_jobs (independent numeric columns)
     const rsJob = await conn.execute(
       `SELECT d_pi_1, d_pi_2, d_pi_3, d_pi_4,
               d_m_1,  d_m_2,  d_m_3,  d_m_4
@@ -191,10 +233,10 @@ export async function GET(req: NextRequest) {
     const jobRows = rowsFromResult<JobParamRow>(rsJob, coerceJobParamRow);
     const jobParams = jobRows[0];
     const D_pi = jobParams
-      ? [jobParams.d_pi_1, jobParams.d_pi_2, jobParams.d_pi_3, jobParams.d_pi_4].map((v) => (Number.isFinite(v as number) ? (v as number) : null))
+      ? [jobParams.d_pi_1, jobParams.d_pi_2, jobParams.d_pi_3, jobParams.d_pi_4].map(v => (Number.isFinite(v as number) ? (v as number) : null))
       : [null, null, null, null];
     const D_M = jobParams
-      ? [jobParams.d_m_1, jobParams.d_m_2, jobParams.d_m_3, jobParams.d_m_4].map((v) => (Number.isFinite(v as number) ? (v as number) : null))
+      ? [jobParams.d_m_1, jobParams.d_m_2, jobParams.d_m_3, jobParams.d_m_4].map(v => (Number.isFinite(v as number) ? (v as number) : null))
       : [null, null, null, null];
 
     // 2) Fetch best reps
@@ -215,7 +257,8 @@ export async function GET(req: NextRequest) {
 
     for (const row of rows) {
       const method = String(row.method ?? "").toLowerCase();
-      // Prefer the raw_json blob if present; else reconstruct
+
+      // Prefer the raw_json blob if present; otherwise reconstruct from JSON columns.
       let em: EMStruct | null = null;
       if (row.raw_json) {
         try { em = JSON.parse(row.raw_json) as EMStruct; } catch { em = null; }
@@ -233,6 +276,7 @@ export async function GET(req: NextRequest) {
           ecd_ll_per_iter: parseMaybeJson<Record<string, number> | number[]>(row.ecd_ll_per_iter),
         };
       }
+
       if (method === "parsimony") pars = em;
       else if (method === "dirichlet") dirichlet = em;
       else if (method === "ssh") ssh = em;

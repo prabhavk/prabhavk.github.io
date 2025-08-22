@@ -149,7 +149,7 @@ export default function ViolinPage() {
   return (
     <div className="p-6 max-w-[1200px] mx-auto">
       <h1 className="text-2xl font-bold mb-4">
-        Violin Plots of <code>ll_final</code>
+        Violin Plots of Maximum Log Likelihood
       </h1>
 
       <div className="flex flex-wrap gap-3 items-end mb-4">

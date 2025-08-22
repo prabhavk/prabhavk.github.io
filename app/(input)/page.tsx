@@ -29,8 +29,8 @@ export default function InputPage() {
   const [sequenceFile, setSequenceFile] = useState<File | null>(null);
   const [topologyFile, setTopologyFile] = useState<File | null>(null);
 
-  const [threshold, setThreshold] = useState("0.01");
-  const [numReps, setNumReps] = useState("50");
+  const [threshold, setThreshold] = useState("0.001");
+  const [numReps, setNumReps] = useState("25");
   const [maxIter, setMaxIter] = useState("1000");
   const [pi, setPi] = useState(["100", "100", "100", "100"]);
   const [M, setM] = useState(["100", "2", "2", "2"]);
