@@ -105,7 +105,7 @@ async function upsertOne(
   const raw_json = em; // store full struct as well
 
   await conn.execute(
-    `INSERT INTO emtr_best
+    `INSERT INTO emtr_best_rep
        (job_id, method, rep, root_name, ll_final,
         root_prob_init, root_prob_final, trans_prob_init, trans_prob_final, ecd_ll_per_iter, raw_json)
      VALUES (?,?,?,?,?,
@@ -213,7 +213,7 @@ export async function GET(req: NextRequest) {
               root_prob_init, root_prob_final,
               trans_prob_init, trans_prob_final,
               ecd_ll_per_iter, raw_json
-         FROM emtr_best
+         FROM emtr_best_rep
         WHERE job_id = ?`,
       [job_id]
     );
