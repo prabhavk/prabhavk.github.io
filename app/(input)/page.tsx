@@ -33,7 +33,26 @@ export default function InputPage() {
   const [numReps, setNumReps] = useState("25");
   const [maxIter, setMaxIter] = useState("1000");
   const [pi, setPi] = useState(["100", "100", "100", "100"]);
+
+  // M: α for rows of transition matrix. Indices 1,2,3 (i.e., 2nd–4th) are linked.
   const [M, setM] = useState(["100", "2", "2", "2"]);
+
+  // helper: keep α₂, α₃, α₄ in sync
+  function handleMChange(index: number, value: string) {
+    setM((prev) => {
+      const next = [...prev];
+      if (index === 0) {
+        // Only update α1
+        next[0] = value;
+      } else {
+        // Lock α2, α3, α4 together
+        next[1] = value;
+        next[2] = value;
+        next[3] = value;
+      }
+      return next;
+    });
+  }
 
   const workerRef = useRef<Worker | null>(null);
 
@@ -189,7 +208,7 @@ export default function InputPage() {
             />
           </div>
 
-          {/* Dirichlet priors */}
+          {/* Dirichlet priors (π) */}
           <div className="space-y-2 md:col-span-3">
             <label className="block text-sm font-medium text-white">Dirichlet α for π</label>
             <div className="grid grid-cols-4 gap-2">
@@ -209,11 +228,12 @@ export default function InputPage() {
                 />
               ))}
             </div>
-            <p className="text-xs text-gray-300">Use α ≥ 1 (defaults: 100,100,100,100).</p>
+            <p className="text-xs text-gray-300"> </p>
           </div>
 
+          {/* Dirichlet priors (M) with α₂=α₃=α₄ lock */}
           <div className="space-y-2 md:col-span-3">
-            <label className="block text-sm font-medium text-white">Dirichlet α for rows of M</label>
+            <label className="block text-sm font-medium text-white">Dirichlet α for rows of P</label>
             <div className="grid grid-cols-4 gap-2">
               {M.map((v, i) => (
                 <input
@@ -223,15 +243,14 @@ export default function InputPage() {
                   step="any"
                   className="w-full border p-2 text-white"
                   value={v}
-                  onChange={(e) => {
-                    const next = [...M];
-                    next[i] = e.target.value;
-                    setM(next);
-                  }}
+                  onChange={(e) => handleMChange(i, e.target.value)}
+                  title={i === 0 ? "α1 (independent)" : "α2–α4 are linked; editing one updates the others"}
                 />
               ))}
             </div>
-            <p className="text-xs text-gray-300">Defaults: 100,2,2,2 (strong self-transition prior).</p>
+            <p className="text-xs text-gray-300">
+              <strong>Constraint:</strong> α₂, α₃, α₄ are tied—changing one updates the others.
+            </p>
           </div>
         </div>
 

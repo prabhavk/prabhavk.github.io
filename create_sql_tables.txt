@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS emtr_best_rep (
   method            ENUM('parsimony','dirichlet','ssh') NOT NULL,
 
   rep               INT UNSIGNED NULL,
+  num_iter          INT UNSIGNED NULL,
   root_name         VARCHAR(64)  NULL,
+  ll_init           DOUBLE       NULL,
   ll_final          DOUBLE       NULL,
 
   root_prob_init    JSON NULL,   -- length-4 array

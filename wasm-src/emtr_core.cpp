@@ -1791,8 +1791,11 @@ struct EM_struct {
 	// init method  - store before starting rep
 	int rep;
 	// rep          - store at start of each rep
+	int num_iter;   
 	map <int, double> ecd_ll_per_iter;
 	// ecd for each iteration of EM
+	double ll_init;
+	// ll initial store at completion of EM run
 	double ll_final;
 	// ll final store at completion of EM run
 	string root_name;
@@ -2283,14 +2286,16 @@ void SEM::set_alpha_M_row(double a1, double a2, double a3, double a4) {
 inline string SEM::em_to_json(const EM_struct& em) const {  
   ostringstream os;
   os << "{"
-     << "\"method\":"          << jstr(em.method)                 << ","
-     << "\"rep\":"             << em.rep                          << ","
-     << "\"ecd_ll_per_iter\":" << jseries_iter_val(em.ecd_ll_per_iter) << ","
-     << "\"ll_final\":"        << jnum(em.ll_final)               << ","
-     << "\"root_name\":"       << jstr(em.root_name)              << ","
-     << "\"root_prob_init\":"  << jvec4(em.root_prob_init)        << ","
-     << "\"root_prob_final\":" << jvec4(em.root_prob_final)       << ","
-     << "\"trans_prob_init\":"  << jmap_mat4(em.trans_prob_init)  << ","
+     << "\"method\":"           << jstr(em.method)                 << ","
+     << "\"rep\":"              << em.rep                          << ","
+	 << "\"num_iter\":"          << em.num_iter                     << ","
+     << "\"ecd_ll_per_iter\":"  << jseries_iter_val(em.ecd_ll_per_iter) << ","
+	 << "\"ll_init\":"          << jnum(em.ll_init)                << ","
+     << "\"ll_final\":"         << jnum(em.ll_final)               << ","
+     << "\"root_name\":"        << jstr(em.root_name)              << ","
+     << "\"root_prob_init\":"   << jvec4(em.root_prob_init)        << ","
+     << "\"root_prob_final\":"  << jvec4(em.root_prob_final)       << ","
+     << "\"trans_prob_init\":"  << jmap_mat4(em.trans_prob_init)   << ","
      << "\"trans_prob_final\":" << jmap_mat4(em.trans_prob_final)
      << "}";
   return os.str();
@@ -5124,6 +5129,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_SSH_parameters_root
 	this->debug = 0;
 	bool verbose = 0;
 	logLikelihood_ssh = this->logLikelihood;
+	this->EM_current.ll_init = logLikelihood_ssh;
 	// cout << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
 	// cout << "log-likelihood computed by marginalization using SSH parameters is " << setprecision(ll_precision) << logLikelihood_ssh << endl;
 	// (*this->logFile) << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
@@ -5131,18 +5137,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_SSH_parameters_root
 	logLikelihood_exp_data_previous = -1 * pow(10,4);
 	while (continueIterations) {
 		// t_start_time = chrono::high_resolution_clock::now();
-		iter += 1;
-		// if (verbose) {
-		// 	cout << "Iteration no. " << iter << endl;
-		// 	(*this->logFile) << "Iteration no. " << iter << endl;
-		// }
-		// 1. Construct clique tree		
-		// if (verbose) {
-		// 	cout << "Construct clique tree" << endl;
-		// 	(*this->logFile) << "Iteration no. " << iter << endl;
-			
-		// }		
-		
+		iter += 1;		
 		this->ConstructCliqueTree();			
 		// 2. Compute expected counts
 		this->ComputeExpectedCountsForRootSearch();
@@ -5174,6 +5169,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_SSH_parameters_root
 	}
 	this->ComputeLogLikelihood();
 	this->StoreParamsInEMCurrent("final");
+	this->EM_current.num_iter = iter;
 	this->EM_current.ll_final = this->logLikelihood;
 	// cout << "log-likelihood computed by marginalization after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
@@ -5204,7 +5200,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "10d" << endl;
 	this->ClearAncestralSequences();
-	double logLikelihood_pars;
+	double logLikelihood_diri;
 	double logLikelihood_exp_data_current;
 	double logLikelihood_exp_data_first;
 	double logLikelihood_exp_data_final;
@@ -5212,26 +5208,16 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 	bool continueIterations = 1;
 	this->debug = 0;
 	bool verbose = 0;
-	logLikelihood_pars = this->logLikelihood;
+	logLikelihood_diri = this->logLikelihood;
+	this->EM_current.ll_init = logLikelihood_diri;
 	// cout << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
-	// cout << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
+	// cout << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_diri << endl;
 	// (*this->logFile) << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
-	// (*this->logFile) << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
+	// (*this->logFile) << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_diri << endl;
 	logLikelihood_exp_data_current = -1 * pow(10,4);
 	while (continueIterations) {
 		// t_start_time = chrono::high_resolution_clock::now();
-		iter += 1;
-		// if (verbose) {
-		// 	cout << "Iteration no. " << iter << endl;
-		// 	(*this->logFile) << "Iteration no. " << iter << endl;
-		// }
-		// 1. Construct clique tree		
-		// if (verbose) {
-		// 	cout << "Construct clique tree" << endl;
-		// 	(*this->logFile) << "Iteration no. " << iter << endl;
-			
-		// }		
-		
+		iter += 1;		
 		this->ConstructCliqueTree();			
 		// 2. Compute expected counts
 		this->ComputeExpectedCountsForRootSearch();
@@ -5263,13 +5249,14 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 	}
 	this->ComputeLogLikelihood();
 	this->StoreParamsInEMCurrent("final");
+	this->EM_current.num_iter = iter;
 	this->EM_current.ll_final = this->logLikelihood;	
 	// cout << "log-likelihood computed by marginalization using EM parameters " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
 	// (*this->logFile) << "log-likelihood computed by marginalization using EM parameters " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// (*this->logFile) << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
 	
-	return tuple<int,double,double,double,double>(iter,logLikelihood_pars,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
+	return tuple<int,double,double,double,double>(iter,logLikelihood_diri,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
 }
 
 
@@ -5290,7 +5277,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at
 	// cout << "10c" << endl;
 	this->ComputeInitialEstimateOfModelParameters();
 	this->StoreParamsInEMCurrent("init");
-	this->ComputeLogLikelihood();
+	this->ComputeLogLikelihood();	
 	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "10d" << endl;
 	this->ClearAncestralSequences();
@@ -5303,6 +5290,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at
 	this->debug = 0;
 	bool verbose = 0;
 	logLikelihood_pars = this->logLikelihood;
+	this->EM_current.ll_init = logLikelihood_pars;
 	// cout << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
 	// cout << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
 	// (*this->logFile) << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
@@ -5353,6 +5341,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at
 	}
 	this->ComputeLogLikelihood();
 	this->StoreParamsInEMCurrent("final");
+	this->EM_current.num_iter = iter;
 	this->EM_current.ll_final = this->logLikelihood;	
 	// cout << "log-likelihood computed by marginalization using EM parameters " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;

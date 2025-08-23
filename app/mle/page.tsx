@@ -11,6 +11,8 @@ type MleOk = {
   root_name?: string | null;   // used to exclude the root matrix in ProbHists
   root: number[] | null;       // expected length 4
   trans: unknown;              // 4x4 array OR Record<string, 4x4 array> OR flat 16
+  D_pi?: number[] | null;
+  D_M?: number[] | null;       // Dirichlet for transition rows (length 4)
 };
 type MleResp = MleOk | { error: string };
 
@@ -79,6 +81,8 @@ export default function MLEinDPage() {
   const [root, setRoot] = useState<number[] | null>(null);
   const [transMap, setTransMap] = useState<Record<string, number[][]> | null>(null);
   const [rootKey, setRootKey] = useState<string | null>(null);
+  const [alphaPi, setAlphaPi] = useState<number[] | null>(null);
+  const [alphaM, setAlphaM] = useState<number[] | null>(null); // ✅ NEW
 
   // pick job id from localStorage
   useEffect(() => {
@@ -96,6 +100,8 @@ export default function MLEinDPage() {
       setRoot(null);
       setTransMap(null);
       setRootKey(null);
+      setAlphaPi(null);
+      setAlphaM(null);
       return;
     }
 
@@ -104,6 +110,8 @@ export default function MLEinDPage() {
     setRoot(null);
     setTransMap(null);
     setRootKey(null);
+    setAlphaPi(null);
+    setAlphaM(null);
 
     try {
       const u = new URL("/api/mle", window.location.origin);
@@ -121,25 +129,34 @@ export default function MLEinDPage() {
       if (!res.ok || "error" in j) {
         throw new Error(("error" in j && j.error) || `HTTP ${res.status}`);
       }
+      const data = j as MleOk;
 
       // Root probs
-      const rootArr = Array.isArray(j.root) ? j.root.map(Number) : null;
+      const rootArr = Array.isArray(data.root) ? data.root.map(Number) : null;
       setRoot(rootArr);
       if (!rootArr || rootArr.length !== 4) {
         setErr((prev) => prev ?? "No root_prob_final (expected 4 values).");
       }
 
       // Transition matrices -> map
-      const map = normalizeTransToMap(j.trans);
+      const map = normalizeTransToMap(data.trans);
       setTransMap(Object.keys(map).length ? map : null);
 
       // root_name is optional; use it if present so ProbHists can exclude the root matrix
-      const rKey = j.root_name && typeof j.root_name === "string" ? j.root_name : null;
+      const rKey = data.root_name && typeof data.root_name === "string" ? data.root_name : null;
       setRootKey(rKey);
 
       if (!Object.keys(map).length) {
         setErr((prev) => prev ?? "No transition probabilities found in trans_prob_final (expected 4×4).");
       }
+
+      // Dirichlet alphas
+      const aPi = Array.isArray(data.D_pi) && data.D_pi.length === 4 ? data.D_pi.map(Number) : null;
+      setAlphaPi(aPi);
+
+      const aM  = Array.isArray(data.D_M)  && data.D_M.length  === 4 ? data.D_M.map(Number)  : null;
+      setAlphaM(aM); // ✅ NEW
+
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to load");
     } finally {
@@ -157,7 +174,7 @@ export default function MLEinDPage() {
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-4">
       <div className="flex flex-wrap items-end gap-3">
-        <h1 className="text-2xl font-bold">MLE in D</h1>
+        <h1 className="text-2xl font-bold">Maximum likelihood estimate of GMM and density plot of Dirichlet parameters</h1>
         <div className="text-sm ml-4">
           Job: <span className="font-mono">{job || "(none)"} </span>
         </div>
@@ -186,6 +203,9 @@ export default function MLEinDPage() {
             trans={transOK ? (transMap as unknown as Record<string, unknown>) : null}
             // Let ProbHists exclude the root matrix when aggregating
             rootKey={rootKey ?? undefined}
+            rootName={rootKey ?? undefined}
+            alphaPi={alphaPi}
+            alphaM={alphaM}
           />
         </div>
       )}

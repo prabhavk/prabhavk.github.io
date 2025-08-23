@@ -7,10 +7,15 @@ export const runtime = "edge";
 type MleRow = {
   root_prob_final: string | number[] | null;
   trans_prob_final: string | number[][] | number[] | null;
-  // include if you eventually select them:
-  // root_name?: string | null;
-  // job_id?: string;
-  // method?: string;
+  root_name: string | null;
+  d_pi_1: number | null;
+  d_pi_2: number | null;
+  d_pi_3: number | null;
+  d_pi_4: number | null;
+  d_m_1: number | null;
+  d_m_2: number | null;
+  d_m_3: number | null;
+  d_m_4: number | null;
 };
 
 export async function GET(req: NextRequest) {
@@ -24,23 +29,37 @@ export async function GET(req: NextRequest) {
     }
 
     const sql = `
-      SELECT root_prob_final, trans_prob_final
-      FROM emtr_best_rep
-      WHERE job_id = ? AND method = ?
-      ORDER BY created_at DESC
+      SELECT
+        br.root_prob_final,
+        br.trans_prob_final,
+        br.root_name,
+        j.d_pi_1, j.d_pi_2, j.d_pi_3, j.d_pi_4,
+        j.d_m_1,  j.d_m_2,  j.d_m_3,  j.d_m_4
+      FROM emtr_best_rep AS br
+      LEFT JOIN emtr_jobs AS j ON j.job_id = br.job_id
+      WHERE br.job_id = ? AND br.method = ?
+      ORDER BY br.created_at DESC
       LIMIT 1
     `;
 
     const conn = db();
-    // PlanetScale client's execute<T> returns { rows: T[] }
     const { rows } = await conn.execute<MleRow>(sql, [jobId, method]);
 
     if (!rows || rows.length === 0) {
-      return NextResponse.json({ root: null, trans: null, job_id: jobId, method });
+      return NextResponse.json({
+        job_id: jobId,
+        method,
+        root: null,
+        trans: null,
+        root_name: null,
+        D_pi: null,
+        D_M: null,
+      });
     }
 
     const row = rows[0];
 
+    // Parse root + trans which may be JSON strings
     const root =
       typeof row.root_prob_final === "string"
         ? (JSON.parse(row.root_prob_final) as number[])
@@ -51,11 +70,27 @@ export async function GET(req: NextRequest) {
         ? (JSON.parse(row.trans_prob_final) as unknown)
         : row.trans_prob_final;
 
+    // Assemble Dirichlet alpha arrays
+    const piCandidates = [row.d_pi_1, row.d_pi_2, row.d_pi_3, row.d_pi_4];
+    const D_pi =
+      piCandidates.every(v => typeof v === "number" && Number.isFinite(v) && v > 0)
+        ? (piCandidates as number[])
+        : null;
+
+    const mCandidates = [row.d_m_1, row.d_m_2, row.d_m_3, row.d_m_4];
+    const D_M =
+      mCandidates.every(v => typeof v === "number" && Number.isFinite(v) && v > 0)
+        ? (mCandidates as number[])
+        : null;
+
     return NextResponse.json({
       job_id: jobId,
       method,
       root: Array.isArray(root) ? root : null,
-      trans: transRaw ?? null, // can be 4x4 array, flat 16, or dict of 4x4s (handled in UI)
+      trans: transRaw ?? null,      // could be 4x4, flat-16, or map of 4x4s
+      root_name: row.root_name ?? null,
+      D_pi,                        
+      D_M,                         
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
