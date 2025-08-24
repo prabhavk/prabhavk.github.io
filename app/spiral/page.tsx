@@ -731,7 +731,7 @@ function buildMarkersTrace(
     showlegend: false,
   };
 }
-
+//
 function ChartCard({
   title,
   traces,
