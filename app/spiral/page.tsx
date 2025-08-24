@@ -316,49 +316,74 @@ export default function SpiralPage() {
     [byRootRep, selectedReps]
   );
 
-  const initTraces = useMemo<Partial<ScatterData>[]>(() => {
+
+const initTraces = useMemo<Partial<ScatterData>[]>(() => {
   const vals = collectMetric((r) => r.ll_init);
   const [mn, mx] = extent(vals);
-  return buildRoundedPetalSegmentsTraces(
+  return buildRosePetalBandsTraces(
     { title: "ll_init", values: (r) => r.ll_init, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
-    twistDeg, byRootRep, selectedReps, repRanks,
-    { petalWidthFrac: 0.88, arcSteps: 42, sideSteps: 14, innerSteps: 28, capFrac: 0.6, capPower: 1.4 }
+    byRootRep, selectedReps, repRanks,
+    {
+      m: NODES.length,      // 17 is odd => 17 petals
+      coreRadius: 0.085,    // start near origin
+      bandStep: 0.18,       // band thickness per replicate
+      widthFrac: 0.95,      // petal angular width (0..1)
+      power: 1.6,           // tip roundness
+      thetaSamples: 160,    // smoothness
+    }
   );
-}, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
+}, [collectMetric, byRootRep, selectedReps, repRanks]);
 
 const finalTraces = useMemo<Partial<ScatterData>[]>(() => {
   const vals = collectMetric((r) => r.ll_final);
   const [mn, mx] = extent(vals);
-  return buildRoundedPetalSegmentsTraces(
-    { title: "ll_final", values: (r) => r.ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
-    twistDeg, byRootRep, selectedReps, repRanks,
-    { petalWidthFrac: 0.88, arcSteps: 42, sideSteps: 14, innerSteps: 28, capFrac: 0.6, capPower: 1.4 }
+  return buildRosePetalBandsTraces(
+    { title: "ll_final", values: (r) => r.ll_final, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
+    byRootRep, selectedReps, repRanks,
+    {
+      m: NODES.length,      // 17 is odd => 17 petals
+      coreRadius: 0.085,    // start near origin
+      bandStep: 0.18,       // band thickness per replicate
+      widthFrac: 0.95,      // petal angular width (0..1)
+      power: 1.6,           // tip roundness
+      thetaSamples: 160,    // smoothness
+    }
   );
-}, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
+}, [collectMetric, byRootRep, selectedReps, repRanks]);
 
-// ...same for ecdFirstTraces / ecdFinalTraces
+const ecdFirstTraces = useMemo<Partial<ScatterData>[]>(() => {
+  const vals = collectMetric((r) => r.ecd_ll_first);
+  const [mn, mx] = extent(vals);
+  return buildRosePetalBandsTraces(
+    { title: "ecd_ll_first", values: (r) => r.ecd_ll_first, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
+    byRootRep, selectedReps, repRanks,
+    {
+      m: NODES.length,      // 17 is odd => 17 petals
+      coreRadius: 0.085,    // start near origin
+      bandStep: 0.18,       // band thickness per replicate
+      widthFrac: 0.95,      // petal angular width (0..1)
+      power: 1.6,           // tip roundness
+      thetaSamples: 160,    // smoothness
+    }
+  );
+}, [collectMetric, byRootRep, selectedReps, repRanks]);
 
-
-  const ecdFirstTraces = useMemo<Partial<ScatterData>[]>(() => {
-    const vals = collectMetric((r) => r.ecd_ll_first);
-    const [mn, mx] = extent(vals);
-    return buildRoundedPetalSegmentsTraces(
-      { title: "ecd_ll_first", values: (r) => r.ecd_ll_first, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
-      twistDeg, byRootRep, selectedReps, repRanks,
-      { petalWidthFrac: 0.8, arcSteps: 20 }
-    );
-  }, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
-
-  const ecdFinalTraces = useMemo<Partial<ScatterData>[]>(() => {
-    const vals = collectMetric((r) => r.ecd_ll_final);
-    const [mn, mx] = extent(vals);
-    return buildRoundedPetalSegmentsTraces(
-      { title: "ecd_ll_final", values: (r) => r.ecd_ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
-      twistDeg, byRootRep, selectedReps, repRanks,
-      { petalWidthFrac: 0.8, arcSteps: 20 }
-    );
-  }, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
-
+const ecdFinalTraces = useMemo<Partial<ScatterData>[]>(() => {
+  const vals = collectMetric((r) => r.ecd_ll_final);
+  const [mn, mx] = extent(vals);
+  return buildRosePetalBandsTraces(
+    { title: "ecd_ll_final", values: (r) => r.ecd_ll_final, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
+    byRootRep, selectedReps, repRanks,
+    {
+      m: NODES.length,      // 17 is odd => 17 petals
+      coreRadius: 0.085,    // start near origin
+      bandStep: 0.18,       // band thickness per replicate
+      widthFrac: 0.95,      // petal angular width (0..1)
+      power: 1.6,           // tip roundness
+      thetaSamples: 160,    // smoothness
+    }
+  );
+}, [collectMetric, byRootRep, selectedReps, repRanks]);
 
 
   // ----- Build each plot’s traces (dotted replicate links + markers with colorbar) -----
@@ -726,24 +751,141 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 
 function colorFromScale(
-  value: number,
-  cmin: number,
-  cmax: number,
-  scale: [number, string][]
+  v: number,
+  vmin: number,
+  vmax: number,
+  scale: [number, string][] // e.g., BLUES_SCALE
 ): string {
-  let t = (value - cmin) / Math.max(1e-12, (cmax - cmin));
-  t = Math.max(0, Math.min(1, t));
-  let i = 0;
-  while (i < scale.length - 1 && !(scale[i][0] <= t && t <= scale[i + 1][0])) i++;
-  const [t0, c0] = scale[Math.max(0, Math.min(i, scale.length - 1))];
-  const [t1, c1] = scale[Math.max(0, Math.min(i + 1, scale.length - 1))];
-  const u = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
-  const a = hexToRgb(c0);
-  const b = hexToRgb(c1);
-  const r = Math.round(lerp(a.r, b.r, u));
-  const g = Math.round(lerp(a.g, b.g, u));
-  const bl = Math.round(lerp(a.b, b.b, u));
-  return `rgb(${r},${g},${bl})`;
+  if (!Number.isFinite(v)) return "rgba(255,255,255,0.2)";
+  const t = vmax === vmin ? 0.5 : Math.max(0, Math.min(1, (v - vmin) / (vmax - vmin)));
+  for (let i = 1; i < scale.length; i++) {
+    const [t1, c1] = scale[i - 1];
+    const [t2, c2] = scale[i];
+    if (t <= t2) {
+      const u = (t - t1) / Math.max(1e-9, t2 - t1);
+      // simple mix in sRGB
+      const parse = (s: string) => {
+        const m = s.match(/#([0-9a-f]{6})/i);
+        if (!m) return [255, 255, 255];
+        const n = parseInt(m[1], 16);
+        return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+      };
+      const [r1, g1, b1] = parse(c1);
+      const [r2, g2, b2] = parse(c2);
+      const r = Math.round(r1 + u * (r2 - r1));
+      const g = Math.round(g1 + u * (g2 - g1));
+      const b = Math.round(b1 + u * (b2 - b1));
+      return `rgb(${r},${g},${b})`;
+    }
+  }
+  return scale[scale.length - 1][1];
+}
+
+
+function buildRosePetalBandsTraces(
+  cfg: {
+    title: string;
+    values: (r: SpiralRow) => number | null;
+    colorScale: [number, string][];
+    cmin: number;
+    cmax: number;
+  },
+  byRootRep: Map<string, Map<number, SpiralRow>>,
+  selectedReps: number[],
+  repRanks: Map<number, number>,
+  opts?: {
+    m?: number;          // rhodonea frequency (petal count if odd); default = NODES.length
+    coreRadius?: number; // how close to origin petals begin
+    bandStep?: number;   // radial thickness per replicate band
+    widthFrac?: number;  // angular width as fraction of π/m (0..1], default ~0.96
+    power?: number;      // tip roundness (>=1), default 1.6
+    thetaSamples?: number; // sampling resolution per half-petal
+  }
+  ): Partial<ScatterData>[] {
+  const traces: Partial<ScatterData>[] = [];
+  if (!NODES.length) return traces;
+
+  const m = Math.max(1, opts?.m ?? NODES.length);  // choose odd m to get m petals
+  const coreRadius = Math.max(0.02, opts?.coreRadius ?? 0.08);
+  const bandStep = Math.max(0.03, opts?.bandStep ?? 0.18);
+  const widthFrac = Math.min(1, Math.max(0.2, opts?.widthFrac ?? 0.96));
+  const power = Math.max(1, opts?.power ?? 1.6);
+  const thetaSamples = Math.max(32, Math.min(512, opts?.thetaSamples ?? 144));
+
+  // Base angle for each node so its petal is centered at that direction.
+  // For a rose r = cos(mθ), maxima are at θ = 2π*j/m. We shift each node to one of those.
+  const dTheta = (2 * Math.PI) / NODES.length;
+
+  // Half-width (angular) of one petal lobe region:
+  const halfLobe = 0.5 * (Math.PI / m) * widthFrac;
+
+  // Which replicate sits at which band index (stable ordering)
+  const repAtRank = new Map<number, number>();
+  for (const rep of selectedReps) {
+    const rank = repRanks.get(rep);
+    if (rank != null) repAtRank.set(rank, rep);
+  }
+  const maxRank = repAtRank.size ? Math.max(...repAtRank.keys()) : -1;
+
+  // Draw node-by-node, band-by-band
+  for (let armIdx = 0; armIdx < NODES.length; armIdx++) {
+    const node = NODES[armIdx];
+    const perRep = byRootRep.get(node);
+    if (!perRep) continue;
+
+    // Center angle for this node’s lobe
+    const theta0 = armIdx * dTheta;
+
+    for (let k = 0; k <= maxRank; k++) {
+      const rep = repAtRank.get(k);
+      if (rep == null) continue;
+      const row = perRep.get(rep);
+      const val = row ? cfg.values(row) : null;
+      if (val == null || !Number.isFinite(val)) continue;
+
+      const base = coreRadius + k * bandStep;
+      const height = bandStep; // band thickness comes from the rose amplitude
+
+      // Walk around the petal lobe, from left edge to right edge, then back near core to close
+      const xs: number[] = [];
+      const ys: number[] = [];
+
+      // OUTER arc: left -> right along the rhodonea envelope
+      for (let i = 0; i <= thetaSamples; i++) {
+        const t = i / thetaSamples;                       // [0,1]
+        const theta = theta0 - halfLobe + t * (2 * halfLobe);
+        // rose profile centered at theta0
+        const rose = Math.max(0, Math.cos(m * (theta - theta0)));
+        const r = base + height * Math.pow(rose, power);
+        xs.push(r * Math.cos(theta));
+        ys.push(r * Math.sin(theta));
+      }
+
+      // INNER arc: right -> left close to center (slightly inside base to make “band” closed)
+      const inner = Math.max(0.001, base - 0.01); // tiny inset so fill looks crisp at core
+      for (let i = thetaSamples; i >= 0; i--) {
+        const t = i / thetaSamples;
+        const theta = theta0 - halfLobe + t * (2 * halfLobe);
+        xs.push(inner * Math.cos(theta));
+        ys.push(inner * Math.sin(theta));
+      }
+
+      traces.push({
+        type: "scatter",
+        mode: "lines",
+        x: xs,
+        y: ys,
+        fill: "toself",
+        fillcolor: colorFromScale(val, cfg.cmin, cfg.cmax, cfg.colorScale),
+        line: { width: 0.6, color: "rgba(255,255,255,0.08)" },
+        hovertemplate:
+          `${node}, rep ${rep}<br>${cfg.title}: ${Number(val).toFixed(3)}<extra></extra>`,
+        showlegend: false,
+        name: `${node}-rank${k}`,
+      });
+    }
+  }
+  return traces;
 }
 
 function buildRoundedPetalSegmentsTraces(
@@ -1082,15 +1224,17 @@ function buildMarkersTrace(
     showlegend: false,
   };
 }
-//
+
 function ChartCard({
   title,
   traces,
   onReady,
+  centerRadius = 0.09, // NEW
 }: {
   title: string;
   traces: Partial<Data>[];
   onReady?: (el: PlotlyHTMLElement | null) => void;
+  centerRadius?: number;
 }) {
   const layout: Partial<Layout> = {
     title: { text: title, font: { color: "white" } },
@@ -1101,7 +1245,21 @@ function ChartCard({
     showlegend: false,
     paper_bgcolor: "black",
     plot_bgcolor: "black",
+    // NEW: white flower core
+    shapes: [
+      {
+        type: "circle",
+        xref: "x", yref: "y",
+        x0: -centerRadius, y0: -centerRadius,
+        x1:  centerRadius, y1:  centerRadius,
+        line: { width: 0 },
+        fillcolor: "white",
+        layer: "above",
+        opacity: 1,
+      },
+    ],
   };
+
   const config: Partial<Config> = { displayModeBar: false, responsive: true };
 
   return (
