@@ -551,7 +551,7 @@ export default function SpiralPage() {
               className="px-4 py-2 rounded bg-white text-black hover:bg-gray-100"
               title="Run the choreography"
             >
-              Start Dance
+              Start Twist
             </button>
           )}
 
