@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
         br.root_name,
         j.d_pi_1, j.d_pi_2, j.d_pi_3, j.d_pi_4,
         j.d_m_1,  j.d_m_2,  j.d_m_3,  j.d_m_4
-      FROM emtr_best_rep AS br
+      FROM emtr_all_info AS br
       LEFT JOIN emtr_jobs AS j ON j.job_id = br.job_id
       WHERE br.job_id = ? AND br.method = ?
       ORDER BY br.created_at DESC

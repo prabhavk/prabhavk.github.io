@@ -10,17 +10,8 @@ const Plot = dynamic<PlotParams>(() => import("react-plotly.js"), { ssr: false }
 
 /* ---------------- Types ---------------- */
 
-type Pt = [number, number]; // [iter, ecd_ll]
-
-type ApiOk = {
-  ok: true;
-  job_id: string;
-  method: string;
-  points: Pt[];
-};
-type ApiErr = { ok: false; error: string };
-
 type MethodKey = "dirichlet" | "parsimony" | "ssh";
+
 const METHOD_LABEL: Record<MethodKey, string> = {
   dirichlet: "Dirichlet",
   parsimony: "Parsimony",
@@ -28,21 +19,31 @@ const METHOD_LABEL: Record<MethodKey, string> = {
 };
 
 type SummaryRow = {
-  ok: true;
-  method: MethodKey;
-  root: number[] | null;
+  root: string | null;
   num_iterations: number;
-  initial_ll: number | null;
-  final_ll: number | null;
+  ll_init: number | null;
   ecd_ll_first: number | null;
-  ecd_ll_final: number | null;  
+  ecd_ll_final: number | null;
+  ll_final: number | null;
+  root_prob_final: number[] | null;
 };
-type SummaryResp =
-  | { ok: true; job_id: string; rows: SummaryRow[] }
-  | { ok: false; error: string };
+
+type Pt = [number, number]; // [iter, ecd_ll]
+
+type ApiOk = {
+  ok: true;
+  job_id: string;
+  method: MethodKey;
+  rep: number | null;
+  points: Pt[];
+  summary: SummaryRow | null;
+};
+
+type ApiErr = { ok: false; error: string };
 
 /* ---------------- Helpers ---------------- */
 
+/** Parse server payload into Pt[]. Accepts [[iter, ll], ...] or [{iter,ll}, ...]. */
 function normalizePoints(x: unknown): Pt[] {
   if (!Array.isArray(x)) return [];
   const out: Pt[] = [];
@@ -61,36 +62,28 @@ function normalizePoints(x: unknown): Pt[] {
   return out;
 }
 
-/** Gap^alpha transform for composite plot */
+/**
+ * Gap^alpha transform for ECD-LL curves (composite plot only).
+ * - Let best = max(ll). gap = best - ll >= 0.
+ * - y' = (gap / maxGap)^alpha in [0,1]. (0 best, 1 worst/earliest)
+ * - alpha in (0,1): compresses big early gaps, stretches late small gaps.
+ */
 function transformGapPower(points: Pt[], alpha: number = 0.5, eps = 1e-9): Pt[] {
   if (!Array.isArray(points) || points.length === 0) return points;
   const ys = points.map(([, ll]) => ll).filter((v) => Number.isFinite(v));
   if (ys.length === 0) return points;
+
   const best = Math.max(...ys);
   const gaps = points.map(([, ll]) => best - ll);
   const gMax = Math.max(...gaps.filter((g) => Number.isFinite(g)), 0);
 
-  return points.map(([it, _ll], i) => {
+  return points.map(([it], i) => {
     const g = gaps[i];
     if (!Number.isFinite(g)) return [it, 0];
     const y = Math.pow(g / (gMax + eps), alpha);
     return [it, y];
   });
 }
-
-function transformLogGap(points: Pt[], eps = 1e-12): Pt[] {
-  if (!points.length) return points;
-  const ys = points.map(([, ll]) => ll).filter((v) => Number.isFinite(v));
-  if (!ys.length) return points;
-  const best = Math.max(...ys);
-  return points.map(([it, ll]) => [it, Math.log(best - ll + eps)]);
-}
-
-const STYLE: Record<MethodKey, Partial<PlotData>> = {
-  dirichlet: { line: { dash: "solid", width: 2 } },
-  parsimony: { line: { dash: "dash", width: 2 } },
-  ssh: { line: { dash: "dot", width: 2 } },
-};
 
 /* ---------------- Page ---------------- */
 
@@ -99,17 +92,19 @@ export default function EcdllPage() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Raw points per method
+  // available reps and selected rep
+  const [reps, setReps] = useState<number[]>([]);
+  const [rep, setRep] = useState<number | null>(null);
+
+  // Raw points per method (selected rep)
   const [dirPts, setDirPts] = useState<Pt[] | null>(null);
   const [parPts, setParPts] = useState<Pt[] | null>(null);
   const [sshPts, setSshPts] = useState<Pt[] | null>(null);
 
-  // Summary rows
-  const [summary, setSummary] = useState<Record<MethodKey, SummaryRow | null>>({
-    dirichlet: null,
-    parsimony: null,
-    ssh: null,
-  });
+  // Summaries per method (selected rep)
+  const [dirSum, setDirSum] = useState<SummaryRow | null>(null);
+  const [parSum, setParSum] = useState<SummaryRow | null>(null);
+  const [sshSum, setSshSum] = useState<SummaryRow | null>(null);
 
   // Tuning for composite transform
   const [alpha, setAlpha] = useState<number>(0.5);
@@ -124,11 +119,35 @@ export default function EcdllPage() {
     }
   }, []);
 
+  // Fetch list of reps for this job
+  const loadReps = useCallback(
+    async (jobId: string) => {
+      const u = new URL("/api/ecdll/reps", window.location.origin);
+      u.searchParams.set("job_id", jobId);
+      const res = await fetch(u.toString(), { cache: "no-store" });
+      const j = (await res.json()) as { ok: boolean; reps?: number[]; error?: string };
+      if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
+      const list = j.reps ?? [];
+      setReps(list);
+      if (list.length && (rep === null || !list.includes(rep))) {
+        setRep(list[0]); // default to first available rep
+      }
+    },
+    [rep]
+  );
+
+  useEffect(() => {
+    if (job) {
+      loadReps(job).catch((e) => setErr(e instanceof Error ? e.message : "Failed to load repetitions"));
+    }
+  }, [job, loadReps]);
+
   const fetchOne = useCallback(
-    async (method: MethodKey): Promise<Pt[]> => {
+    async (method: MethodKey, repSel: number | null): Promise<{ pts: Pt[]; sum: SummaryRow | null }> => {
       const u = new URL("/api/ecdll", window.location.origin);
       u.searchParams.set("job_id", job);
       u.searchParams.set("method", method);
+      if (repSel !== null) u.searchParams.set("rep", String(repSel));
 
       const res = await fetch(u.toString(), { cache: "no-store" });
       const ct = res.headers.get("content-type") || "";
@@ -140,86 +159,62 @@ export default function EcdllPage() {
       }
       const j = (await res.json()) as ApiOk | ApiErr;
 
-      if (!res.ok || !("ok" in j) || (j as ApiErr).ok === false) {
-        const msg = "ok" in j && (j as ApiErr).ok === false ? (j as ApiErr).error : `HTTP ${res.status}`;
+      if (!res.ok || !("ok" in j) || j.ok === false) {
+        const msg = "error" in j ? j.error : `HTTP ${res.status}`;
         throw new Error(`${METHOD_LABEL[method]}: ${msg}`);
       }
-      return normalizePoints((j as ApiOk).points);
+      const ok = j as ApiOk;
+      return { pts: normalizePoints(ok.points), sum: ok.summary };
     },
     [job]
   );
 
-  const fetchSummary = useCallback(async (): Promise<Record<MethodKey, SummaryRow | null>> => {
-    const u = new URL("/api/ecdll/summary", window.location.origin);
-    u.searchParams.set("job_id", job);
-
-    const res = await fetch(u.toString(), { cache: "no-store" });
-    const ct = res.headers.get("content-type") || "";
-    if (!ct.toLowerCase().includes("application/json")) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Expected JSON for summary, got ${ct || "unknown"} (HTTP ${res.status}). ${body.slice(0, 160)}`);
-    }
-    const j = (await res.json()) as SummaryResp;
-    if (!res.ok || j.ok === false) {
-      const msg = j.ok === false ? j.error : `HTTP ${res.status}`;
-      throw new Error(msg);
-    }
-
-    const map: Record<MethodKey, SummaryRow | null> = {
-      dirichlet: null,
-      parsimony: null,
-      ssh: null,
-    };
-    for (const r of j.rows) {
-      map[r.method] = r;
-    }
-    return map;
-  }, [job]);
-
   const load = useCallback(async () => {
     if (!job) {
       setErr("No job selected. Choose a job on the Precomputed Results page.");
-      setDirPts(null);
-      setParPts(null);
-      setSshPts(null);
-      setSummary({ dirichlet: null, parsimony: null, ssh: null });
+      setDirPts(null); setParPts(null); setSshPts(null);
+      setDirSum(null); setParSum(null); setSshSum(null);
+      return;
+    }
+    if (rep === null) {
+      setErr("No repetition selected.");
       return;
     }
     setErr(null);
     setLoading(true);
     try {
-      const [d, p, s, sum] = await Promise.allSettled([
-        fetchOne("dirichlet"),
-        fetchOne("parsimony"),
-        fetchOne("ssh"),
-        fetchSummary(),
+      const [d, p, s] = await Promise.allSettled([
+        fetchOne("dirichlet", rep),
+        fetchOne("parsimony", rep),
+        fetchOne("ssh", rep),
       ]);
 
-      setDirPts(d.status === "fulfilled" ? d.value : []);
-      setParPts(p.status === "fulfilled" ? p.value : []);
-      setSshPts(s.status === "fulfilled" ? s.value : []);
-      setSummary(sum.status === "fulfilled" ? sum.value : { dirichlet: null, parsimony: null, ssh: null });
+      setDirPts(d.status === "fulfilled" ? d.value.pts : []);
+      setParPts(p.status === "fulfilled" ? p.value.pts : []);
+      setSshPts(s.status === "fulfilled" ? s.value.pts : []);
+
+      setDirSum(d.status === "fulfilled" ? d.value.sum : null);
+      setParSum(p.status === "fulfilled" ? p.value.sum : null);
+      setSshSum(s.status === "fulfilled" ? s.value.sum : null);
 
       const errs: string[] = [];
       if (d.status === "rejected") errs.push(d.reason?.message || "Dirichlet fetch failed");
       if (p.status === "rejected") errs.push(p.reason?.message || "Parsimony fetch failed");
       if (s.status === "rejected") errs.push(s.reason?.message || "SSH fetch failed");
-      if (sum.status === "rejected") errs.push(sum.reason?.message || "Summary fetch failed");
       if (errs.length) setErr(errs.join(" | "));
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to load ECD-LL data");
-      setDirPts([]);
-      setParPts([]);
-      setSshPts([]);
-      setSummary({ dirichlet: null, parsimony: null, ssh: null });
+      setDirPts([]); setParPts([]); setSshPts([]);
+      setDirSum(null); setParSum(null); setSshSum(null);
     } finally {
       setLoading(false);
     }
-  }, [job, fetchOne, fetchSummary]);
+  }, [job, rep, fetchOne]);
 
+  // re-load when rep changes
   useEffect(() => {
-    if (job) void load();
-  }, [job, load]);
+    if (job && rep !== null) void load();
+  }, [job, rep, load]);
 
   /* -------- Layouts (integer x ticks everywhere) -------- */
 
@@ -253,42 +248,31 @@ export default function EcdllPage() {
 
   const compositeTraces = useMemo(() => {
     const traces: Partial<PlotData>[] = [];
-    if (dirPts && dirPts.length) {
-      const t = transformGapPower(dirPts, alpha);
-      traces.push({ type: "scatter", mode: "lines", name: "Dirichlet", x: t.map((p) => p[0]), y: t.map((p) => p[1]), ...STYLE.dirichlet });
-    }
-    if (parPts && parPts.length) {
-      const t = transformGapPower(parPts, alpha);
-      traces.push({ type: "scatter", mode: "lines", name: "Parsimony", x: t.map((p) => p[0]), y: t.map((p) => p[1]), ...STYLE.parsimony });
-    }
-    if (sshPts && sshPts.length) {
-      const t = transformGapPower(sshPts, alpha);
-      traces.push({ type: "scatter", mode: "lines", name: "SSH", x: t.map((p) => p[0]), y: t.map((p) => p[1]), ...STYLE.ssh });
-    }
+    const push = (name: string, pts: Pt[] | null) => {
+      if (!pts || !pts.length) return;
+      const t = transformGapPower(pts, alpha);
+      traces.push({
+        type: "scatter",
+        mode: "lines",
+        name,
+        x: t.map((p) => p[0]),
+        y: t.map((p) => p[1]),
+      });
+    };
+    push("Dirichlet", dirPts);
+    push("Parsimony", parPts);
+    push("SSH", sshPts);
     return traces;
   }, [dirPts, parPts, sshPts, alpha]);
 
-  const dirTrace = useMemo<Partial<PlotData> | null>(() => {
-    if (!dirPts || !dirPts.length) return null;
-    return { type: "scatter", mode: "lines", name: "Dirichlet", x: dirPts.map((p) => p[0]), y: dirPts.map((p) => p[1]), ...STYLE.dirichlet };
-  }, [dirPts]);
+  const makeTrace = (name: string, pts: Pt[] | null): Partial<PlotData> | null =>
+    pts && pts.length
+      ? { type: "scatter", mode: "lines", name, x: pts.map((p) => p[0]), y: pts.map((p) => p[1]) }
+      : null;
 
-  const parTrace = useMemo<Partial<PlotData> | null>(() => {
-    if (!parPts || !parPts.length) return null;
-    return { type: "scatter", mode: "lines", name: "Parsimony", x: parPts.map((p) => p[0]), y: parPts.map((p) => p[1]), ...STYLE.parsimony };
-  }, [parPts]);
-
-  const sshTrace = useMemo<Partial<PlotData> | null>(() => {
-    if (!sshPts || !sshPts.length) return null;
-    return { type: "scatter", mode: "lines", name: "SSH", x: sshPts.map((p) => p[0]), y: sshPts.map((p) => p[1]), ...STYLE.ssh };
-  }, [sshPts]);
-
-  /* -------- Table helpers -------- */
-
-  const formatRoot = (root: number[] | null) =>
-    root ? root.map((v) => v.toFixed(6)).join(", ") : "—";
-
-  const S: MethodKey[] = ["dirichlet", "parsimony", "ssh"];
+  const dirTrace = useMemo(() => makeTrace("Dirichlet", dirPts), [dirPts]);
+  const parTrace = useMemo(() => makeTrace("Parsimony", parPts), [parPts]);
+  const sshTrace = useMemo(() => makeTrace("SSH", sshPts), [sshPts]);
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-5">
@@ -297,47 +281,73 @@ export default function EcdllPage() {
         <div className="text-sm ml-2">
           Job: <span className="font-mono">{job || "(none)"} </span>
         </div>
+
+        {/* Repetition selector */}
+        <label className="ml-6 text-sm flex items-center gap-2">
+          Repetition:
+          <select
+            className="border rounded px-2 py-1 text-sm"
+            value={rep ?? ""}
+            onChange={(e) => setRep(e.target.value ? Number(e.target.value) : null)}
+          >
+            {reps.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <button
           type="button"
           onClick={() => void load()}
           className="ml-auto px-4 py-2 rounded bg-black text-white disabled:opacity-50"
-          disabled={!job || loading}
+          disabled={!job || rep === null || loading}
         >
           {loading ? "Loading…" : "Reload"}
         </button>
       </div>
 
-      {/* Summary table */}
+      {/* Summary table (for the selected repetition) */}
       <section className="border rounded p-3">
-        <h2 className="text-lg font-semibold mb-3">Run summary</h2>
-        <div className="overflow-auto">
+        <h2 className="text-lg font-semibold mb-2">Summary (rep {rep ?? "–"})</h2>
+        <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
-            <thead className="text-left">
-              <tr className="border-b">
-                <th className="py-2 pr-3">Method</th>
-                <th className="py-2 pr-3">root</th>
-                <th className="py-2 pr-3">num_iterations</th>
-                <th className="py-2 pr-3">initial_ll</th>
-                <th className="py-2 pr-3">final_ll</th>
-                <th className="py-2 pr-3">ecd_ll_first</th>
-                <th className="py-2 pr-3">ecd_ll_final</th>                
+            <thead>
+              <tr className="text-left border-b">
+                <th className="py-2 pr-4">Method</th>
+                <th className="py-2 pr-4">Root</th>
+                <th className="py-2 pr-4">Num Iterations</th>
+                <th className="py-2 pr-4">LL Init</th>
+                <th className="py-2 pr-4">ECD-LL First</th>
+                <th className="py-2 pr-4">ECD-LL Final</th>
+                <th className="py-2 pr-4">LL Final</th>
               </tr>
             </thead>
             <tbody>
-              {S.map((m) => {
-                const r = summary[m];
-                return (
-                  <tr key={m} className="border-b last:border-0">
-                    <td className="py-2 pr-3 font-medium">{METHOD_LABEL[m]}</td>
-                    <td className="py-2 pr-3 font-mono">{r ? formatRoot(r.root) : "—"}</td>
-                    <td className="py-2 pr-3">{r?.num_iterations ?? "—"}</td>
-                    <td className="py-2 pr-3 font-mono">{r?.initial_ll ?? "—"}</td>
-                    <td className="py-2 pr-3 font-mono">{r?.final_ll ?? "—"}</td>
-                    <td className="py-2 pr-3 font-mono">{r?.ecd_ll_first ?? "—"}</td>
-                    <td className="py-2 pr-3 font-mono">{r?.ecd_ll_final ?? "—"}</td>                    
-                  </tr>
-                );
-              })}
+              {[
+                ["Dirichlet", dirSum] as const,
+                ["Parsimony", parSum] as const,
+                ["SSH", sshSum] as const,
+              ].map(([name, s]) => (
+                <tr key={name} className="border-b">
+                  <td className="py-2 pr-4">{name}</td>
+                  <td className="py-2 pr-4">{s?.root ?? "—"}</td>
+                  <td className="py-2 pr-4">{s?.num_iterations ?? "—"}</td>
+                  <td className="py-2 pr-4">
+                    {s?.ll_init != null ? s.ll_init.toFixed(3) : "—"}
+                  </td>
+                  <td className="py-2 pr-4">
+                    {s?.ecd_ll_first != null ? s.ecd_ll_first.toFixed(3) : "—"}
+                  </td>
+                  <td className="py-2 pr-4">
+                    {s?.ecd_ll_final != null ? s.ecd_ll_final.toFixed(3) : "—"}
+                  </td>
+                  <td className="py-2 pr-4">
+                    {s?.ll_final != null ? s.ll_final.toFixed(3) : "—"}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -375,8 +385,21 @@ export default function EcdllPage() {
       {/* Individual plots */}
       <section className="border rounded p-3">
         <h2 className="text-lg font-semibold mb-2">Dirichlet</h2>
-        {dirTrace ? (
-          <Plot data={[dirTrace]} layout={baseLayout} config={{ displayModeBar: false, responsive: true }} style={{ width: "100%", height: "100%" }} />
+        {dirPts && dirPts.length ? (
+          <Plot
+            data={[
+              {
+                type: "scatter",
+                mode: "lines",
+                name: "Dirichlet",
+                x: dirPts.map((p) => p[0]),
+                y: dirPts.map((p) => p[1]),
+              } as Partial<PlotData>,
+            ]}
+            layout={baseLayout}
+            config={{ displayModeBar: false, responsive: true }}
+            style={{ width: "100%", height: "100%" }}
+          />
         ) : (
           <div className="text-sm text-gray-600">No ECD-LL data.</div>
         )}
@@ -384,8 +407,21 @@ export default function EcdllPage() {
 
       <section className="border rounded p-3">
         <h2 className="text-lg font-semibold mb-2">Parsimony</h2>
-        {parTrace ? (
-          <Plot data={[parTrace]} layout={baseLayout} config={{ displayModeBar: false, responsive: true }} style={{ width: "100%", height: "100%" }} />
+        {parPts && parPts.length ? (
+          <Plot
+            data={[
+              {
+                type: "scatter",
+                mode: "lines",
+                name: "Parsimony",
+                x: parPts.map((p) => p[0]),
+                y: parPts.map((p) => p[1]),
+              } as Partial<PlotData>,
+            ]}
+            layout={baseLayout}
+            config={{ displayModeBar: false, responsive: true }}
+            style={{ width: "100%", height: "100%" }}
+          />
         ) : (
           <div className="text-sm text-gray-600">No ECD-LL data.</div>
         )}
@@ -393,8 +429,21 @@ export default function EcdllPage() {
 
       <section className="border rounded p-3">
         <h2 className="text-lg font-semibold mb-2">SSH</h2>
-        {sshTrace ? (
-          <Plot data={[sshTrace]} layout={baseLayout} config={{ displayModeBar: false, responsive: true }} style={{ width: "100%", height: "100%" }} />
+        {sshPts && sshPts.length ? (
+          <Plot
+            data={[
+              {
+                type: "scatter",
+                mode: "lines",
+                name: "SSH",
+                x: sshPts.map((p) => p[0]),
+                y: sshPts.map((p) => p[1]),
+              } as Partial<PlotData>,
+            ]}
+            layout={baseLayout}
+            config={{ displayModeBar: false, responsive: true }}
+            style={{ width: "100%", height: "100%" }}
+          />
         ) : (
           <div className="text-sm text-gray-600">No ECD-LL data.</div>
         )}

@@ -1,14 +1,23 @@
 // public/wasm/worker.js
 
 // ---------- Upload config ----------
-const API_BASE = ""; // "" => same origin; or e.g. "https://emtr-web.vercel.app"
-const AUTH = "";     // optional: "Bearer <token)"
+const API_BASE = self.API_BASE || ""; // "" => same origin; or e.g. "https://emtr-web.vercel.app"
+const AUTH = "";                      // optional: "Bearer <token)"
+
+// Allow overriding endpoint paths without rebuilding the worker
+const ENDPOINTS = {
+  rows: (jobId) => `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/rows`,
+  allinfo: () => `${API_BASE}${self.ALL_INFO_PATH || "/api/allinfo"}`,
+};
 
 // batching/backoff
 const MAX_BATCH = 200;
 const FLUSH_INTERVAL_MS = 1000;
 const RETRY_BASE_MS = 1500;
 const RETRY_MAX_MS = 15000;
+
+// Beacon payload budget (conservative; some browsers allow ~64KB)
+const BEACON_MAX_BYTES = 60000;
 
 // ---------- Upload state ----------
 let jobIdForThisRun = "";
@@ -19,35 +28,115 @@ let retryDelay = RETRY_BASE_MS;
 let startedAtMs = 0;
 let flushSeq = 0;
 
-// Track [EM_BEST] handling
+// Track [EM_AllInfo] handling
 let bestSeenCount = 0;            // how many times we successfully sent
 let lastBestObj = null;           // last parsed best object
 let bestUploaded = false;         // whether last best object was uploaded OK
 
+// Coalesce + suppress for [EM_AllInfo]
+let pendingBestObj = null;
+let bestFlushTimer = null;
+const BEST_UPLOAD_DEBOUNCE_MS = 500;
+let bestEndpointMissing = false;  // set true after a 404/410 so we stop trying
+
+// If the rows endpoint is permanently failing (e.g., table missing), stop retrying
+let rowsEndpointDisabled = false;
+let rowsEndpointErrorReason = "";
+let artifactSeq = 0;
+
 // ---------- helpers ----------
+function approxBytesOfRow(r) {
+  // crude but stable estimate
+  return 8 + JSON.stringify(r).length + 1;
+}
+
+function approxBytesOfJson(obj) {
+  return JSON.stringify(obj).length;
+}
+
+function canUseBeacon() {
+  try {
+    return typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function";
+  } catch {
+    return false;
+  }
+}
+
+function tryBeacon(url, obj) {
+  try {
+    const blob = new Blob([JSON.stringify(obj)], { type: "application/json" });
+    return navigator.sendBeacon(url, blob);
+  } catch {
+    return false;
+  }
+}
+
+async function postJSON(url, obj, { preferBeacon = false, keepalive = false } = {}) {
+  // Small payload + allowed? try Beacon first
+  if (preferBeacon && canUseBeacon() && approxBytesOfJson(obj) <= BEACON_MAX_BYTES) {
+    const ok = tryBeacon(url, obj);
+    if (ok) return { ok: true, via: "beacon" };
+    // fall through to fetch
+  }
+
+  // Fallback to fetch (optionally keepalive)
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(AUTH ? { authorization: AUTH } : {}),
+    },
+    body: JSON.stringify(obj),
+    keepalive,
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const err = new Error(`HTTP ${res.status} ${res.statusText} :: ${text.slice(0, 400)}`);
+    err.status = res.status;
+    err.bodyText = text || "";
+    err.permanent = res.status === 404 || res.status === 410;
+    throw err;
+  }
+  return { ok: true, via: "fetch" };
+}
+
+function classifyPermanentRowsError(err) {
+  if (!err) return { permanent: false, reason: "" };
+  const status = err.status | 0;
+  const msg = (err.bodyText || err.message || "").toLowerCase();
+
+  // 404/410 are permanent for sure
+  if (status === 404 || status === 410) {
+    return { permanent: true, reason: `endpoint returned ${status}` };
+  }
+
+  // Common "table missing" signals -> permanent until server is fixed
+  const tableMissing =
+    msg.includes("doesn't exist") ||
+    msg.includes("does not exist") ||
+    msg.includes("no such table") ||
+    msg.includes("unknown table") ||
+    msg.includes("table") && msg.includes("not found");
+
+  if (status === 500 && tableMissing) {
+    return { permanent: true, reason: "target table is missing on the server" };
+  }
+
+  return { permanent: false, reason: "" };
+}
+
 async function upsertJobMetadata(jobId, cfg) {
   try {
-    const res = await fetch(`${API_BASE}/api/jobs`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(AUTH ? { authorization: AUTH } : {}),
-      },
-      keepalive: true,
-      body: JSON.stringify({
-        job_id: jobId,
-        thr: cfg.thr,
-        reps: cfg.reps,
-        max_iter: cfg.maxIter,
-        D_pi: cfg.D_pi,
-        D_M: cfg.D_M,
-        status: "started",
-      }),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`HTTP ${res.status} ${res.statusText} :: ${text.slice(0, 300)}`);
-    }
+    await postJSON(`${API_BASE}/api/jobs`, {
+      job_id: jobId,
+      thr: cfg.thr,
+      reps: cfg.reps,
+      max_iter: cfg.maxIter,
+      D_pi: cfg.D_pi,
+      D_M: cfg.D_M,
+      status: "started",
+    }, { keepalive: true }); // harmless outside teardown
     postMessage({ type: "log", line: "ℹ︎ job config saved" });
   } catch (err) {
     postMessage({ type: "log", line: `⚠️ failed to save job config: ${String(err)}` });
@@ -74,10 +163,6 @@ async function setJobStatus(jobId, payload) {
   } catch (e) {
     postMessage({ type: "log", line: `⚠️ job patch error: ${String(e)}` });
   }
-}
-
-function approxBytesOfRow(r) {
-  return 8 + JSON.stringify(r).length + 1;
 }
 
 function summarizeBatch(batch) {
@@ -150,12 +235,80 @@ function queueRow(jobId, row) {
   }
 }
 
+function takeByteCappedBatch(maxRows, maxBytes) {
+  const batch = [];
+  let bytes = 0;
+  while (batch.length < maxRows && rowBuffer.length) {
+    const next = rowBuffer[0];
+    const cost = approxBytesOfRow(next);
+    if (batch.length > 0 && bytes + cost > maxBytes) break; // keep at least one row
+    batch.push(rowBuffer.shift());
+    bytes += cost;
+  }
+  return batch;
+}
+
+function encodeCsv(rows) {
+  const header = [
+    "job_id","method","root","rep","iter",
+    "ll_init","ecd_ll_first","ecd_ll_final","ll_final"
+  ];
+  const toCell = (v) => {
+    if (v == null || Number.isNaN(v)) return "";
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+    };
+  const lines = [header.join(",")];
+  for (const r of rows) {
+    lines.push([
+      jobIdForThisRun,
+      r.method ?? "",
+      r.root ?? "",
+      Number.isFinite(r.rep) ? r.rep : "",
+      Number.isFinite(r.iter) ? r.iter : "",
+      Number.isFinite(r.ll_init) ? r.ll_init : "",
+      Number.isFinite(r.ecd_ll_first) ? r.ecd_ll_first : "",
+      Number.isFinite(r.ecd_ll_final) ? r.ecd_ll_final : "",
+      Number.isFinite(r.ll_final) ? r.ll_final : "",
+    ].map(toCell).join(","));
+  }
+  return new TextEncoder().encode(lines.join("\n"));
+}
+
+function emitRowsAsArtifact(rows, reason) {
+  try {
+    const name = `llchange_fallback_${jobIdForThisRun}_${++artifactSeq}.csv`;
+    const bytes = encodeCsv(rows);
+    postMessage({
+      type: "log",
+      line: `📦 Rows saved as artifact "${name}" (${bytes.length}B) due to: ${reason}`
+    });
+    postMessage({ type: "artifact", name, bytes }, [bytes.buffer]);
+  } catch (e) {
+    postMessage({ type: "log", line: `⚠️ failed to emit fallback artifact: ${String(e)}` });
+  }
+}
+
 async function flushNow(jobId, { final }) {
   if (inflight) return false;
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
   if (!rowBuffer.length) return false;
 
-  const batch = rowBuffer.splice(0, Math.min(rowBuffer.length, MAX_BATCH));
+  // If rows endpoint is disabled, just dump to artifacts and skip network
+  if (rowsEndpointDisabled) {
+    const batch = rowBuffer.splice(0, Math.min(rowBuffer.length, MAX_BATCH));
+    const id = ++flushSeq;
+    emitRowsAsArtifact(batch, rowsEndpointErrorReason || "rows endpoint disabled");
+    postMessage({ type: "log", line: `[sent #${id}] skipped network (endpoint disabled) · remaining buffer: ${rowBuffer.length}` });
+    if (rowBuffer.length) setTimeout(() => void flushNow(jobId, { final }), 0);
+    return true;
+  }
+
+  // For final flush, keep the payload small enough for Beacon.
+  const batch = final && canUseBeacon()
+    ? takeByteCappedBatch(MAX_BATCH, BEACON_MAX_BYTES - 512) // small header margin
+    : rowBuffer.splice(0, Math.min(rowBuffer.length, MAX_BATCH));
+
   const { methodStr, minRep, maxRep, minIter, maxIter, approxBytes } = summarizeBatch(batch);
   const id = ++flushSeq;
 
@@ -167,31 +320,49 @@ async function flushNow(jobId, { final }) {
   inflight = true;
   const t0 = (typeof performance !== "undefined" ? performance.now() : Date.now());
   try {
-    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/rows`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(AUTH ? { authorization: AUTH } : {}),
-      },
-      keepalive: !!final,
-      body: JSON.stringify({ rows: batch }),
-    });
+    const result = await postJSON(
+      ENDPOINTS.rows(jobId),
+      { rows: batch },
+      {
+        // prefer Beacon only for "final" drains
+        preferBeacon: !!final,
+        keepalive: !!final, // helps if Beacon not available
+      }
+    );
 
     const t1 = (typeof performance !== "undefined" ? performance.now() : Date.now());
     const ms = Math.round(t1 - t0);
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`HTTP ${res.status} ${res.statusText} :: ${text.slice(0, 400)}`);
-    }
-
     retryDelay = RETRY_BASE_MS;
-    postMessage({ type: "log", line: `[sent #${id}] ok ${res.status} in ${ms}ms · remaining buffer: ${rowBuffer.length}` });
+    postMessage({
+      type: "log",
+      line: `[sent #${id}] ok via ${result.via} in ${ms}ms · remaining buffer: ${rowBuffer.length}`
+    });
   } catch (err) {
-    rowBuffer.unshift(...batch);
-    postMessage({ type: "log", line: `❌ [sent #${id}] ${String(err)} — retrying in ${retryDelay}ms (buffer: ${rowBuffer.length} rows)` });
-    setTimeout(() => void flushNow(jobId, { final }), retryDelay);
-    retryDelay = Math.min(Math.floor(retryDelay * 1.8), RETRY_MAX_MS);
+    const { permanent, reason } = classifyPermanentRowsError(err);
+    if (permanent) {
+      // Stop retrying network; route future batches to artifacts
+      rowsEndpointDisabled = true;
+      rowsEndpointErrorReason = reason || "permanent server error";
+      postMessage({
+        type: "log",
+        line:
+`🛑 rows endpoint permanently failing (${rowsEndpointErrorReason}); dumping current + future rows as artifacts.
+   Check API_BASE="${API_BASE}" and ensure the backend exposes ${ENDPOINTS.rows("<jobId>")} and the required table exists.`,
+      });
+      // Put rows back then dump them immediately as artifact to preserve order
+      rowBuffer.unshift(...batch);
+      const dump = rowBuffer.splice(0, Math.min(rowBuffer.length, MAX_BATCH));
+      emitRowsAsArtifact(dump, rowsEndpointErrorReason);
+    } else {
+      // transient: put rows back at the front (preserve ordering) and retry
+      rowBuffer.unshift(...batch);
+      postMessage({
+        type: "log",
+        line: `❌ [sent #${id}] ${String(err)} — retrying in ${retryDelay}ms (buffer: ${rowBuffer.length} rows)`
+      });
+      setTimeout(() => void flushNow(jobId, { final }), retryDelay);
+      retryDelay = Math.min(Math.floor(retryDelay * 1.8), RETRY_MAX_MS);
+    }
   } finally {
     inflight = false;
   }
@@ -212,7 +383,7 @@ async function drainAll(jobId) {
   postMessage({ type: "log", line: `[transmission complete]` });
 }
 
-/* ---------------- [EM_BEST] handling ---------------- */
+/* ---------------- [EM_AllInfo] handling ---------------- */
 
 function normalizeBestObject(raw) {
   // Expect shape like: { parsimony: {...}, dirichlet: {...}, ssh: {...} }
@@ -241,43 +412,56 @@ function normalizeBestObject(raw) {
   return out;
 }
 
-async function uploadBest(jobId, bestRaw) {
+async function uploadBest(jobId, bestRaw, { preferBeacon = false } = {}) {
+  if (bestEndpointMissing) return false;
+
   const shaped = normalizeBestObject(bestRaw);
   if (!shaped) {
-    postMessage({ type: "log", line: "⚠️ [EM_BEST] payload shape not recognized; skipping" });
+    postMessage({ type: "log", line: "⚠️ [EM_AllInfo] payload shape not recognized; skipping" });
     return false;
   }
 
-  const size = JSON.stringify(shaped).length;
-  postMessage({ type: "log", line: `→ [EM_BEST] upload start (~${size}B)` });
+  const payload = { job_id: jobId, ...shaped };
+  const size = approxBytesOfJson(payload);
+  postMessage({ type: "log", line: `→ [EM_AllInfo] upload start (~${size}B)` });
 
   try {
-    const res = await fetch(`${API_BASE}/api/best`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(AUTH ? { authorization: AUTH } : {}),
-      },
-      keepalive: true,
-      body: JSON.stringify({ job_id: jobId, ...shaped }),
+    const res = await postJSON(ENDPOINTS.allinfo(), payload, {
+      preferBeacon,
+      keepalive: preferBeacon, // helpful fallback if Beacon rejected
     });
-
-    const text = await res.text().catch(() => "");
-    if (!res.ok) {
+    bestSeenCount += 1;
+    postMessage({ type: "log", line: `✅ [EM_AllInfo] upserted (${bestSeenCount}) via ${res.via}` });
+    return true;
+  } catch (e) {
+    if (e && (e.permanent || e.status === 404 || e.status === 410)) {
+      bestEndpointMissing = true;
       postMessage({
         type: "log",
-        line: `⚠️ [EM_BEST] upload failed: HTTP ${res.status} ${res.statusText} :: ${text.slice(0, 300)}`
+        line:
+`🛑 [EM_AllInfo] endpoint not found (HTTP ${e.status}). Further attempts suppressed.
+   Check API_BASE="${API_BASE}" and ALL_INFO_PATH="${self.ALL_INFO_PATH || "/api/allinfo"}" point to a server exposing that route.`,
       });
       return false;
     }
-
-    bestSeenCount += 1;
-    postMessage({ type: "log", line: `✅ [EM_BEST] upserted (${bestSeenCount})` });
-    return true;
-  } catch (e) {
-    postMessage({ type: "log", line: `❌ [EM_BEST] upload error: ${String(e)}` });
+    postMessage({ type: "log", line: `❌ [EM_AllInfo] upload error: ${String(e)}` });
     return false;
   }
+}
+
+function scheduleBestUpload() {
+  if (bestFlushTimer) return;
+  bestFlushTimer = setTimeout(() => {
+    const obj = pendingBestObj;
+    pendingBestObj = null;
+    bestFlushTimer = null;
+    if (obj) {
+      uploadBest(jobIdForThisRun, obj, { preferBeacon: false }).then((ok) => {
+        bestUploaded = ok;
+        if (!ok && !bestEndpointMissing) postMessage({ type: "log", line: "⏳ [EM_AllInfo] will retry at end" });
+      });
+    }
+  }, BEST_UPLOAD_DEBOUNCE_MS);
 }
 
 function handlePrint(txt) {
@@ -299,21 +483,22 @@ function handlePrint(txt) {
   }
 
   // Best-parameters JSON
-  if (jobIdForThisRun && line.startsWith("[EM_BEST]")) {
+  if (jobIdForThisRun && line.startsWith("[EM_AllInfo]")) {
     const brace = line.indexOf("{");
     if (brace !== -1) {
       try {
         const parsed = JSON.parse(line.slice(brace));
         lastBestObj = parsed;
         bestUploaded = false;
-        uploadBest(jobIdForThisRun, parsed).then((ok) => {
-          bestUploaded = ok;
-          if (!ok) postMessage({ type: "log", line: "⏳ [EM_BEST] will retry at end" });
-        });
-        postMessage({ type: "log", line: "… [EM_BEST] parsed" });
+
+        // Coalesce mid-run updates to avoid spamming the server
+        pendingBestObj = parsed;
+        scheduleBestUpload();
+
+        postMessage({ type: "log", line: "… [EM_AllInfo] parsed" });
         return;
       } catch (e) {
-        postMessage({ type: "log", line: `em_best-parse-error: ${String(e)} :: ${line.slice(0,200)}` });
+        postMessage({ type: "log", line: `EM_AllInfo-parse-error: ${String(e)} :: ${line.slice(0,200)}` });
       }
     }
   }
@@ -330,6 +515,11 @@ self.onmessage = async (e) => {
   bestSeenCount = 0;
   lastBestObj = null;
   bestUploaded = false;
+  bestEndpointMissing = false;
+  rowsEndpointDisabled = false;
+  rowsEndpointErrorReason = "";
+  pendingBestObj = null;
+  if (bestFlushTimer) { clearTimeout(bestFlushTimer); bestFlushTimer = null; }
 
   const v = (self.NEXT_PUBLIC_COMMIT_SHA || Date.now());
   const createEmtr = (await import(`/wasm/emtr.js?v=${v}`)).default;
@@ -414,10 +604,10 @@ self.onmessage = async (e) => {
     await drainAll(jobIdForThisRun);
     shipArtifacts();
 
-    // Retry [EM_BEST] once at end if earlier upload failed
-    if (lastBestObj && !bestUploaded) {
-      postMessage({ type: "log", line: "↻ [EM_BEST] retrying at end-of-run…" });
-      bestUploaded = await uploadBest(jobIdForThisRun, lastBestObj);
+    // Retry [EM_AllInfo] once at end — prefer Beacon here
+    if (lastBestObj && !bestUploaded && !bestEndpointMissing) {
+      postMessage({ type: "log", line: "↻ [EM_AllInfo] retrying at end-of-run…" });
+      bestUploaded = await uploadBest(jobIdForThisRun, lastBestObj, { preferBeacon: true });
     }
 
     const elapsedMs = Date.now() - startedAtMs;
@@ -425,17 +615,18 @@ self.onmessage = async (e) => {
     postMessage({ type: "log", line: `⏱ finished in ${minutes}m` });
     postMessage({ type: "done", rc });
     await setJobStatus(jobIdForThisRun, {
-      status: "completed",
+      status: rowsEndpointDisabled ? "blocked" : "completed",
       finished_at: new Date().toISOString(),
       dur_minutes: minutes,
+      blocked_reason: rowsEndpointDisabled ? rowsEndpointErrorReason : undefined,
     });
   } catch (err) {
     await drainAll(jobIdForThisRun);
 
-    // Retry [EM_BEST] once on failure, too
-    if (lastBestObj && !bestUploaded) {
-      postMessage({ type: "log", line: "↻ [EM_BEST] retrying after failure…" });
-      bestUploaded = await uploadBest(jobIdForThisRun, lastBestObj);
+    // Retry [EM_AllInfo] once on failure, too (Beacon preferred)
+    if (lastBestObj && !bestUploaded && !bestEndpointMissing) {
+      postMessage({ type: "log", line: "↻ [EM_AllInfo] retrying after failure…" });
+      bestUploaded = await uploadBest(jobIdForThisRun, lastBestObj, { preferBeacon: true });
     }
 
     const elapsedMs = Date.now() - startedAtMs;
@@ -444,9 +635,10 @@ self.onmessage = async (e) => {
     postMessage({ type: "log", line: `❌ ${String(err)}` });
     postMessage({ type: "done", rc: 1 });
     await setJobStatus(jobIdForThisRun, {
-      status: "failed",
+      status: rowsEndpointDisabled ? "blocked" : "failed",
       finished_at: new Date().toISOString(),
       dur_minutes: minutes,
+      blocked_reason: rowsEndpointDisabled ? rowsEndpointErrorReason : undefined,
     });
   }
 };

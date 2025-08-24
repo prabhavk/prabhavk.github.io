@@ -2200,10 +2200,10 @@ public:
 	void set_alpha_M_row(double a1, double a2, double a3, double a4);
 	array <double, 4> sample_pi();
     array <double, 4> sample_M_row();
-	EM_struct EM_current{};
-	EM_struct EM_best_pars{};
-	EM_struct EM_best_diri{};
-	EM_struct EM_best_ssh{};
+	vector <EM_struct> EM_runs_pars;
+	vector <EM_struct> EM_runs_diri;
+	vector <EM_struct> EM_runs_ssh;
+	EM_struct EM_current{};	
 	string em_to_json(const EM_struct& em) const;
 	// Select vertex for rooting Chow-Liu tree and update edges in T
 	// Modify T such that T is a bifurcating tree and likelihood of updated
@@ -4567,8 +4567,10 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results
 			this->EM_current = EM_struct{};
 			this->EM_current.method = "dirichlet";
 			this->EM_current.root_name = v->name;
-			this->EM_current.rep = rep + 1;
-			auto tup = this->EM_started_with_dirichlet_rooted_at(v);			
+			this->EM_current.rep = rep + 1;			
+			auto tup = this->EM_started_with_dirichlet_rooted_at(v);
+			EM_struct EM_diri{this->EM_current};
+			this->EM_runs_diri.push_back(EM_diri);
 			const int    iter                    = std::get<0>(tup);
             const double logLikelihood_diri      = std::get<1>(tup);
             const double loglikelihood_ecd_first = std::get<2>(tup);
@@ -4588,8 +4590,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results
             );
 
 			if (this->max_log_likelihood_diri < logLikelihood_final) {				
-				this->max_log_likelihood_diri = logLikelihood_final;
-				this->EM_best_diri = this->EM_current;
+				this->max_log_likelihood_diri = logLikelihood_final;				
 				if (this->max_log_likelihood_best < this->max_log_likelihood_diri) {
 					this->max_log_likelihood_best = this->max_log_likelihood_diri;
 					this->StoreRootAndRootProbability();
@@ -4702,7 +4703,9 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results
 			this->EM_current.method = "parsimony";
 			this->EM_current.root_name = v->name;
 			this->EM_current.rep = rep + 1;
-			auto tup = this->EM_started_with_parsimony_rooted_at(v);			
+			auto tup = this->EM_started_with_parsimony_rooted_at(v);
+			EM_struct EM_pars = this->EM_current;
+			this->EM_runs_pars.push_back(EM_pars);			
 			const int    iter                    = std::get<0>(tup);
             const double logLikelihood_pars      = std::get<1>(tup);
             const double loglikelihood_ecd_first = std::get<2>(tup);
@@ -4722,8 +4725,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results
             );
 
 			if (this->max_log_likelihood_pars < logLikelihood_final) {				
-				this->max_log_likelihood_pars = logLikelihood_final;
-				this->EM_best_pars = this->EM_current;
+				this->max_log_likelihood_pars = logLikelihood_final;				
 				if (this->max_log_likelihood_best < this->max_log_likelihood_pars) {
 					this->max_log_likelihood_best = this->max_log_likelihood_pars;
 					this->StoreRootAndRootProbability();
@@ -4839,7 +4841,9 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int n
 			this->EM_current.method = "ssh";
 			this->EM_current.root_name = v->name;
 			this->EM_current.rep = rep + 1;
-			auto tup = this->EM_started_with_SSH_parameters_rooted_at(v);		
+			auto tup = this->EM_started_with_SSH_parameters_rooted_at(v);
+			EM_struct EM_ssh{this->EM_current};
+			this->EM_runs_ssh.push_back(EM_ssh);
 			const int    iter                    = std::get<0>(tup);
             const double logLikelihood_ssh       = std::get<1>(tup);
             const double loglikelihood_ecd_first = std::get<2>(tup);
@@ -4860,8 +4864,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int n
 
 
 			if (this->max_log_likelihood_ssh < logLikelihood_final) {				
-				this->max_log_likelihood_ssh = logLikelihood_final;
-				this->EM_best_ssh = this->EM_current;
+				this->max_log_likelihood_ssh = logLikelihood_final;				
 				if (this->max_log_likelihood_best < this->max_log_likelihood_ssh) {
 					this->max_log_likelihood_best = this->max_log_likelihood_ssh;
 					this->StoreRootAndRootProbability();
@@ -7289,21 +7292,26 @@ void EMManager::EM_main() {
 	this->P->max_log_likelihood_best = -1 * pow(10,10);
 	cout << "Starting EM with initial parameters set using parsimony" << endl;	
 	this->P->EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results(this->num_repetitions);
+	for (EM_struct EM_pars: this->P->EM_runs_pars) {
+		const string string_EM_pars = string("[EM_AllInfo]{\"parsimony\":") + this->P->em_to_json(EM_pars) + "}";
+		cout << string_EM_pars << endl;
+	}
 	// emtr::debug_counts(this->P->EMTR_results, "after-parsimony");	
 	cout << "Starting EM with initial parameters sampled from Dirichlet distribution" << endl;
 	this->P->EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(this->num_repetitions);
+	for (EM_struct EM_diri: this->P->EM_runs_diri) {
+		const string string_EM_diri = string("[EM_AllInfo]{\"dirichlet\":") + this->P->em_to_json(EM_diri) + "}";
+		cout << string_EM_diri << endl;
+	}
 	// emtr::debug_counts(this->P->EMTR_results, "after-dirichlet");		
 	this->P->RestoreBestProbability();
 	this->P->ReparameterizeGMM();
 	cout << "Starting EM with initial parameters set using SSH" << endl;
 	this->P->EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(this->num_repetitions);
-	// emtr::debug_counts(this->P->EMTR_results, "after-mr-ssh");
-	const string string_EM_pars = string("[EM_BEST]{\"parsimony\":") + this->P->em_to_json(this->P->EM_best_pars) + "}";
-	cout << string_EM_pars << endl;
-	const string string_EM_diri = string("[EM_BEST]{\"dirichlet\":") + this->P->em_to_json(this->P->EM_best_diri) + "}";
-	cout << string_EM_diri << endl;
-	const string string_EM_ssh  = string("[EM_BEST]{\"ssh\":") + this->P->em_to_json(this->P->EM_best_ssh) + "}";
-	cout << string_EM_ssh << endl;
+	for (EM_struct EM_ssh: this->P->EM_runs_ssh) {
+		const string string_EM_ssh = string("[EM_AllInfo]{\"ssh\":") + this->P->em_to_json(EM_ssh) + "}";
+		cout << string_EM_ssh << endl;
+	}	
 	cout << "transmitting EMTR ll change results" << endl;
 	emtr::flush_rows_json(this->P->EMTR_results);
 }

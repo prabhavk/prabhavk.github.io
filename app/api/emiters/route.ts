@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
              COUNT(*)           AS n,
              AVG(iter)          AS avg_iter,
              MAX(iter)          AS max_iter
-        FROM emtr_llchange
+        FROM emtr_init_final
        WHERE job_id = ?
          AND iter IS NOT NULL
        GROUP BY root, method

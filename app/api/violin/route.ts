@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
     const rows = await query<DBRow>(
       `
       SELECT r.method, r.ll_final
-        FROM emtr_llchange r
+        FROM emtr_init_final r
         JOIN emtr_jobs j ON j.job_id = r.job_id
        WHERE r.job_id = ?
          ${rootFilterSQL}

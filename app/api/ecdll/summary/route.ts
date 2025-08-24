@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
 
     const sql = `
       SELECT method, root_name, ll_init, ll_final, 
-      FROM emtr_best_rep
+      FROM emtr_all_info
       WHERE job_id = ?
       ORDER BY created_at DESC
     `;
