@@ -663,7 +663,7 @@ function buildConnectionsTrace(
     mode: "lines",
     x: xs,
     y: ys,
-    line: { color: "rgba(255,255,255,0.35)", width: 1, dash: "dot" },
+    line: { color: "rgba(255,255,255,0.35)", width: 1, dash: "solid" },
     hoverinfo: "skip",
     showlegend: false,
     name: "replicate-links",

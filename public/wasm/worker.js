@@ -417,7 +417,7 @@ async function uploadBest(jobId, bestRaw, { preferBeacon = false } = {}) {
 
   const shaped = normalizeBestObject(bestRaw);
   if (!shaped) {
-    postMessage({ type: "log", line: "⚠️ [EM_AllInfo] payload shape not recognized; skipping" });
+    postMessage({ type: "log", line: "[EM_AllInfo] payload shape not recognized; skipping" });
     return false;
   }
 
@@ -431,7 +431,7 @@ async function uploadBest(jobId, bestRaw, { preferBeacon = false } = {}) {
       keepalive: preferBeacon, // helpful fallback if Beacon rejected
     });
     bestSeenCount += 1;
-    postMessage({ type: "log", line: `✅ [EM_AllInfo] upserted (${bestSeenCount}) via ${res.via}` });
+    postMessage({ type: "log", line: `[EM_AllInfo] upserted (${bestSeenCount}) via ${res.via}` });
     return true;
   } catch (e) {
     if (e && (e.permanent || e.status === 404 || e.status === 410)) {
@@ -439,7 +439,7 @@ async function uploadBest(jobId, bestRaw, { preferBeacon = false } = {}) {
       postMessage({
         type: "log",
         line:
-`🛑 [EM_AllInfo] endpoint not found (HTTP ${e.status}). Further attempts suppressed.
+`[EM_AllInfo] endpoint not found (HTTP ${e.status}). Further attempts suppressed.
    Check API_BASE="${API_BASE}" and ALL_INFO_PATH="${self.ALL_INFO_PATH || "/api/allinfo"}" point to a server exposing that route.`,
       });
       return false;
@@ -495,7 +495,7 @@ function handlePrint(txt) {
         pendingBestObj = parsed;
         scheduleBestUpload();
 
-        postMessage({ type: "log", line: "… [EM_AllInfo] parsed" });
+        postMessage();
         return;
       } catch (e) {
         postMessage({ type: "log", line: `EM_AllInfo-parse-error: ${String(e)} :: ${line.slice(0,200)}` });
