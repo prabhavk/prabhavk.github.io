@@ -317,29 +317,32 @@ export default function SpiralPage() {
   );
 
   const initTraces = useMemo<Partial<ScatterData>[]>(() => {
-    const vals = collectMetric((r) => r.ll_init);
-    const [mn, mx] = extent(vals);
-    return buildPetalSegmentsTraces(
-      { title: "ll_init", values: (r) => r.ll_init, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
-      twistDeg, byRootRep, selectedReps, repRanks,
-      { petalWidthFrac: 0.8, arcSteps: 20 }
-    );
-  }, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
+  const vals = collectMetric((r) => r.ll_init);
+  const [mn, mx] = extent(vals);
+  return buildRoundedPetalSegmentsTraces(
+    { title: "ll_init", values: (r) => r.ll_init, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
+    twistDeg, byRootRep, selectedReps, repRanks,
+    { petalWidthFrac: 0.88, arcSteps: 42, sideSteps: 14, innerSteps: 28, capFrac: 0.6, capPower: 1.4 }
+  );
+}, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
 
-  const finalTraces = useMemo<Partial<ScatterData>[]>(() => {
-    const vals = collectMetric((r) => r.ll_final);
-    const [mn, mx] = extent(vals);
-    return buildPetalSegmentsTraces(
-      { title: "ll_final", values: (r) => r.ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
-      twistDeg, byRootRep, selectedReps, repRanks,
-      { petalWidthFrac: 0.8, arcSteps: 20 }
-    );
-  }, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
+const finalTraces = useMemo<Partial<ScatterData>[]>(() => {
+  const vals = collectMetric((r) => r.ll_final);
+  const [mn, mx] = extent(vals);
+  return buildRoundedPetalSegmentsTraces(
+    { title: "ll_final", values: (r) => r.ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
+    twistDeg, byRootRep, selectedReps, repRanks,
+    { petalWidthFrac: 0.88, arcSteps: 42, sideSteps: 14, innerSteps: 28, capFrac: 0.6, capPower: 1.4 }
+  );
+}, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
+
+// ...same for ecdFirstTraces / ecdFinalTraces
+
 
   const ecdFirstTraces = useMemo<Partial<ScatterData>[]>(() => {
     const vals = collectMetric((r) => r.ecd_ll_first);
     const [mn, mx] = extent(vals);
-    return buildPetalSegmentsTraces(
+    return buildRoundedPetalSegmentsTraces(
       { title: "ecd_ll_first", values: (r) => r.ecd_ll_first, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
       twistDeg, byRootRep, selectedReps, repRanks,
       { petalWidthFrac: 0.8, arcSteps: 20 }
@@ -349,7 +352,7 @@ export default function SpiralPage() {
   const ecdFinalTraces = useMemo<Partial<ScatterData>[]>(() => {
     const vals = collectMetric((r) => r.ecd_ll_final);
     const [mn, mx] = extent(vals);
-    return buildPetalSegmentsTraces(
+    return buildRoundedPetalSegmentsTraces(
       { title: "ecd_ll_final", values: (r) => r.ecd_ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
       twistDeg, byRootRep, selectedReps, repRanks,
       { petalWidthFrac: 0.8, arcSteps: 20 }
@@ -742,6 +745,143 @@ function colorFromScale(
   const bl = Math.round(lerp(a.b, b.b, u));
   return `rgb(${r},${g},${bl})`;
 }
+
+function buildRoundedPetalSegmentsTraces(
+  cfg: {
+    title: string;
+    values: (r: SpiralRow) => number | null;
+    colorScale: [number, string][];
+    cmin: number;
+    cmax: number;
+  },
+  twistDeg: number,
+  byRootRep: Map<string, Map<number, SpiralRow>>,
+  selectedReps: number[],
+  repRanks: Map<number, number>,
+  opts?: {
+    petalWidthFrac?: number;
+    arcSteps?: number;
+    sideSteps?: number;
+    innerSteps?: number;
+    r0?: number;     // still used for outer radius
+    dr?: number;
+    capFrac?: number;
+    capPower?: number;
+    coreRadius?: number;  // NEW: inner radius for all petals
+  }
+): Partial<ScatterData>[] {
+  const traces: Partial<ScatterData>[] = [];
+  const nArms = NODES.length;
+  if (!nArms) return traces;
+
+  const dTheta = (2 * Math.PI) / nArms;
+  const dTwist = (Math.PI / 180) * twistDeg;
+
+  const r0 = opts?.r0 ?? 0.6;
+  const dr = opts?.dr ?? 0.35;
+
+  const petalWidthFrac = Math.min(1, Math.max(0.1, opts?.petalWidthFrac ?? 0.88));
+  const halfW = 0.5 * petalWidthFrac * dTheta;
+
+  const arcSteps   = Math.max(12, Math.min(128, opts?.arcSteps ?? 42));
+  const sideSteps  = Math.max( 4, Math.min( 64, opts?.sideSteps ?? 14));
+  const innerSteps = Math.max( 8, Math.min(128, opts?.innerSteps ?? 28));
+
+  const capFrac  = Math.min(1, Math.max(0, opts?.capFrac ?? 0.6));
+  const capPower = Math.max(0.2, opts?.capPower ?? 1.4);
+
+  const coreRadius = Math.max(0.02, opts?.coreRadius ?? 0.08); // ⟵ start near origin
+  const easeCos = (t: number) => 0.5 - 0.5 * Math.cos(Math.PI * t);
+
+  const repAtRank = new Map<number, number>();
+  for (const rep of selectedReps) {
+    const rank = repRanks.get(rep);
+    if (rank != null) repAtRank.set(rank, rep);
+  }
+
+  for (let armIdx = 0; armIdx < nArms; armIdx++) {
+    const node = NODES[armIdx];
+    const perRep = byRootRep.get(node);
+    if (!perRep) continue;
+
+    const base = armIdx * dTheta;
+    const maxRank = Math.max(0, ...Array.from(repAtRank.keys()));
+
+    for (let k = 0; k <= maxRank; k++) {
+      const rep = repAtRank.get(k);
+      if (rep == null) continue;
+      const row = perRep.get(rep);
+      const val = row ? cfg.values(row) : null;
+      if (val == null || !Number.isFinite(val)) continue;
+
+      // Every petal starts from the same small inner radius
+      const rIn  = coreRadius;
+      const rOut = r0 + (k + 1) * dr;
+      const capH = capFrac * dr;
+
+      const thIn  = -(base + k * dTwist);
+      const thOut = -(base + (k + 1) * dTwist);
+
+      const xs: number[] = [];
+      const ys: number[] = [];
+
+      // Outer rounded tip
+      for (let i = 0; i <= arcSteps; i++) {
+        const a = -1 + (2 * i) / arcSteps;           // [-1,1]
+        const bump = Math.pow(1 - a * a, capPower);  // 0 at edges, 1 at center
+        const th = thOut + a * halfW;
+        const r = rOut + capH * bump;
+        xs.push(r * Math.cos(th));
+        ys.push(r * Math.sin(th));
+      }
+
+      // Right side (curved) back toward the base
+      for (let i = 1; i <= sideSteps; i++) {
+        const t = easeCos(i / sideSteps);
+        const th = lerp(thOut + halfW, thIn + halfW, t);
+        const r  = lerp(rOut, rIn, t);
+        xs.push(r * Math.cos(th));
+        ys.push(r * Math.sin(th));
+      }
+
+      // Inner base arc (near the origin)
+      for (let i = 0; i <= innerSteps; i++) {
+        const a = 1 - (2 * i) / innerSteps; // +halfW -> -halfW
+        const th = thIn + a * halfW;
+        const r  = rIn;
+        xs.push(r * Math.cos(th));
+        ys.push(r * Math.sin(th));
+      }
+
+      // Left side back to the tip
+      for (let i = 1; i <= sideSteps; i++) {
+        const t = easeCos(i / sideSteps);
+        const th = lerp(thIn - halfW, thOut - halfW, t);
+        const r  = lerp(rIn, rOut, t);
+        xs.push(r * Math.cos(th));
+        ys.push(r * Math.sin(th));
+      }
+
+      traces.push({
+        type: "scatter",
+        mode: "lines",
+        x: xs,
+        y: ys,
+        fill: "toself",
+        fillcolor: colorFromScale(val, cfg.cmin, cfg.cmax, cfg.colorScale),
+        line: { width: 0.6, color: "rgba(255,255,255,0.08)" },
+        hovertemplate:
+          `${node}, rep ${rep}<br>${cfg.title}: ${Number(val).toFixed(3)}<extra></extra>`,
+        showlegend: false,
+        name: `${node}-r${k}`,
+      });
+    }
+  }
+
+  return traces;
+}
+
+
 
 function buildPetalSegmentsTraces(
   cfg: {
