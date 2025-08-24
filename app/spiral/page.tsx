@@ -316,58 +316,100 @@ export default function SpiralPage() {
     [byRootRep, selectedReps]
   );
 
-  // ----- Build each plot’s traces (dotted replicate links + markers with colorbar) -----
   const initTraces = useMemo<Partial<ScatterData>[]>(() => {
     const vals = collectMetric((r) => r.ll_init);
     const [mn, mx] = extent(vals);
-    return [
-      buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
-      buildWebRingsTrace(coordFor, selectedReps.length),  
-      buildMarkersTrace(
-        { title: "ll_init", values: (r) => r.ll_init, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
-        coordFor, byRootRep, selectedReps, repRanks
-      ),
-    ];
-  }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
+    return buildPetalSegmentsTraces(
+      { title: "ll_init", values: (r) => r.ll_init, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
+      twistDeg, byRootRep, selectedReps, repRanks,
+      { petalWidthFrac: 0.8, arcSteps: 20 }
+    );
+  }, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
 
   const finalTraces = useMemo<Partial<ScatterData>[]>(() => {
     const vals = collectMetric((r) => r.ll_final);
     const [mn, mx] = extent(vals);
-    return [
-      buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
-      buildWebRingsTrace(coordFor, selectedReps.length),  
-      buildMarkersTrace(
-        { title: "ll_final", values: (r) => r.ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
-        coordFor, byRootRep, selectedReps, repRanks
-      ),
-    ];
-  }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
+    return buildPetalSegmentsTraces(
+      { title: "ll_final", values: (r) => r.ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
+      twistDeg, byRootRep, selectedReps, repRanks,
+      { petalWidthFrac: 0.8, arcSteps: 20 }
+    );
+  }, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
 
   const ecdFirstTraces = useMemo<Partial<ScatterData>[]>(() => {
     const vals = collectMetric((r) => r.ecd_ll_first);
     const [mn, mx] = extent(vals);
-    return [
-      buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
-      buildWebRingsTrace(coordFor, selectedReps.length),  
-      buildMarkersTrace(
-        { title: "ecd_ll_first", values: (r) => r.ecd_ll_first, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
-        coordFor, byRootRep, selectedReps, repRanks
-      ),
-    ];
-  }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
+    return buildPetalSegmentsTraces(
+      { title: "ecd_ll_first", values: (r) => r.ecd_ll_first, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
+      twistDeg, byRootRep, selectedReps, repRanks,
+      { petalWidthFrac: 0.8, arcSteps: 20 }
+    );
+  }, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
 
   const ecdFinalTraces = useMemo<Partial<ScatterData>[]>(() => {
     const vals = collectMetric((r) => r.ecd_ll_final);
     const [mn, mx] = extent(vals);
-    return [
-      buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
-      buildWebRingsTrace(coordFor, selectedReps.length),  
-      buildMarkersTrace(
-        { title: "ecd_ll_final", values: (r) => r.ecd_ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
-        coordFor, byRootRep, selectedReps, repRanks
-      ),
-    ];
-  }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
+    return buildPetalSegmentsTraces(
+      { title: "ecd_ll_final", values: (r) => r.ecd_ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
+      twistDeg, byRootRep, selectedReps, repRanks,
+      { petalWidthFrac: 0.8, arcSteps: 20 }
+    );
+  }, [collectMetric, byRootRep, selectedReps, repRanks, twistDeg]);
+
+
+
+  // ----- Build each plot’s traces (dotted replicate links + markers with colorbar) -----
+  // const initTraces = useMemo<Partial<ScatterData>[]>(() => {
+  //   const vals = collectMetric((r) => r.ll_init);
+  //   const [mn, mx] = extent(vals);
+  //   return [
+  //     buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
+  //     buildWebRingsTrace(coordFor, selectedReps.length),  
+  //     buildMarkersTrace(
+  //       { title: "ll_init", values: (r) => r.ll_init, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
+  //       coordFor, byRootRep, selectedReps, repRanks
+  //     ),
+  //   ];
+  // }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
+
+  // const finalTraces = useMemo<Partial<ScatterData>[]>(() => {
+  //   const vals = collectMetric((r) => r.ll_final);
+  //   const [mn, mx] = extent(vals);
+  //   return [
+  //     buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
+  //     buildWebRingsTrace(coordFor, selectedReps.length),  
+  //     buildMarkersTrace(
+  //       { title: "ll_final", values: (r) => r.ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
+  //       coordFor, byRootRep, selectedReps, repRanks
+  //     ),
+  //   ];
+  // }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
+
+  // const ecdFirstTraces = useMemo<Partial<ScatterData>[]>(() => {
+  //   const vals = collectMetric((r) => r.ecd_ll_first);
+  //   const [mn, mx] = extent(vals);
+  //   return [
+  //     buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
+  //     buildWebRingsTrace(coordFor, selectedReps.length),  
+  //     buildMarkersTrace(
+  //       { title: "ecd_ll_first", values: (r) => r.ecd_ll_first, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
+  //       coordFor, byRootRep, selectedReps, repRanks
+  //     ),
+  //   ];
+  // }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
+
+  // const ecdFinalTraces = useMemo<Partial<ScatterData>[]>(() => {
+  //   const vals = collectMetric((r) => r.ecd_ll_final);
+  //   const [mn, mx] = extent(vals);
+  //   return [
+  //     buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
+  //     buildWebRingsTrace(coordFor, selectedReps.length),  
+  //     buildMarkersTrace(
+  //       { title: "ecd_ll_final", values: (r) => r.ecd_ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
+  //       coordFor, byRootRep, selectedReps, repRanks
+  //     ),
+  //   ];
+  // }, [collectMetric, coordFor, byRootRep, selectedReps, repRanks]);
 
   /* -------------------- Choreography runner -------------------- */
   const stopTimer = useCallback(() => {
@@ -665,13 +707,138 @@ function buildWebRingsTrace(
     mode: "lines",
     x: xs,
     y: ys,
-    line: { color: "rgba(255,255,255,0.20)", width: 1, dash: "solid" },
+    line: { color: "rgba(0,0,0,0.20)", width: 1, dash: "dot" },
     hoverinfo: "skip",
     showlegend: false,
     name: "web-rings",
   };
 }
 
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const h = hex.replace("#", "");
+  const v = parseInt(h.length === 3 ? h.split("").map(c => c + c).join("") : h, 16);
+  return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 };
+}
+
+function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
+
+function colorFromScale(
+  value: number,
+  cmin: number,
+  cmax: number,
+  scale: [number, string][]
+): string {
+  let t = (value - cmin) / Math.max(1e-12, (cmax - cmin));
+  t = Math.max(0, Math.min(1, t));
+  let i = 0;
+  while (i < scale.length - 1 && !(scale[i][0] <= t && t <= scale[i + 1][0])) i++;
+  const [t0, c0] = scale[Math.max(0, Math.min(i, scale.length - 1))];
+  const [t1, c1] = scale[Math.max(0, Math.min(i + 1, scale.length - 1))];
+  const u = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+  const a = hexToRgb(c0);
+  const b = hexToRgb(c1);
+  const r = Math.round(lerp(a.r, b.r, u));
+  const g = Math.round(lerp(a.g, b.g, u));
+  const bl = Math.round(lerp(a.b, b.b, u));
+  return `rgb(${r},${g},${bl})`;
+}
+
+function buildPetalSegmentsTraces(
+  cfg: {
+    title: string;
+    values: (r: SpiralRow) => number | null;
+    colorScale: [number, string][];
+    cmin: number;
+    cmax: number;
+  },
+  twistDeg: number,
+  byRootRep: Map<string, Map<number, SpiralRow>>,
+  selectedReps: number[],
+  repRanks: Map<number, number>,
+  opts?: { petalWidthFrac?: number; arcSteps?: number; r0?: number; dr?: number }
+): Partial<ScatterData>[] {
+  const traces: Partial<ScatterData>[] = [];
+
+  const nArms = NODES.length;
+  if (!nArms) return traces;
+
+  const dTheta = (2 * Math.PI) / nArms;
+  const dTwist = (Math.PI / 180) * twistDeg;
+
+  const r0 = opts?.r0 ?? 0.6;        // base radius
+  const dr = opts?.dr ?? 0.35;       // per-segment radial thickness
+  const petalWidthFrac = Math.min(1, Math.max(0.1, opts?.petalWidthFrac ?? 0.78)); // fraction of arm gap
+  const halfW = 0.5 * petalWidthFrac * dTheta;
+  const arcSteps = Math.max(6, Math.min(64, opts?.arcSteps ?? 18));
+
+  // rank -> which selected rep sits there?
+  const repAtRank = new Map<number, number>();
+  for (const rep of selectedReps) {
+    const rank = repRanks.get(rep);
+    if (rank != null) repAtRank.set(rank, rep);
+  }
+
+  for (let armIdx = 0; armIdx < nArms; armIdx++) {
+    const node = NODES[armIdx];
+    const perRep = byRootRep.get(node);
+    if (!perRep) continue;
+
+    const base = armIdx * dTheta;
+
+    // for each *segment* between rank k (inner) and k+1 (outer)
+    // only draw if there is data for the chosen rep at rank k
+    for (let k = 0; k < Math.max(...repRanks.values(), 0) + 1; k++) {
+      const rep = repAtRank.get(k);
+      if (rep == null) continue;
+      const row = perRep.get(rep);
+      const val = row ? cfg.values(row) : null;
+      if (val == null || !Number.isFinite(val)) continue;
+
+      // inner/outer radii
+      const rIn = r0 + k * dr;
+      const rOut = r0 + (k + 1) * dr;
+
+      // inner/outer center angles (clockwise)
+      const thIn = - (base + k * dTwist);
+      const thOut = - (base + (k + 1) * dTwist);
+
+      // build polygon: inner arc (left->right), outer arc (right->left)
+      const xs: number[] = [];
+      const ys: number[] = [];
+
+      // inner arc
+      for (let i = 0; i <= arcSteps; i++) {
+        const t = i / arcSteps;
+        const th = thIn - halfW + t * (2 * halfW);
+        xs.push(rIn * Math.cos(th));
+        ys.push(rIn * Math.sin(th));
+      }
+      // outer arc (reverse)
+      for (let i = arcSteps; i >= 0; i--) {
+        const t = i / arcSteps;
+        const th = thOut - halfW + t * (2 * halfW);
+        xs.push(rOut * Math.cos(th));
+        ys.push(rOut * Math.sin(th));
+      }
+
+      traces.push({
+        type: "scatter",
+        mode: "lines",
+        x: xs,
+        y: ys,
+        fill: "toself",
+        fillcolor: colorFromScale(val, cfg.cmin, cfg.cmax, cfg.colorScale),
+        line: { width: 0.5, color: "rgba(255,255,255,0.12)" }, // faint outline
+        hovertemplate:
+          `${node}, rep ${rep}<br>${cfg.title}: ${Number(val).toFixed(3)}<extra></extra>`,
+        showlegend: false,
+        name: `${node}-r${k}`,
+      });
+    }
+  }
+
+  return traces;
+}
 
 function buildConnectionsTrace(
   coordFor: (node: string, rank: number) => { x: number; y: number },
