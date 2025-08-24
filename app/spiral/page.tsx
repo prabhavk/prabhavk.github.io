@@ -732,7 +732,6 @@ function buildMarkersTrace(
   };
 }
 
-// Small card wrapper for each plot
 function ChartCard({
   title,
   traces,
