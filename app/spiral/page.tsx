@@ -322,6 +322,7 @@ export default function SpiralPage() {
     const [mn, mx] = extent(vals);
     return [
       buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
+      buildWebRingsTrace(coordFor, selectedReps.length),  
       buildMarkersTrace(
         { title: "ll_init", values: (r) => r.ll_init, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
         coordFor, byRootRep, selectedReps, repRanks
@@ -334,6 +335,7 @@ export default function SpiralPage() {
     const [mn, mx] = extent(vals);
     return [
       buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
+      buildWebRingsTrace(coordFor, selectedReps.length),  
       buildMarkersTrace(
         { title: "ll_final", values: (r) => r.ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
         coordFor, byRootRep, selectedReps, repRanks
@@ -346,6 +348,7 @@ export default function SpiralPage() {
     const [mn, mx] = extent(vals);
     return [
       buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
+      buildWebRingsTrace(coordFor, selectedReps.length),  
       buildMarkersTrace(
         { title: "ecd_ll_first", values: (r) => r.ecd_ll_first, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
         coordFor, byRootRep, selectedReps, repRanks
@@ -358,6 +361,7 @@ export default function SpiralPage() {
     const [mn, mx] = extent(vals);
     return [
       buildConnectionsTrace(coordFor, byRootRep, selectedReps, repRanks),
+      buildWebRingsTrace(coordFor, selectedReps.length),  
       buildMarkersTrace(
         { title: "ecd_ll_final", values: (r) => r.ecd_ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
         coordFor, byRootRep, selectedReps, repRanks
@@ -628,6 +632,46 @@ export default function SpiralPage() {
     return arr.slice(0, k).sort((a, b) => a - b);
   }
 }
+
+function buildWebRingsTrace(
+  coordFor: (node: string, rank: number) => { x: number; y: number },
+  maxRank: number
+): Partial<ScatterData> {
+  const xs: number[] = [];
+  const ys: number[] = [];
+
+  for (let rank = 0; rank < Math.max(0, maxRank); rank++) {
+    if (NODES.length === 0) continue;
+
+    // Walk around the ring
+    for (let i = 0; i < NODES.length; i++) {
+      const { x, y } = coordFor(NODES[i], rank);
+      xs.push(x);
+      ys.push(y);
+    }
+
+    // Close the loop by returning to the first node
+    const first = coordFor(NODES[0], rank);
+    xs.push(first.x);
+    ys.push(first.y);
+
+    // Break before next ring
+    xs.push(NaN);
+    ys.push(NaN);
+  }
+
+  return {
+    type: "scatter",
+    mode: "lines",
+    x: xs,
+    y: ys,
+    line: { color: "rgba(255,255,255,0.20)", width: 1, dash: "dot" },
+    hoverinfo: "skip",
+    showlegend: false,
+    name: "web-rings",
+  };
+}
+
 
 function buildConnectionsTrace(
   coordFor: (node: string, rank: number) => { x: number; y: number },
