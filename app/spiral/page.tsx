@@ -665,7 +665,7 @@ function buildWebRingsTrace(
     mode: "lines",
     x: xs,
     y: ys,
-    line: { color: "rgba(255,255,255,0.20)", width: 1, dash: "dot" },
+    line: { color: "rgba(255,255,255,0.20)", width: 1, dash: "solid" },
     hoverinfo: "skip",
     showlegend: false,
     name: "web-rings",
