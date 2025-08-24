@@ -1229,7 +1229,7 @@ function ChartCard({
   title,
   traces,
   onReady,
-  centerRadius = 0.09, // NEW
+  centerRadius = 0.09,
 }: {
   title: string;
   traces: Partial<Data>[];
@@ -1244,8 +1244,7 @@ function ChartCard({
     height: 520,
     showlegend: false,
     paper_bgcolor: "black",
-    plot_bgcolor: "black",
-    // NEW: white flower core
+    plot_bgcolor: "black",    
     shapes: [
       {
         type: "circle",
