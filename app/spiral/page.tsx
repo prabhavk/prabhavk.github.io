@@ -604,8 +604,8 @@ const ecdFinalTraces = useMemo<Partial<ScatterData>[]>(() => {
         </div> */}
 
         {/* Dance controls */}
-        <div className="ml-auto flex gap-2">
-          {dancing ? (
+        {/* <div className="ml-auto flex gap-2"> */}
+          {/* {dancing ? (
             <button
               type="button"
               onClick={onStopDance}
@@ -623,7 +623,7 @@ const ecdFinalTraces = useMemo<Partial<ScatterData>[]>(() => {
             >
               Start Twist
             </button>
-          )}
+          )} */}
 
           {/* Resample (enabled when reps loaded & not loading) */}
           <button
