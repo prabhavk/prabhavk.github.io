@@ -13,7 +13,7 @@ const tabs: Tab[] = [
   { href: "/mle",       label: "MLE in D",                mode: "deep"  },
   { href: "/ecdll",     label: "ECDLL",                   mode: "deep"  },
   { href: "/wmw",       label: "Wilcoxon-Mann-Whitney",   mode: "deep"  },  
-  { href: "/sigrec",    label: "Significance of Recall",  mode: "deep"  },  
+  { href: "/sigrec",    label: "Distribution of Recall",  mode: "deep"  },  
   { href: "/rhodonea",  label: "Rhodonea Curves",         mode: "deep"  },  
   
 ];

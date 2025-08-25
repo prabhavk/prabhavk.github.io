@@ -733,9 +733,33 @@ literal "false"
 
 ,
  and compiled using Emscripten to create WebAssembly code.
- EMTR results are stored on a database hosted at planetscale and are retrieved in order to generate the plots shown here.
- Precomputed results can be accessed using the web application hosted on vercel.
- The web application was developed and tested using the browser firefox.
+ EMTR results are stored on a database hosted at planetscale
+\begin_inset CommandInset citation
+LatexCommand cite
+key "planetscale_2025"
+literal "false"
+
+\end_inset
+
+ and are retrieved in order to generate the plots shown here.
+ Precomputed results can be accessed using the web application hosted on vercel
+\begin_inset CommandInset citation
+LatexCommand cite
+key "vercel_2025"
+literal "false"
+
+\end_inset
+
+.
+ The web application was developed on Ubuntu and tested using the browser firefox 
+\begin_inset CommandInset citation
+LatexCommand cite
+key "firefox_2025_sw"
+literal "false"
+
+\end_inset
+
+.
 \end_layout
 
 \begin_layout Section
@@ -764,7 +788,7 @@ Rooting a tree at an arbitrarily selected node yields large recall values of 0.8
 \begin_layout Standard
 In conclusion,
  one should not infer rooted trees using the general Markov model.
- If one is interested in optimizing the parameters of GMM then one should preferably draw initial values from Dirichlet distribution and not use initial parameters obtained from ancestral states inferred using the maximum parsimony criterion.
+ If one is interested in optimizing the parameters of GMM then results suggest that it is preferable to draw initial values from the Dirichlet distribution and not use initial parameters obtained with ancestral states inferred using the maximum parsimony criterion.
  If one has obtained a rooted tree using an alternative model such as UNREST where the root is identifiable,
  one should nevertheless be careful with interpreting recall values that may be obtained on simulated trees where the location of the root is known.
 \end_layout
