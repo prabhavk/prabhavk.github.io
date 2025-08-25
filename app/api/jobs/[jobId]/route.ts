@@ -1,10 +1,33 @@
 // app/api/jobs/[jobId]/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { db } from "@/lib/pscale";
 
 export const runtime = "edge";
 
 type Status = "started" | "completed" | "failed";
+
+// ---------- small helpers (no 'any' annotations) ----------
+function isObject(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null;
+}
+function isPromise<T = unknown>(x: unknown): x is Promise<T> {
+  // Safe check without annotating 'any' at the signature level
+  return isObject(x) && "then" in x && typeof (x as { then?: unknown }).then === "function";
+}
+
+async function getJobIdFromContext(ctx: unknown): Promise<string | null> {
+  if (!isObject(ctx) || !("params" in ctx)) return null;
+  const p = (ctx as { params: unknown }).params;
+
+  if (isPromise<Record<string, unknown>>(p)) {
+    const resolved = await p;
+    const jid = isObject(resolved) && typeof resolved.jobId === "string" ? resolved.jobId : null;
+    return jid;
+  }
+
+  const jid = isObject(p) && typeof p.jobId === "string" ? p.jobId : null;
+  return jid;
+}
 
 function toMysqlTimestamp(x: unknown): string | null {
   if (x == null) return null;
@@ -22,12 +45,10 @@ function toMysqlTimestamp(x: unknown): string | null {
     .replace("T", " ");
 }
 
-export async function PATCH(
-  req: NextRequest,
-  { params }: { params: Promise<{ jobId: string }> } // Next 15: Promise
-) {
+// ---------- PATCH ----------
+export async function PATCH(req: Request, ctx: unknown) {
   try {
-    const { jobId } = await params;
+    const jobId = await getJobIdFromContext(ctx);
     if (!jobId) {
       return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
     }
@@ -46,12 +67,10 @@ export async function PATCH(
 
     const { status, finished_at, dur_minutes } = body;
 
-    // Validate status if present
     if (status && !["started", "completed", "failed"].includes(status)) {
       return NextResponse.json({ ok: false, error: "Invalid status" }, { status: 400 });
     }
 
-    // Build dynamic UPDATE
     const sets: string[] = [];
     const args: (string | number | null)[] = [];
 
@@ -59,12 +78,10 @@ export async function PATCH(
       sets.push("status = ?");
       args.push(status);
     }
-
     if (finished_at !== undefined) {
       sets.push("finished_at = ?");
-      args.push(toMysqlTimestamp(finished_at)); // can be null to clear
+      args.push(toMysqlTimestamp(finished_at)); // null clears column
     }
-
     if (dur_minutes !== undefined) {
       const dur =
         dur_minutes === null
@@ -104,15 +121,14 @@ export async function PATCH(
   }
 }
 
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: Promise<{ jobId: string }> }
-) {
+// ---------- GET ----------
+export async function GET(_req: Request, ctx: unknown) {
   try {
-    const { jobId } = await params;
+    const jobId = await getJobIdFromContext(ctx);
     if (!jobId) {
       return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
     }
+
     const conn = db();
     const res = await conn.execute("SELECT * FROM emtr_jobs WHERE job_id = ? LIMIT 1", [jobId]);
     return NextResponse.json({ ok: true, job: (res.rows as Record<string, unknown>[])[0] ?? null });

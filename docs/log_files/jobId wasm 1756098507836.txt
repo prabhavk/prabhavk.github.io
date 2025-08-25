@@ -1,0 +1,71 @@
+🆔 jobId = wasm-1756098507836
+🌲 Starting EMTR (WASM): seq=Randall_leaf.phyx, topo=ternary_topology.csv, thr=0.01, reps=41, maxIter=1000
+WASM dispatch: EM_main (reps=41, maxIter=1000, thr=0.01)
+sequence file contains 19 sequences of length 678
+setting sequence file name, topology file name, site pattern weights, number of input sequences
+number of site patterns is 293
+setting edges from topology file
+number of edges in topology file is 35
+number of repetitions is set to 41
+Starting EM with initial parameters set using parsimony
+randomizing the order in which nodes will be visited
+node 1 of 17:h_29
+node 2 of 17:h_31
+node 3 of 17:h_37
+node 4 of 17:h_27
+node 5 of 17:h_36
+node 6 of 17:h_23
+node 7 of 17:h_32
+node 8 of 17:h_33
+node 9 of 17:h_21
+node 10 of 17:h_26
+node 11 of 17:h_35
+node 12 of 17:h_28
+node 13 of 17:h_24
+node 14 of 17:h_25
+node 15 of 17:h_30
+node 16 of 17:h_22
+node 17 of 17:h_34
+max log likelihood obtained using Parsimony parameters is -4364.998997
+Starting EM with initial parameters sampled from Dirichlet distribution
+randomizing the order in which nodes will be visited
+node 1 of 17:h_27
+node 2 of 17:h_33
+node 3 of 17:h_26
+node 4 of 17:h_23
+node 5 of 17:h_31
+node 6 of 17:h_32
+node 7 of 17:h_21
+node 8 of 17:h_34
+node 9 of 17:h_36
+node 10 of 17:h_37
+node 11 of 17:h_22
+node 12 of 17:h_29
+node 13 of 17:h_30
+node 14 of 17:h_28
+node 15 of 17:h_25
+node 16 of 17:h_24
+node 17 of 17:h_35
+max log likelihood obtained using Dirichlet parameters is -4363.924665
+Starting EM with initial parameters set using SSH
+randomizing the order in which nodes will be visited
+node 1 of 17:h_21
+node 2 of 17:h_34
+node 3 of 17:h_26
+node 4 of 17:h_35
+node 5 of 17:h_23
+node 6 of 17:h_29
+node 7 of 17:h_33
+node 8 of 17:h_37
+node 9 of 17:h_22
+node 10 of 17:h_27
+node 11 of 17:h_24
+node 12 of 17:h_30
+node 13 of 17:h_28
+node 14 of 17:h_31
+node 15 of 17:h_25
+node 16 of 17:h_32
+node 17 of 17:h_36
+max log likelihood obtained using SSH parameters is -4363.924278
+transmitting EMTR ll change results
+⤴︎ [final drain] start · buffer=1891

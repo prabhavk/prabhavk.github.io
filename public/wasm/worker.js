@@ -10,6 +10,23 @@ const ENDPOINTS = {
   allinfo: () => `${API_BASE}${self.ALL_INFO_PATH || "/api/allinfo"}`,
 };
 
+// ---------- TOGGLES ----------
+// Console-only DB traces (default: off). Toggle at runtime via setDbLogging.
+let DB_LOGS = typeof self.DB_LOGS === "boolean" ? self.DB_LOGS : false;
+// UI upsert attempt/success logs (default: off). Toggle via setUpsertUiLogging.
+let UPSERT_UI_LOGS = typeof self.UPSERT_UI_LOGS === "boolean" ? self.UPSERT_UI_LOGS : false;
+
+// Helpers for logging
+function dbLog(line) {
+  if (!DB_LOGS) return;
+  try {
+    const ts = new Date().toISOString();
+    // Console only (does not spam UI)
+    console.debug(`[DB][${ts}][${jobIdForThisRun || "-"}] ${line}`);
+  } catch { /* ignore */ }
+}
+const upLog = (line) => { if (UPSERT_UI_LOGS) postMessage({ type: "log", line }); };
+
 // batching/backoff
 const MAX_BATCH = 200;
 const FLUSH_INTERVAL_MS = 1000;
@@ -28,64 +45,55 @@ let retryDelay = RETRY_BASE_MS;
 let startedAtMs = 0;
 let flushSeq = 0;
 
-// Track [EM_AllInfo] handling
-let bestSeenCount = 0;            // how many times we successfully sent
-let lastBestObj = null;           // last parsed best object
-let bestUploaded = false;         // whether last best object was uploaded OK
-
-// Coalesce + suppress for [EM_AllInfo]
-let pendingBestObj = null;
-let bestFlushTimer = null;
-const BEST_UPLOAD_DEBOUNCE_MS = 500;
-let bestEndpointMissing = false;  // set true after a 404/410 so we stop trying
-
-// If the rows endpoint is permanently failing (e.g., table missing), stop retrying
+// rows endpoint circuit breaker
 let rowsEndpointDisabled = false;
 let rowsEndpointErrorReason = "";
 let artifactSeq = 0;
 
+// Track latest repetition number seen in streaming [ROW {...}]
+let lastRepSeen = null;
+
+// ---------------- [EM_AllInfo] coalescing state (per-rep) ----------------
+let bestFlushTimer = null;
+let bestEndpointMissing = false;
+let lastBestObj = null;
+let bestUploaded = false;
+
+const BEST_UPLOAD_DEBOUNCE_MS = 500;
+
+// Keep a pending bundle for the *current* rep only
+let pendingRep = null;
+const pendingBest = {
+  parsimony: null,
+  dirichlet: null,
+  ssh: null,
+};
+
 // ---------- helpers ----------
 function approxBytesOfRow(r) {
-  // crude but stable estimate
   return 8 + JSON.stringify(r).length + 1;
 }
-
 function approxBytesOfJson(obj) {
   return JSON.stringify(obj).length;
 }
-
 function canUseBeacon() {
-  try {
-    return typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function";
-  } catch {
-    return false;
-  }
+  try { return typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function"; }
+  catch { return false; }
 }
-
 function tryBeacon(url, obj) {
   try {
     const blob = new Blob([JSON.stringify(obj)], { type: "application/json" });
     return navigator.sendBeacon(url, blob);
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
-
 async function postJSON(url, obj, { preferBeacon = false, keepalive = false } = {}) {
-  // Small payload + allowed? try Beacon first
   if (preferBeacon && canUseBeacon() && approxBytesOfJson(obj) <= BEACON_MAX_BYTES) {
     const ok = tryBeacon(url, obj);
     if (ok) return { ok: true, via: "beacon" };
-    // fall through to fetch
   }
-
-  // Fallback to fetch (optionally keepalive)
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(AUTH ? { authorization: AUTH } : {}),
-    },
+    headers: { "content-type": "application/json", ...(AUTH ? { authorization: AUTH } : {}) },
     body: JSON.stringify(obj),
     keepalive,
     cache: "no-store",
@@ -100,57 +108,50 @@ async function postJSON(url, obj, { preferBeacon = false, keepalive = false } = 
   }
   return { ok: true, via: "fetch" };
 }
-
 function classifyPermanentRowsError(err) {
   if (!err) return { permanent: false, reason: "" };
   const status = err.status | 0;
   const msg = (err.bodyText || err.message || "").toLowerCase();
-
-  // 404/410 are permanent for sure
-  if (status === 404 || status === 410) {
-    return { permanent: true, reason: `endpoint returned ${status}` };
-  }
-
-  // Common "table missing" signals -> permanent until server is fixed
+  if (status === 404 || status === 410) return { permanent: true, reason: `endpoint returned ${status}` };
   const tableMissing =
     msg.includes("doesn't exist") ||
     msg.includes("does not exist") ||
     msg.includes("no such table") ||
     msg.includes("unknown table") ||
-    msg.includes("table") && msg.includes("not found");
-
-  if (status === 500 && tableMissing) {
-    return { permanent: true, reason: "target table is missing on the server" };
-  }
-
+    (msg.includes("table") && msg.includes("not found"));
+  if (status === 500 && tableMissing) return { permanent: true, reason: "target table is missing on the server" };
   return { permanent: false, reason: "" };
 }
 
+// ---------- Job metadata upsert ----------
 async function upsertJobMetadata(jobId, cfg) {
+  const payload = {
+    job_id: jobId,
+    thr: cfg.thr,
+    reps: cfg.reps,
+    max_iter: cfg.maxIter,
+    D_pi: cfg.D_pi,
+    D_M: cfg.D_M,
+    status: "started",
+  };
+  const size = approxBytesOfJson(payload);
+
   try {
-    await postJSON(`${API_BASE}/api/jobs`, {
-      job_id: jobId,
-      thr: cfg.thr,
-      reps: cfg.reps,
-      max_iter: cfg.maxIter,
-      D_pi: cfg.D_pi,
-      D_M: cfg.D_M,
-      status: "started",
-    }, { keepalive: true }); // harmless outside teardown
-    postMessage({ type: "log", line: "ℹ︎ job config saved" });
+    upLog(`↗ upsert /api/jobs (job=${jobId}, ~${size}B)`);
+    const result = await postJSON(`${API_BASE}/api/jobs`, payload, { keepalive: true });
+    dbLog(`job config saved via ${result.via}`);
+    upLog(`✔ upsert /api/jobs ok (via ${result.via})`);
   } catch (err) {
-    postMessage({ type: "log", line: `⚠️ failed to save job config: ${String(err)}` });
+    postMessage({ type: "log", line: `❌ upsert /api/jobs failed: ${String(err)}` });
   }
 }
 
+// ---------- Job status patch ----------
 async function setJobStatus(jobId, payload) {
   try {
     const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`, {
       method: "PATCH",
-      headers: {
-        "content-type": "application/json",
-        ...(AUTH ? { authorization: AUTH } : {}),
-      },
+      headers: { "content-type": "application/json", ...(AUTH ? { authorization: AUTH } : {}) },
       keepalive: true,
       body: JSON.stringify(payload),
     });
@@ -158,7 +159,7 @@ async function setJobStatus(jobId, payload) {
       const text = await res.text().catch(() => "");
       postMessage({ type: "log", line: `⚠️ job patch failed: HTTP ${res.status} :: ${text.slice(0,200)}` });
     } else {
-      if (payload?.status) postMessage({ type: "log", line: `ℹ︎ job status -> ${payload.status}` });
+      if (payload?.status) dbLog(`job status -> ${payload.status}`);
     }
   } catch (e) {
     postMessage({ type: "log", line: `⚠️ job patch error: ${String(e)}` });
@@ -170,7 +171,6 @@ function summarizeBatch(batch) {
   let minRep = Infinity, maxRep = -Infinity;
   let minIter = Infinity, maxIter = -Infinity;
   let approxBytes = 0;
-
   for (const r of batch) {
     const m = (r.method ?? "(none)").toString();
     methods[m] = (methods[m] || 0) + 1;
@@ -180,31 +180,22 @@ function summarizeBatch(batch) {
   }
   if (!Number.isFinite(minRep)) { minRep = null; maxRep = null; }
   if (!Number.isFinite(minIter)) { minIter = null; maxIter = null; }
-
   const methodStr = Object.keys(methods).length
     ? Object.entries(methods).map(([k,v]) => `${k}:${v}`).join(", ")
     : "—";
-
   return { methodStr, minRep, maxRep, minIter, maxIter, approxBytes };
 }
 
 function normalizeRow(raw) {
   const toNum = (v) => (v == null || v === "" ? NaN : Number(v));
   const toInt = (v) => (v == null || v === "" ? NaN : parseInt(v, 10));
-
-  const ll_init_src =
-    raw.ll_init ?? raw.ll_initial ?? raw.logLikelihood_initial ?? raw.loglikelihood_initial;
-  const ecd_first_src =
-    raw.ecd_ll_first ?? raw.logLikelihood_ecd_first ?? raw.loglikelihood_ecd_first;
-  const ecd_final_src =
-    raw.ecd_ll_final ?? raw.logLikelihood_ecd_final ?? raw.loglikelihood_ecd_final;
-  const ll_final_src =
-    raw.ll_final ?? raw.logLikelihood_final ?? raw.loglikelihood_final;
-
+  const ll_init_src   = raw.ll_init ?? raw.ll_initial ?? raw.logLikelihood_initial ?? raw.loglikelihood_initial;
+  const ecd_first_src = raw.ecd_ll_first ?? raw.logLikelihood_ecd_first ?? raw.loglikelihood_ecd_first;
+  const ecd_final_src = raw.ecd_ll_final ?? raw.logLikelihood_ecd_final ?? raw.loglikelihood_ecd_final;
+  const ll_final_src  = raw.ll_final ?? raw.logLikelihood_final ?? raw.loglikelihood_final;
   const rep_src  = raw.rep  ?? raw.repetition ?? raw.repeat;
   const iter_src = raw.iter ?? raw.iteration;
   const root_src = raw.root ?? raw.start ?? raw.node;
-
   return {
     method: raw.method,
     root: String(root_src ?? ""),
@@ -218,14 +209,12 @@ function normalizeRow(raw) {
 }
 
 function scheduleFlush() {
-  if (!flushTimer) {
-    flushTimer = setTimeout(() => void flushNow(jobIdForThisRun, { final: false }), FLUSH_INTERVAL_MS);
-  }
+  if (!flushTimer) flushTimer = setTimeout(() => void flushNow(jobIdForThisRun, { final: false }), FLUSH_INTERVAL_MS);
 }
-
 function queueRow(jobId, row) {
   const r = normalizeRow(row);
   if (!r) return;
+  if (Number.isFinite(r.rep)) lastRepSeen = r.rep;
   rowBuffer.push(r);
   if (rowBuffer.length >= MAX_BATCH) {
     if (!inflight) void flushNow(jobId, { final: false });
@@ -234,30 +223,25 @@ function queueRow(jobId, row) {
     scheduleFlush();
   }
 }
-
 function takeByteCappedBatch(maxRows, maxBytes) {
   const batch = [];
   let bytes = 0;
   while (batch.length < maxRows && rowBuffer.length) {
     const next = rowBuffer[0];
     const cost = approxBytesOfRow(next);
-    if (batch.length > 0 && bytes + cost > maxBytes) break; // keep at least one row
+    if (batch.length > 0 && bytes + cost > maxBytes) break;
     batch.push(rowBuffer.shift());
     bytes += cost;
   }
   return batch;
 }
-
 function encodeCsv(rows) {
-  const header = [
-    "job_id","method","root","rep","iter",
-    "ll_init","ecd_ll_first","ecd_ll_final","ll_final"
-  ];
+  const header = ["job_id","method","root","rep","iter","ll_init","ecd_ll_first","ecd_ll_final","ll_final"];
   const toCell = (v) => {
     if (v == null || Number.isNaN(v)) return "";
     const s = String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
-    };
+  };
   const lines = [header.join(",")];
   for (const r of rows) {
     lines.push([
@@ -274,15 +258,11 @@ function encodeCsv(rows) {
   }
   return new TextEncoder().encode(lines.join("\n"));
 }
-
 function emitRowsAsArtifact(rows, reason) {
   try {
     const name = `llchange_fallback_${jobIdForThisRun}_${++artifactSeq}.csv`;
     const bytes = encodeCsv(rows);
-    postMessage({
-      type: "log",
-      line: `📦 Rows saved as artifact "${name}" (${bytes.length}B) due to: ${reason}`
-    });
+    postMessage({ type: "log", line: `📦 Rows saved as artifact "${name}" (${bytes.length}B) due to: ${reason}` });
     postMessage({ type: "artifact", name, bytes }, [bytes.buffer]);
   } catch (e) {
     postMessage({ type: "log", line: `⚠️ failed to emit fallback artifact: ${String(e)}` });
@@ -294,7 +274,6 @@ async function flushNow(jobId, { final }) {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
   if (!rowBuffer.length) return false;
 
-  // If rows endpoint is disabled, just dump to artifacts and skip network
   if (rowsEndpointDisabled) {
     const batch = rowBuffer.splice(0, Math.min(rowBuffer.length, MAX_BATCH));
     const id = ++flushSeq;
@@ -304,18 +283,14 @@ async function flushNow(jobId, { final }) {
     return true;
   }
 
-  // For final flush, keep the payload small enough for Beacon.
   const batch = final && canUseBeacon()
-    ? takeByteCappedBatch(MAX_BATCH, BEACON_MAX_BYTES - 512) // small header margin
+    ? takeByteCappedBatch(MAX_BATCH, BEACON_MAX_BYTES - 512)
     : rowBuffer.splice(0, Math.min(rowBuffer.length, MAX_BATCH));
 
   const { methodStr, minRep, maxRep, minIter, maxIter, approxBytes } = summarizeBatch(batch);
   const id = ++flushSeq;
 
-  postMessage({
-    type: "log",
-    line: `⤴︎ [mess #${id}] transmitting ${batch.length} rows (~${approxBytes}B) · methods: ${methodStr} · reps:[${minRep ?? "—"}-${maxRep ?? "—"}] · iters:[${minIter ?? "—"}-${maxIter ?? "—"}]`
-  });
+  dbLog(`⤴︎ [mess #${id}] transmitting ${batch.length} rows (~${approxBytes}B) · methods: ${methodStr} · reps:[${minRep ?? "—"}-${maxRep ?? "—"}] · iters:[${minIter ?? "—"}-${maxIter ?? "—"}]`);
 
   inflight = true;
   const t0 = (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -323,24 +298,15 @@ async function flushNow(jobId, { final }) {
     const result = await postJSON(
       ENDPOINTS.rows(jobId),
       { rows: batch },
-      {
-        // prefer Beacon only for "final" drains
-        preferBeacon: !!final,
-        keepalive: !!final, // helps if Beacon not available
-      }
+      { preferBeacon: !!final, keepalive: !!final }
     );
-
     const t1 = (typeof performance !== "undefined" ? performance.now() : Date.now());
     const ms = Math.round(t1 - t0);
     retryDelay = RETRY_BASE_MS;
-    postMessage({
-      type: "log",
-      line: `[sent #${id}] ok via ${result.via} in ${ms}ms · remaining buffer: ${rowBuffer.length}`
-    });
+    dbLog(`[sent #${id}] ok via ${result.via} in ${ms}ms · remaining buffer: ${rowBuffer.length}`);
   } catch (err) {
     const { permanent, reason } = classifyPermanentRowsError(err);
     if (permanent) {
-      // Stop retrying network; route future batches to artifacts
       rowsEndpointDisabled = true;
       rowsEndpointErrorReason = reason || "permanent server error";
       postMessage({
@@ -349,17 +315,12 @@ async function flushNow(jobId, { final }) {
 `🛑 rows endpoint permanently failing (${rowsEndpointErrorReason}); dumping current + future rows as artifacts.
    Check API_BASE="${API_BASE}" and ensure the backend exposes ${ENDPOINTS.rows("<jobId>")} and the required table exists.`,
       });
-      // Put rows back then dump them immediately as artifact to preserve order
       rowBuffer.unshift(...batch);
       const dump = rowBuffer.splice(0, Math.min(rowBuffer.length, MAX_BATCH));
       emitRowsAsArtifact(dump, rowsEndpointErrorReason);
     } else {
-      // transient: put rows back at the front (preserve ordering) and retry
       rowBuffer.unshift(...batch);
-      postMessage({
-        type: "log",
-        line: `❌ [sent #${id}] ${String(err)} — retrying in ${retryDelay}ms (buffer: ${rowBuffer.length} rows)`
-      });
+      postMessage({ type: "log", line: `❌ [sent #${id}] ${String(err)} — retrying in ${retryDelay}ms (buffer: ${rowBuffer.length} rows)` });
       setTimeout(() => void flushNow(jobId, { final }), retryDelay);
       retryDelay = Math.min(Math.floor(retryDelay * 1.8), RETRY_MAX_MS);
     }
@@ -385,140 +346,216 @@ async function drainAll(jobId) {
 
 /* ---------------- [EM_AllInfo] handling ---------------- */
 
+// Normalize to shape {parsimony?, dirichlet?, ssh?}
 function normalizeBestObject(raw) {
-  // Expect shape like: { parsimony: {...}, dirichlet: {...}, ssh: {...} }
   if (!raw || typeof raw !== "object") return null;
   const out = {};
-
-  // Pass-through preferred keys
   if (raw.parsimony) out.parsimony = raw.parsimony;
   if (raw.dirichlet) out.dirichlet = raw.dirichlet;
   if (raw.ssh)       out.ssh       = raw.ssh;
-
-  // Accept a few alternates just in case
   if (!out.parsimony && raw.Parsimony) out.parsimony = raw.Parsimony;
   if (!out.dirichlet && raw.Dirichlet) out.dirichlet = raw.Dirichlet;
   if (!out.ssh && raw.SSH)             out.ssh       = raw.SSH;
-
-  // Single-struct fallback
   if (!out.parsimony && !out.dirichlet && !out.ssh) {
-    const method = String(raw.method || "").toLowerCase();
-    if (method.includes("pars")) out.parsimony = raw;
-    else if (method.includes("dir")) out.dirichlet = raw;
-    else if (method.includes("ssh")) out.ssh = raw;
+    const m = String(raw.method || "").toLowerCase();
+    if (m.includes("pars")) out.parsimony = raw;
+    else if (m.includes("dir")) out.dirichlet = raw;
+    else if (m.includes("ssh")) out.ssh = raw;
   }
-
-  if (!out.parsimony && !out.dirichlet && !out.ssh) return null;
-  return out;
+  return (out.parsimony || out.dirichlet || out.ssh) ? out : null;
 }
 
-async function uploadBest(jobId, bestRaw, { preferBeacon = false } = {}) {
-  if (bestEndpointMissing) return false;
-
-  const shaped = normalizeBestObject(bestRaw);
-  if (!shaped) {
-    postMessage({ type: "log", line: "[EM_AllInfo] payload shape not recognized; skipping" });
-    return false;
-  }
-
-  const payload = { job_id: jobId, ...shaped };
-  const size = approxBytesOfJson(payload);
-  postMessage({ type: "log", line: `→ [EM_AllInfo] upload start (~${size}B)` });
-
+function emitBestAsArtifact(bundle, reason) {
   try {
-    const res = await postJSON(ENDPOINTS.allinfo(), payload, {
-      preferBeacon,
-      keepalive: preferBeacon, // helpful fallback if Beacon rejected
-    });
-    bestSeenCount += 1;
-    postMessage({ type: "log", line: `[EM_AllInfo] upserted (${bestSeenCount}) via ${res.via}` });
-    return true;
+    const name = `em_allinfo_fallback_${jobIdForThisRun}_${++artifactSeq}.json`;
+    const bytes = new TextEncoder().encode(JSON.stringify({ reason, job_id: jobIdForThisRun, bundle }));
+    postMessage({ type: "log", line: `📦 Best-params saved as artifact "${name}" (${bytes.length}B) due to: ${reason}` });
+    postMessage({ type: "artifact", name, bytes }, [bytes.buffer]);
   } catch (e) {
-    if (e && (e.permanent || e.status === 404 || e.status === 410)) {
-      bestEndpointMissing = true;
-      postMessage({
-        type: "log",
-        line:
-`[EM_AllInfo] endpoint not found (HTTP ${e.status}). Further attempts suppressed.
-   Check API_BASE="${API_BASE}" and ALL_INFO_PATH="${self.ALL_INFO_PATH || "/api/allinfo"}" point to a server exposing that route.`,
-      });
-      return false;
-    }
-    postMessage({ type: "log", line: `❌ [EM_AllInfo] upload error: ${String(e)}` });
-    return false;
+    postMessage({ type: "log", line: `⚠️ failed to emit best-params artifact: ${String(e)}` });
   }
 }
 
+async function uploadBestMethods(jobId, shaped, { preferBeacon = false } = {}) {
+  if (bestEndpointMissing) return { okAny: false, okAll: false };
+  const methods = ["parsimony", "dirichlet", "ssh"].filter(k => shaped[k]);
+  if (!methods.length) return { okAny: false, okAll: false };
+
+  let okAny = false;
+  let okAll = true;
+
+  for (const k of methods) {
+    const payload = { job_id: jobId, [k]: shaped[k] };
+    const size = approxBytesOfJson(payload);
+    upLog(`↗ upsert /api/allinfo (job=${jobId}, method=${k}, ~${size}B)`);
+    dbLog(`→ [EM_AllInfo] uploading ${k} (~${size}B)`);
+    try {
+      const res = await postJSON(ENDPOINTS.allinfo(), payload, {
+        preferBeacon: preferBeacon && size <= BEACON_MAX_BYTES,
+        keepalive: !!preferBeacon
+      });
+      okAny = true;
+      dbLog(`[EM_AllInfo] ${k} ok via ${res.via}`);
+      upLog(`✔ upsert /api/allinfo (${k}) ok (via ${res.via})`);
+    } catch (e) {
+      okAll = false;
+      if (e && (e.permanent || e.status === 404 || e.status === 410)) {
+        bestEndpointMissing = true;
+        postMessage({ type: "log", line: `[EM_AllInfo] endpoint missing (HTTP ${e.status}); suppressing further attempts.` });
+        break;
+      }
+      postMessage({ type: "log", line: `❌ upsert /api/allinfo (${k}) failed: ${String(e)}` });
+    }
+  }
+
+  return { okAny, okAll };
+}
+
+// Ensure best-object has rep; fallback to lastRepSeen if missing
+function attachRepIfMissing(obj) {
+  if (!obj) return;
+  const r = Number(obj.rep);
+  if (!Number.isFinite(r) && Number.isFinite(lastRepSeen)) obj.rep = lastRepSeen;
+}
+
+// Flush the currently pending rep's bundle immediately
+async function flushPendingBestNow(reason = "manual flush") {
+  if (pendingRep === null) return { okAny: false, okAll: false };
+  const bundle = {};
+  if (pendingBest.parsimony) bundle.parsimony = pendingBest.parsimony;
+  if (pendingBest.dirichlet) bundle.dirichlet = pendingBest.dirichlet;
+  if (pendingBest.ssh)       bundle.ssh       = pendingBest.ssh;
+  if (!Object.keys(bundle).length) return { okAny: false, okAll: false };
+
+  lastBestObj = bundle;
+
+  const result = await uploadBestMethods(jobIdForThisRun, bundle, { preferBeacon: false });
+  bestUploaded = result.okAll;
+
+  if (!result.okAny && !bestEndpointMissing) {
+    emitBestAsArtifact({ rep: pendingRep, ...bundle }, `upload failed during ${reason}`);
+  }
+
+  // clear current rep bundle
+  pendingBest.parsimony = pendingBest.dirichlet = pendingBest.ssh = null;
+  pendingRep = null;
+
+  return result;
+}
+
+// Debounce uploads slightly to gather 3 methods for the same rep
 function scheduleBestUpload() {
   if (bestFlushTimer) return;
   bestFlushTimer = setTimeout(() => {
-    const obj = pendingBestObj;
-    pendingBestObj = null;
     bestFlushTimer = null;
-    if (obj) {
-      uploadBest(jobIdForThisRun, obj, { preferBeacon: false }).then((ok) => {
-        bestUploaded = ok;
-        if (!ok && !bestEndpointMissing) postMessage({ type: "log", line: "⏳ [EM_AllInfo] will retry at end" });
-      });
-    }
+    void flushPendingBestNow("debounced flush");
   }, BEST_UPLOAD_DEBOUNCE_MS);
 }
+
+// Handle an [EM_AllInfo] line from the WASM code
+function handleBestLine(jsonText) {
+  try {
+    const shaped = normalizeBestObject(JSON.parse(jsonText));
+    if (!shaped) return;
+
+    // Ensure rep is present on each method struct
+    attachRepIfMissing(shaped.parsimony);
+    attachRepIfMissing(shaped.dirichlet);
+    attachRepIfMissing(shaped.ssh);
+
+    // Extract the rep for this best-bundle
+    const repNow = Number(
+      (shaped.parsimony && shaped.parsimony.rep) ??
+      (shaped.dirichlet && shaped.dirichlet.rep) ??
+      (shaped.ssh && shaped.ssh.rep)
+    );
+    if (!Number.isFinite(repNow)) {
+      postMessage({ type: "log", line: "[EM_AllInfo] missing rep; skipping upload" });
+      return;
+    }
+
+    // If a new rep arrives, flush the previous one immediately
+    if (pendingRep !== null && repNow !== pendingRep) {
+      void flushPendingBestNow("rep changed");
+    }
+    pendingRep = repNow;
+
+    // Merge into the current pending bundle for this rep
+    if (shaped.parsimony) pendingBest.parsimony = shaped.parsimony;
+    if (shaped.dirichlet) pendingBest.dirichlet = shaped.dirichlet;
+    if (shaped.ssh)       pendingBest.ssh       = shaped.ssh;
+
+    scheduleBestUpload();
+  } catch (e) {
+    postMessage({ type: "log", line: `EM_AllInfo-parse-error: ${String(e)} :: ${jsonText.slice(0,200)}` });
+  }
+}
+
+/* ---------------- line printer ---------------- */
 
 function handlePrint(txt) {
   const line = String(txt).trim();
   if (!line) return;
 
-  // Streamed rows
   if (jobIdForThisRun && line.startsWith("[ROW")) {
     const brace = line.indexOf("{");
     if (brace !== -1) {
       try {
-        const parsed = JSON.parse(line.slice(brace));
-        queueRow(jobIdForThisRun, parsed);
+        const obj = JSON.parse(line.slice(brace));
+        queueRow(jobIdForThisRun, obj);
         return;
       } catch (e) {
         postMessage({ type: "log", line: `row-parse-error: ${String(e)} :: ${line.slice(0,200)}` });
+        return;
       }
     }
   }
 
-  // Best-parameters JSON
   if (jobIdForThisRun && line.startsWith("[EM_AllInfo]")) {
     const brace = line.indexOf("{");
     if (brace !== -1) {
-      try {
-        const parsed = JSON.parse(line.slice(brace));
-        lastBestObj = parsed;
-        bestUploaded = false;
-
-        // Coalesce mid-run updates to avoid spamming the server
-        pendingBestObj = parsed;
-        scheduleBestUpload();
-
-        postMessage();
-        return;
-      } catch (e) {
-        postMessage({ type: "log", line: `EM_AllInfo-parse-error: ${String(e)} :: ${line.slice(0,200)}` });
-      }
+      handleBestLine(line.slice(brace));
+      return;
     }
   }
 
-  // Everything else to UI log
+  // Everything else is regular UI log
   postMessage({ type: "log", line });
 }
 
-// ---------- WASM worker entry ----------
+/* ---------------- worker entry + runtime toggle handler ---------------- */
+
 self.onmessage = async (e) => {
+  // RUNTIME TOGGLE for console DB logs
+  if (e?.data && e.data.__cmd === "setDbLogging") {
+    DB_LOGS = !!e.data.enabled;
+    try { console.debug(`[DB] logging ${DB_LOGS ? "ENABLED" : "DISABLED"}`); } catch {}
+    return;
+  }
+  // RUNTIME TOGGLE for upsert UI logs
+  if (e?.data && e.data.__cmd === "setUpsertUiLogging") {
+    UPSERT_UI_LOGS = !!e.data.enabled;
+    postMessage({ type: "log", line: `ℹ︎ Upsert UI logs ${UPSERT_UI_LOGS ? "ENABLED" : "DISABLED"}` });
+    return;
+  }
+
   const { params, seqBytes, topoBytes, jobId } = e.data;
   startedAtMs = Date.now();
   jobIdForThisRun = jobId || `job-${Date.now()}`;
-  bestSeenCount = 0;
+  rowsEndpointDisabled = false;
+  rowsEndpointErrorReason = "";
+
+  // reset row + best state
+  lastRepSeen = null;
+
   lastBestObj = null;
   bestUploaded = false;
   bestEndpointMissing = false;
-  rowsEndpointDisabled = false;
-  rowsEndpointErrorReason = "";
-  pendingBestObj = null;
+
+  pendingRep = null;
+  pendingBest.parsimony = null;
+  pendingBest.dirichlet = null;
+  pendingBest.ssh = null;
   if (bestFlushTimer) { clearTimeout(bestFlushTimer); bestFlushTimer = null; }
 
   const v = (self.NEXT_PUBLIC_COMMIT_SHA || Date.now());
@@ -543,7 +580,7 @@ self.onmessage = async (e) => {
           postMessage({ type: "artifact", name, bytes }, [bytes.buffer]);
         }
       }
-    } catch {}
+    } catch { /* ignore */ }
   }
 
   try {
@@ -601,13 +638,19 @@ self.onmessage = async (e) => {
       );
     }
 
+    // Finish sending row-stream
     await drainAll(jobIdForThisRun);
     shipArtifacts();
 
-    // Retry [EM_AllInfo] once at end — prefer Beacon here
+    // Flush any remaining best-bundle for the last rep
+    await flushPendingBestNow("end-of-run");
+
+    // As an extra safety net, retry the last bundle (if any) with Beacon
     if (lastBestObj && !bestUploaded && !bestEndpointMissing) {
-      postMessage({ type: "log", line: "↻ [EM_AllInfo] retrying at end-of-run…" });
-      bestUploaded = await uploadBest(jobIdForThisRun, lastBestObj, { preferBeacon: true });
+      dbLog("↻ [EM_AllInfo] retrying at end-of-run…");
+      const { okAny, okAll } = await uploadBestMethods(jobIdForThisRun, lastBestObj, { preferBeacon: true });
+      if (!okAny) emitBestAsArtifact(lastBestObj, "network error while posting EM_AllInfo");
+      bestUploaded = okAll;
     }
 
     const elapsedMs = Date.now() - startedAtMs;
@@ -621,12 +664,17 @@ self.onmessage = async (e) => {
       blocked_reason: rowsEndpointDisabled ? rowsEndpointErrorReason : undefined,
     });
   } catch (err) {
+    // Finish sending row-stream even on failure
     await drainAll(jobIdForThisRun);
 
-    // Retry [EM_AllInfo] once on failure, too (Beacon preferred)
+    // Flush whatever best bundle we have for the last rep
+    await flushPendingBestNow("run failure");
+
+    // Retry the last best bundle once more using Beacon
     if (lastBestObj && !bestUploaded && !bestEndpointMissing) {
-      postMessage({ type: "log", line: "↻ [EM_AllInfo] retrying after failure…" });
-      bestUploaded = await uploadBest(jobIdForThisRun, lastBestObj, { preferBeacon: true });
+      dbLog("↻ [EM_AllInfo] retrying after failure…");
+      const { okAny } = await uploadBestMethods(jobIdForThisRun, lastBestObj, { preferBeacon: true });
+      if (!okAny) emitBestAsArtifact(lastBestObj, "network error while posting EM_AllInfo (after failure)");
     }
 
     const elapsedMs = Date.now() - startedAtMs;

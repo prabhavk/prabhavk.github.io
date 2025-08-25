@@ -10,7 +10,8 @@ const Plot = dynamic<PlotParams>(() => import("react-plotly.js"), { ssr: false }
 
 /* --------- colors --------- */
 const COLOR_BLACK = "#000000";
-const COLOR_GRAY_DENSITY = "#6b7280"; // neutral gray similar to violin outline
+const COLOR_GRAY_DENSITY = "#6b7280"; // neutral gray for density curve
+const COLOR_CI = "#9CA3AF";           // slightly lighter gray for CI lines
 
 /* --------- constants & layouts --------- */
 
@@ -182,8 +183,77 @@ function makeBetaLineTrace(a: number, b: number, totalCount: number, name: strin
   };
 }
 
+/** Continued fraction for incomplete beta — Numerical Recipes style */
+function betacf(a: number, b: number, x: number): number {
+  const MAXIT = 200;
+  const EPS = 3e-8;
+  const FPMIN = 1e-30;
+
+  const qab = a + b;
+  const qap = a + 1;
+  const qam = a - 1;
+  let c = 1.0;
+  let d = 1.0 - (qab * x) / qap;
+  if (Math.abs(d) < FPMIN) d = FPMIN;
+  d = 1.0 / d;
+  let h = d;
+
+  for (let m = 1; m <= MAXIT; m++) {
+    const m2 = 2 * m;
+
+    // even step
+    let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2));
+    d = 1.0 + aa * d;
+    if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1.0 + aa / c;
+    if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1.0 / d;
+    h *= d * c;
+
+    // odd step
+    aa = -((a + m) * (qab + m) * x) / ((a + m2) * (qap + m2));
+    d = 1.0 + aa * d;
+    if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1.0 + aa / c;
+    if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1.0 / d;
+    const del = d * c;
+    h *= del;
+
+    if (Math.abs(del - 1.0) < EPS) break;
+  }
+  return h;
+}
+
+/** Regularized incomplete beta I_x(a,b) = P(X <= x) for Beta(a,b) */
+function betaCdf(x: number, a: number, b: number): number {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  const bt = Math.exp(lnGamma(a + b) - lnGamma(a) - lnGamma(b) + a * Math.log(x) + b * Math.log(1 - x));
+  if (x < (a + 1) / (a + b + 2)) {
+    return (bt * betacf(a, b, x)) / a;
+  } else {
+    return 1 - (bt * betacf(b, a, 1 - x)) / b;
+  }
+}
+
+/** Inverse CDF (quantile) via bisection */
+function betaInvCDF(p: number, a: number, b: number): number {
+  // guard
+  const pp = Math.min(1 - 1e-12, Math.max(1e-12, p));
+  let lo = 0, hi = 1, mid = 0.5;
+  for (let i = 0; i < 80; i++) {
+    mid = 0.5 * (lo + hi);
+    const c = betaCdf(mid, a, b);
+    if (c > pp) hi = mid;
+    else lo = mid;
+    if (Math.abs(c - pp) < 1e-6) break;
+  }
+  return mid;
+}
+
 /** A vertical line that spans the whole plotting area (yref='paper') */
-function makeVerticalShape(x: number): Partial<Shape> {
+function makeVerticalShape(x: number, color = COLOR_BLACK, solid = true): Partial<Shape> {
   return {
     type: "line",
     x0: x,
@@ -192,8 +262,17 @@ function makeVerticalShape(x: number): Partial<Shape> {
     y1: 1,
     xref: "x",
     yref: "paper",
-    line: { color: COLOR_BLACK, width: 2 },
+    line: { color, width: 2, dash: solid ? "solid" : "dot" },
   };
+}
+
+/** Two dotted CI lines at given level for Beta(a,b) */
+function makeBetaCIShapes(a: number, b: number, level = 0.95): Partial<Shape>[] {
+  if (!(a > 0 && b > 0)) return [];
+  const alpha = 1 - level;
+  const lo = betaInvCDF(alpha / 2, a, b);
+  const hi = betaInvCDF(1 - alpha / 2, a, b);
+  return [makeVerticalShape(lo, COLOR_CI, false), makeVerticalShape(hi, COLOR_CI, false)];
 }
 
 /* --------- component --------- */
@@ -205,6 +284,11 @@ export function ProbHists({
   rootName,
   alphaPi,         // Dirichlet for root (length 4)
   alphaM,          // Dirichlet for transition rows (length 4): α1 (diag), α2=α3=α4 (off-diag)
+  showBetaCI = false,
+  betaCILevel = 0.95,
+  rootHeaderRight,
+  singleHeaderRight,
+  aggHeaderRight,
 }: {
   root: number[] | null;
   trans: Record<string, unknown> | null;
@@ -212,6 +296,11 @@ export function ProbHists({
   rootName?: string | null;
   alphaPi?: number[] | null;
   alphaM?: number[] | null;
+  showBetaCI?: boolean;
+  betaCILevel?: number;
+  rootHeaderRight?: React.ReactNode;
+  singleHeaderRight?: React.ReactNode;
+  aggHeaderRight?: React.ReactNode;
 }) {
   // sanitize root
   const rootClean = useMemo(
@@ -276,22 +365,28 @@ export function ProbHists({
 
   return (
     <div className="space-y-6">
-      {/* Root panels: Beta density (gray) + vertical line at value (black) */}
+      {/* Root panels: Beta density (gray) + vertical line at value (black) + optional CI */}
       <section>
-        <h2 className="text-lg font-semibold mb-2">
-          {rootName ? `Root distribution at ${rootName}` : "Root probability (final)"}
-        </h2>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg font-semibold">
+            {rootName ? `Root distribution at ${rootName}` : "Root probability (final)"}
+          </h2>
+          <div>{rootHeaderRight ?? null}</div>
+          </div>
         {rootOK ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {rootClean.map((val, i) => {
               const traces: Partial<PlotData>[] = [];
+              const shapes: Partial<Shape>[] = [];
+
               if (hasAlphaPi) {
                 const a_k = alphaPi![i];
                 const a0  = alphaPi!.reduce((s, x) => s + x, 0);
                 const b_k = a0 - a_k;
                 traces.push(makeBetaLineTrace(a_k, b_k, 1, `Beta(${a_k.toFixed(1)}, ${b_k.toFixed(1)})`));
+                if (showBetaCI) shapes.push(...makeBetaCIShapes(a_k, b_k, betaCILevel));
               }
-              const shapes: Partial<Shape>[] = Number.isFinite(val) ? [makeVerticalShape(val)] : [];
+              if (Number.isFinite(val)) shapes.push(makeVerticalShape(val));
 
               return (
                 <div key={`root-${i}`} className="border rounded p-5">
@@ -328,9 +423,12 @@ export function ProbHists({
         )}
       </section>
 
-      {/* Single node-specific entry: Beta (gray) + vertical line at value (black) */}
-      <section>
-        <h2 className="text-lg font-semibold mb-2">Transition matrix entry (per node)</h2>
+      {/* Single node-specific entry: Beta (gray) + vertical line (black) + optional CI */}
+     <section>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg font-semibold">Transition matrix entry (per node)</h2>
+          <div>{singleHeaderRight ?? null}</div>
+        </div>
         {!anyTrans ? (
           <div className="text-sm text-gray-600">No transition matrices available.</div>
         ) : (
@@ -375,15 +473,15 @@ export function ProbHists({
 
             {(() => {
               const traces: Partial<PlotData>[] = [];
+              const shapes: Partial<Shape>[] = [];
               if (hasAlphaM) {
                 const isDiag = rowIdx === colIdx;
                 const a = isDiag ? alphaM![0] : alphaM![1]; // α1 for diag, α2 (same as α3, α4) for off-diag
                 const b = alpha0M - a;
                 traces.push(makeBetaLineTrace(a, b, 1, `Beta(${a.toFixed(1)}, ${b.toFixed(1)})`));
+                if (showBetaCI) shapes.push(...makeBetaCIShapes(a, b, betaCILevel));
               }
-              const shapes: Partial<Shape>[] = Number.isFinite(selectedValue)
-                ? [makeVerticalShape(selectedValue)]
-                : [];
+              if (Number.isFinite(selectedValue)) shapes.push(makeVerticalShape(selectedValue));
 
               return (
                 <Plot
@@ -419,24 +517,27 @@ export function ProbHists({
         )}
       </section>
 
-      {/* Aggregated across matrices: histograms (black) + Beta density (gray) */}
+      {/* Aggregated across matrices: histograms (black) + Beta density (gray) + optional CI */}
       <section>
-        <h2 className="text-lg font-semibold mb-2">Transition matrix entries (aggregated)</h2>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg font-semibold">Transition matrix entries (aggregated)</h2>
+          <div>{aggHeaderRight ?? null}</div>
+        </div>
         {transCells.some(arr => arr.length) ? (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
             {transCells.map((arr, idx) => {
               const i = Math.floor(idx / 4) + 1;
               const j = (idx % 4) + 1;
 
-              const traces: Partial<PlotData>[] = [
-                makeHistTrace(arr, `${label_trans_prob(i, j)}`),
-              ];
+              const traces: Partial<PlotData>[] = [ makeHistTrace(arr, `${label_trans_prob(i, j)}`) ];
+              const shapes: Partial<Shape>[] = [];
 
               if (hasAlphaM) {
                 const isDiag = i === j;
                 const a = isDiag ? alphaM![0] : alphaM![1];
                 const b = alpha0M - a;
                 traces.push(makeBetaLineTrace(a, b, arr.length, `Beta(${a.toFixed(1)}, ${b.toFixed(1)})`));
+                if (showBetaCI) shapes.push(...makeBetaCIShapes(a, b, betaCILevel));
               }
 
               return (
@@ -446,6 +547,7 @@ export function ProbHists({
                     layout={{
                       ...smallLayout,
                       bargap: 0.05,
+                      shapes,
                       annotations: [
                         {
                           text: `${label_trans_prob(i, j)} (n=${arr.length})`,

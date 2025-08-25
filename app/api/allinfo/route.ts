@@ -1,4 +1,4 @@
-// app/api/best/route.ts
+// app/api/allinfo/route.ts
 import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/lib/pscale";
 
@@ -9,7 +9,9 @@ export const runtime = "edge";
 type EMStruct = {
   method?: string;                                   // "Parsimony" | "Dirichlet" | "SSH"
   rep?: number | null;
+  num_iter?: number | null;
   ecd_ll_per_iter?: Record<string, number> | number[] | null;
+  ll_init?: number | null;
   ll_final?: number | null;
   root_name?: string | null;
   root_prob_init?: number[] | null;                  // length 4
@@ -21,7 +23,9 @@ type EMStruct = {
 type BestRow = {
   method: string | null;
   rep: number | null;
+  num_iter: number | null;
   root_name: string | null;
+  ll_init: number | null;
   ll_final: number | null;
   root_prob_init: string | null;
   root_prob_final: string | null;
@@ -42,43 +46,47 @@ function asObj(x: unknown): Record<string, unknown> | null {
   return x && typeof x === "object" ? (x as Record<string, unknown>) : null;
 }
 
+function toStrOrNull(v: unknown): string | null {
+  return v == null ? null : String(v);
+}
+
+function toNumOrNull(v: unknown): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 function coerceBestRow(u: unknown): BestRow {
   const o = (u && typeof u === "object" ? (u as Record<string, unknown>) : {}) as Record<string, unknown>;
-  const toStr = (v: unknown): string | null => (v == null ? null : String(v));
-  const toNum = (v: unknown): number | null => {
-    if (v == null) return null;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  };
   return {
-    method: toStr(o.method),
-    rep: toNum(o.rep),
-    root_name: toStr(o.root_name),
-    ll_final: toNum(o.ll_final),
-    root_prob_init: toStr(o.root_prob_init),
-    root_prob_final: toStr(o.root_prob_final),
-    trans_prob_init: toStr(o.trans_prob_init),
-    trans_prob_final: toStr(o.trans_prob_final),
-    ecd_ll_per_iter: toStr(o.ecd_ll_per_iter),
-    raw_json: toStr(o.raw_json),
+    method: toStrOrNull(o.method),
+    rep: toNumOrNull(o.rep),
+    num_iter: toNumOrNull(o.num_iter),
+    root_name: toStrOrNull(o.root_name),
+    ll_init: toNumOrNull(o.ll_init),
+    ll_final: toNumOrNull(o.ll_final),
+    root_prob_init: toStrOrNull(o.root_prob_init),
+    root_prob_final: toStrOrNull(o.root_prob_final),
+    trans_prob_init: toStrOrNull(o.trans_prob_init),
+    trans_prob_final: toStrOrNull(o.trans_prob_final),
+    ecd_ll_per_iter: toStrOrNull(o.ecd_ll_per_iter),
+    raw_json: toStrOrNull(o.raw_json),
   };
 }
 
 function coerceJobParamRow(u: unknown): JobParamRow {
   const o = (u && typeof u === "object" ? (u as Record<string, unknown>) : {}) as Record<string, unknown>;
-  const toNum = (v: unknown): number | null => {
-    if (v == null) return null;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  };
   return {
-    d_pi_1: toNum(o.d_pi_1), d_pi_2: toNum(o.d_pi_2), d_pi_3: toNum(o.d_pi_3), d_pi_4: toNum(o.d_pi_4),
-    d_m_1:  toNum(o.d_m_1),  d_m_2:  toNum(o.d_m_2),  d_m_3:  toNum(o.d_m_3),  d_m_4:  toNum(o.d_m_4),
+    d_pi_1: toNumOrNull(o.d_pi_1), d_pi_2: toNumOrNull(o.d_pi_2), d_pi_3: toNumOrNull(o.d_pi_3), d_pi_4: toNumOrNull(o.d_pi_4),
+    d_m_1:  toNumOrNull(o.d_m_1),  d_m_2:  toNumOrNull(o.d_m_2),  d_m_3:  toNumOrNull(o.d_m_3),  d_m_4:  toNumOrNull(o.d_m_4),
   };
 }
 
-function rowsFromResult<T>(rs: unknown, map: (u: unknown) => T): T[] {
-  const base = rs && typeof rs === "object" ? (rs as { rows?: unknown }) : null;
+type ExecResult = { rows?: unknown[] };
+
+/** Safely extract typed rows from a PlanetScale execute() result */
+function rowsFromResult<T>(rs: ExecResult, map: (u: unknown) => T): T[] {
+  const base = rs && typeof rs === "object" ? rs : null;
   if (!base || !Array.isArray(base.rows)) return [];
   return (base.rows as unknown[]).map(map);
 }
@@ -127,51 +135,67 @@ function normalizeIncoming(obj: Record<string, unknown>): {
 
 /* -------------------- DB upsert -------------------- */
 
+type MethodKey = "parsimony" | "dirichlet" | "ssh";
+
+function computeNumIter(ecd: EMStruct["ecd_ll_per_iter"]): number | null {
+  if (!ecd) return null;
+  if (Array.isArray(ecd)) return ecd.length;
+  if (typeof ecd === "object") return Object.keys(ecd).length;
+  return null;
+}
+
 async function upsertOne(
   conn: ReturnType<typeof db>,
   job_id: string,
-  methodKey: "parsimony" | "dirichlet" | "ssh",
+  methodKey: MethodKey,
   em: EMStruct
 ) {
-  const rep = Number.isFinite(em.rep as number) ? (em.rep as number) : null;
-  const root_name = typeof em.root_name === "string" ? em.root_name : null;
-  const ll_final = Number.isFinite(em.ll_final as number) ? (em.ll_final as number) : null;
+  // If your table’s PK is (job_id, method, rep) you’ll get one row per rep.
+  // If your table’s PK is (job_id, method) only, the latest write overwrites the previous rep.
+  const rep = Number.isFinite(em.rep as number) ? (em.rep as number) : 1;
 
-  const root_prob_init = em.root_prob_init ?? null;
-  const root_prob_final = em.root_prob_final ?? null;
-  const trans_prob_init = em.trans_prob_init ?? null;
+  const root_name        = typeof em.root_name === "string" ? em.root_name : null;
+  const ll_init          = Number.isFinite(em.ll_init as number) ? (em.ll_init as number) : null;
+  const ll_final         = Number.isFinite(em.ll_final as number) ? (em.ll_final as number) : null;
+  const num_iter         = Number.isFinite(em.num_iter as number) ? (em.num_iter as number) : computeNumIter(em.ecd_ll_per_iter);
+
+  const root_prob_init   = em.root_prob_init ?? null;
+  const root_prob_final  = em.root_prob_final ?? null;
+  const trans_prob_init  = em.trans_prob_init ?? null;
   const trans_prob_final = em.trans_prob_final ?? null;
-  const ecd_ll_per_iter = em.ecd_ll_per_iter ?? null;
+  const ecd_ll_per_iter  = em.ecd_ll_per_iter ?? null;
 
-  const raw_json = em; // store full struct as well
+  const raw_json: unknown = em; // keep full struct
 
-  await conn.execute(
-    `INSERT INTO emtr_all_info
-       (job_id, method, rep, root_name, ll_final,
-        root_prob_init, root_prob_final, trans_prob_init, trans_prob_final, ecd_ll_per_iter, raw_json)
-     VALUES (?,?,?,?,?,
-             ?,?,?,?, ?,?)
-     ON DUPLICATE KEY UPDATE
-       rep=VALUES(rep),
-       root_name=VALUES(root_name),
-       ll_final=VALUES(ll_final),
-       root_prob_init=VALUES(root_prob_init),
-       root_prob_final=VALUES(root_prob_final),
-       trans_prob_init=VALUES(trans_prob_init),
-       trans_prob_final=VALUES(trans_prob_final),
-       ecd_ll_per_iter=VALUES(ecd_ll_per_iter),
-       raw_json=VALUES(raw_json),
-       updated_at=CURRENT_TIMESTAMP(6)`,
-    [
-      job_id, methodKey, rep, root_name, ll_final,
-      JSON.stringify(root_prob_init),
-      JSON.stringify(root_prob_final),
-      JSON.stringify(trans_prob_init),
-      JSON.stringify(trans_prob_final),
-      JSON.stringify(ecd_ll_per_iter),
-      JSON.stringify(raw_json),
-    ]
-  );
+  const sql = `
+    INSERT INTO emtr_all_info
+      (job_id, method, rep, num_iter, root_name, ll_init, ll_final,
+       root_prob_init, root_prob_final, trans_prob_init, trans_prob_final, ecd_ll_per_iter, raw_json)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON DUPLICATE KEY UPDATE
+      rep = VALUES(rep),
+      num_iter = VALUES(num_iter),
+      root_name = VALUES(root_name),
+      ll_init = VALUES(ll_init),
+      ll_final = VALUES(ll_final),
+      root_prob_init = VALUES(root_prob_init),
+      root_prob_final = VALUES(root_prob_final),
+      trans_prob_init = VALUES(trans_prob_init),
+      trans_prob_final = VALUES(trans_prob_final),
+      ecd_ll_per_iter = VALUES(ecd_ll_per_iter),
+      raw_json = VALUES(raw_json),
+      updated_at = CURRENT_TIMESTAMP(6)
+  `;
+
+  await conn.execute(sql, [
+    job_id, methodKey, rep, num_iter, root_name, ll_init, ll_final,
+    JSON.stringify(root_prob_init),
+    JSON.stringify(root_prob_final),
+    JSON.stringify(trans_prob_init),
+    JSON.stringify(trans_prob_final),
+    JSON.stringify(ecd_ll_per_iter),
+    JSON.stringify(raw_json),
+  ]);
 }
 
 /* -------------------- POST: upsert best structs -------------------- */
@@ -221,34 +245,41 @@ export async function GET(req: NextRequest) {
 
     const conn = db();
 
-    // 1) Fetch Dirichlet hyperparameters from emtr_jobs (independent numeric columns)
-    const rsJob = await conn.execute(
+    // 1) Dirichlet hyperparameters (independent numeric columns)
+    const rsJob = (await conn.execute(
       `SELECT d_pi_1, d_pi_2, d_pi_3, d_pi_4,
               d_m_1,  d_m_2,  d_m_3,  d_m_4
          FROM emtr_jobs
         WHERE job_id = ?
         LIMIT 1`,
       [job_id]
-    );
+    )) as ExecResult;
+
     const jobRows = rowsFromResult<JobParamRow>(rsJob, coerceJobParamRow);
     const jobParams = jobRows[0];
     const D_pi = jobParams
-      ? [jobParams.d_pi_1, jobParams.d_pi_2, jobParams.d_pi_3, jobParams.d_pi_4].map(v => (Number.isFinite(v as number) ? (v as number) : null))
+      ? [jobParams.d_pi_1, jobParams.d_pi_2, jobParams.d_pi_3, jobParams.d_pi_4].map((v) =>
+          Number.isFinite(v as number) ? (v as number) : null
+        )
       : [null, null, null, null];
     const D_M = jobParams
-      ? [jobParams.d_m_1, jobParams.d_m_2, jobParams.d_m_3, jobParams.d_m_4].map(v => (Number.isFinite(v as number) ? (v as number) : null))
+      ? [jobParams.d_m_1, jobParams.d_m_2, jobParams.d_m_3, jobParams.d_m_4].map((v) =>
+          Number.isFinite(v as number) ? (v as number) : null
+        )
       : [null, null, null, null];
 
-    // 2) Fetch best reps
-    const rsBest = await conn.execute(
-      `SELECT method, rep, root_name, ll_final,
+    // 2) Fetch rows (all methods) for this job.
+    // If multiple reps were written, you can change this to pick the best per method.
+    const rsBest = (await conn.execute(
+      `SELECT method, rep, num_iter, root_name, ll_init, ll_final,
               root_prob_init, root_prob_final,
               trans_prob_init, trans_prob_final,
               ecd_ll_per_iter, raw_json
          FROM emtr_all_info
         WHERE job_id = ?`,
       [job_id]
-    );
+    )) as ExecResult;
+
     const rows = rowsFromResult<BestRow>(rsBest, coerceBestRow);
 
     let pars: EMStruct | null = null;
@@ -258,7 +289,7 @@ export async function GET(req: NextRequest) {
     for (const row of rows) {
       const method = String(row.method ?? "").toLowerCase();
 
-      // Prefer the raw_json blob if present; otherwise reconstruct from JSON columns.
+      // Prefer raw_json if present; else reconstruct from columns
       let em: EMStruct | null = null;
       if (row.raw_json) {
         try { em = JSON.parse(row.raw_json) as EMStruct; } catch { em = null; }
@@ -267,8 +298,10 @@ export async function GET(req: NextRequest) {
         em = {
           method: row.method ?? undefined,
           rep: row.rep ?? null,
-          root_name: row.root_name ?? null,
+          num_iter: row.num_iter ?? null,
+          ll_init: row.ll_init ?? null,
           ll_final: row.ll_final ?? null,
+          root_name: row.root_name ?? null,
           root_prob_init: parseMaybeJson<number[]>(row.root_prob_init),
           root_prob_final: parseMaybeJson<number[]>(row.root_prob_final),
           trans_prob_init: parseMaybeJson<Record<string, unknown>>(row.trans_prob_init),

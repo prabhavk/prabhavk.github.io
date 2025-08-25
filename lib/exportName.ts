@@ -7,7 +7,6 @@ type ExportNameParams = {
   maxIter?: number;
   D_pi?: number[];              // [a,b,c,d]
   D_M?: number[];               // [a,b,c,d]
-  twistDeg?: number;            // spiral pose
   tag?: string;                 // optional extra tag you might want
 };
 
@@ -25,7 +24,6 @@ export function buildExportPrefix(p: ExportNameParams): string {
   if (Number.isFinite(p.maxIter as number)) parts.push(`maxIter${p.maxIter}`);
   if (Array.isArray(p.D_pi) && p.D_pi.length === 4) parts.push(`Dpi-${p.D_pi.join("-")}`);
   if (Array.isArray(p.D_M)  && p.D_M.length  === 4) parts.push(`DM-${p.D_M.join("-")}`);
-  if (Number.isFinite(p.twistDeg as number)) parts.push(`tw${Math.round(p.twistDeg as number)}deg`);
   if (p.tag) parts.push(sanitize(p.tag));
 
   // Always return *something* useful.

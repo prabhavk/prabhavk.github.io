@@ -7,14 +7,14 @@ import { usePathname } from "next/navigation";
 type Tab = { href: string; label: string; mode: "exact" | "deep" };
 
 const tabs: Tab[] = [
-  { href: "/",        label: "Input Form",             mode: "exact" },
-  { href: "/runs",    label: "Precomputed Results",    mode: "deep"  },
-  { href: "/violin",  label: "MLL D,P&S",              mode: "deep"  },
-  { href: "/mle",     label: "MLE in D",               mode: "deep"  },
-  { href: "/ecdll",  label: "ECDLL",                  mode: "deep"  },
-  { href: "/wmw",     label: "Wilcoxon-Mann-Whitney",  mode: "deep"  },  
-  { href: "/sigrec",  label: "Significance of Recall", mode: "deep"  },  
-  { href: "/spiral",  label: "Spiral Plots",           mode: "deep"  },  
+  { href: "/",          label: "Input Form",              mode: "exact" },
+  { href: "/runs",      label: "Precomputed Results",     mode: "deep"  },
+  { href: "/violin",    label: "MLL D,P&S",               mode: "deep"  },
+  { href: "/mle",       label: "MLE in D",                mode: "deep"  },
+  { href: "/ecdll",     label: "ECDLL",                   mode: "deep"  },
+  { href: "/wmw",       label: "Wilcoxon-Mann-Whitney",   mode: "deep"  },  
+  { href: "/sigrec",    label: "Significance of Recall",  mode: "deep"  },  
+  { href: "/rhodonea",  label: "Rhodonea Curves",         mode: "deep"  },  
   
 ];
 

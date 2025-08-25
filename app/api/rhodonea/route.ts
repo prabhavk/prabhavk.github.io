@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 type MethodName = "Parsimony" | "Dirichlet" | "SSH";
 
 // What the page expects
-type FlowerRow = {
+type RhodoneaRow = {
   root: string;
   rep: number;
   ll_init: number | null;
@@ -16,10 +16,10 @@ type FlowerRow = {
   ll_final: number | null;
 };
 
-type ApiFlower = {
+type ApiRhodonea = {
   job_id: string;
   method: MethodName;
-  rows: FlowerRow[];
+  rows: RhodoneaRow[];
   reps: number[];
 };
 
@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
     );
 
     // Normalize numeric shapes so the client never sees strings/bigints
-    const rows: FlowerRow[] = rowsRaw.map((r) => ({
+    const rows: RhodoneaRow[] = rowsRaw.map((r) => ({
       root: String(r.root),
       rep: Number(r.rep), // parse even if it came as string
       ll_init: toNumOrNull(r.ll_init),
@@ -101,7 +101,7 @@ export async function GET(req: NextRequest) {
     }
     const reps = Array.from(repSet).sort((a, b) => a - b);
 
-    const payload: ApiFlower = {
+    const payload: ApiRhodonea = {
       job_id: job,
       method: norm,
       rows,

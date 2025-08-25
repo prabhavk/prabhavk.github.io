@@ -1,5 +1,5 @@
 // app/api/jobs/[jobId]/wilcoxon/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { db } from "@/lib/pscale";
 
 export const runtime = "edge";
@@ -18,7 +18,7 @@ type Row = {
 function rankWithTies(values: number[]): { ranks: number[]; tieGroups: number[] } {
   const n = values.length;
   const idx = values.map((v, i) => ({ v, i })).sort((a, b) => a.v - b.v);
-  const ranks = new Array(n);
+  const ranks = new Array<number>(n);
   const tieGroups: number[] = [];
   let i = 0;
   while (i < n) {
@@ -75,18 +75,36 @@ function mannWhitney(xIn: number[], yIn: number[]) {
   return { U, p, n1, n2 };
 }
 
+/* -------------------- context helpers (no 'any') -------------------- */
+
+function isObject(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null;
+}
+function isPromise<T = unknown>(x: unknown): x is Promise<T> {
+  return isObject(x) && "then" in x && typeof (x as { then?: unknown }).then === "function";
+}
+async function getJobIdFromContext(ctx: unknown): Promise<string | null> {
+  if (!isObject(ctx) || !("params" in ctx)) return null;
+  const p = (ctx as { params: unknown }).params;
+
+  if (isPromise<Record<string, unknown>>(p)) {
+    const resolved = await p;
+    return isObject(resolved) && typeof resolved.jobId === "string" ? resolved.jobId : null;
+  }
+  return isObject(p) && typeof p.jobId === "string" ? p.jobId : null;
+}
+
 /* -------------------- route handler -------------------- */
 
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: Promise<{ jobId: string }> }
-) {
+export async function GET(_req: Request, ctx: unknown) {
   try {
-    const { jobId } = await params;
-    if (!jobId) return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
+    const jobId = await getJobIdFromContext(ctx);
+    if (!jobId) {
+      return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
+    }
 
     const conn = db();
-    const { rows } = await conn.execute<Row>(
+    const res = await conn.execute(
       `
       SELECT root, LOWER(method) AS method, rep, ll_final
       FROM emtr_init_final
@@ -96,6 +114,7 @@ export async function GET(
       `,
       [jobId]
     );
+    const rows = res.rows as Row[];
 
     const byRoot = new Map<string, Record<Method, number[]>>();
     for (const r of rows) {
@@ -112,12 +131,7 @@ export async function GET(
 
     return NextResponse.json({ ok: true, jobId, results });
   } catch (e: unknown) {
-    let msg = "Unknown error";
-    if (e instanceof Error) {
-      msg = e.message;
-    } else if (typeof e === "string") {
-      msg = e;
-    }
+    const msg = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }

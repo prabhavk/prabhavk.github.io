@@ -1,5 +1,5 @@
 // app/api/jobs/[jobId]/rows/route.ts
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { db } from "@/lib/pscale";
 
 export const runtime = "edge";
@@ -44,28 +44,47 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<{ jobId: string }> }
-) {
+// ---- helpers to read jobId from Next's context without 'any' ----
+function isObject(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null;
+}
+function isPromise<T = unknown>(x: unknown): x is Promise<T> {
+  return isObject(x) && "then" in x && typeof (x as { then?: unknown }).then === "function";
+}
+async function getJobIdFromContext(ctx: unknown): Promise<string | null> {
+  if (!isObject(ctx) || !("params" in ctx)) return null;
+  const p = (ctx as { params: unknown }).params;
+
+  if (isPromise<Record<string, unknown>>(p)) {
+    const resolved = await p;
+    return isObject(resolved) && typeof resolved.jobId === "string" ? resolved.jobId : null;
+  }
+  return isObject(p) && typeof p.jobId === "string" ? p.jobId : null;
+}
+
+export async function POST(req: Request, ctx: unknown) {
   try {
     const ct = req.headers.get("content-type") || "";
     if (!ct.toLowerCase().includes("application/json")) {
-      return NextResponse.json({ ok: false, error: "Content-Type must be application/json" }, { status: 415 });
+      return NextResponse.json(
+        { ok: false, error: "Content-Type must be application/json" },
+        { status: 415 }
+      );
     }
 
-    const { jobId } = await params;
+    const jobId = await getJobIdFromContext(ctx);
     if (!jobId) {
       return NextResponse.json({ ok: false, error: "Missing jobId" }, { status: 400 });
     }
 
-    const body = await req.json().catch(() => null as unknown);
-    const rows = (body && typeof body === "object" && Array.isArray((body as { rows?: unknown[] }).rows))
-      ? (body as { rows: unknown[] }).rows
-      : null;
+    const body = (await req.json().catch(() => null)) as { rows?: unknown[] } | null;
+    const rows = body && Array.isArray(body.rows) ? body.rows : null;
 
     if (!rows) {
-      return NextResponse.json({ ok: false, error: "Invalid payload; expected { rows: EmtrRow[] }" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "Invalid payload; expected { rows: EmtrRow[] }" },
+        { status: 400 }
+      );
     }
     if (rows.length === 0) {
       return NextResponse.json({ ok: true, inserted: 0, skipped: 0, total: 0 });
@@ -92,7 +111,7 @@ export async function POST(
       const placeholders = batch.map(() => "(?,?,?,?,?,?,?,?,?)").join(",");
       const args = batch.flatMap((r) => [
         jobId,
-        r.method,             // ← keep what worker sends ("parsimony" | "dirichlet" | "ssh")
+        r.method,
         r.root,
         toInt(r.rep),
         toInt(r.iter),
@@ -111,10 +130,17 @@ export async function POST(
       inserted += batch.length;
     }
 
-    return NextResponse.json({ ok: true, inserted, skipped: rows.length - inserted, total: rows.length });
+    return NextResponse.json({
+      ok: true,
+      inserted,
+      skipped: rows.length - inserted,
+      total: rows.length,
+    });
   } catch (e) {
     const msg =
-      e && typeof e === "object" && "message" in e ? String((e as { message?: unknown }).message) : "Unknown error";
+      e && typeof e === "object" && "message" in e
+        ? String((e as { message?: unknown }).message)
+        : "Unknown error";
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }

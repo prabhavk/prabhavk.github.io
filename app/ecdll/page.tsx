@@ -85,6 +85,54 @@ function transformGapPower(points: Pt[], alpha: number = 0.5, eps = 1e-9): Pt[] 
   });
 }
 
+/**
+ * Box–Cox transform (shared positive shift across all series):
+ * - For comparability, we compute a global shift so all y > 0.
+ * - If lambda = 0, use log; else (y^λ - 1)/λ
+ */
+function boxCoxTransformThree(
+  series: { name: string; pts: Pt[] | null }[],
+  lambda: number,
+  eps = 1e-6
+): Record<string, Pt[]> {
+  const allY: number[] = [];
+  for (const s of series) {
+    if (!s.pts) continue;
+    for (const [, y] of s.pts) if (Number.isFinite(y)) allY.push(y);
+  }
+  if (allY.length === 0) return Object.fromEntries(series.map((s) => [s.name, []]));
+  const minY = Math.min(...allY);
+  const shift = minY <= 0 ? -minY + eps : 0;
+
+  const out: Record<string, Pt[]> = {};
+  for (const s of series) {
+    if (!s.pts || !s.pts.length) {
+      out[s.name] = [];
+      continue;
+    }
+    const arr: Pt[] = s.pts.map(([it, y]) => {
+      const yp = y + shift; // positive
+      const yt = lambda === 0 ? Math.log(yp) : (Math.pow(yp, lambda) - 1) / lambda;
+      return [it, yt];
+    });
+    out[s.name] = arr;
+  }
+  return out;
+}
+
+/** Build a monochrome (black) line trace with chosen dash style */
+function monoTrace(name: string, pts: Pt[] | null, dash: "solid" | "dash" | "dot"): Partial<PlotData> | null {
+  if (!pts || !pts.length) return null;
+  return {
+    type: "scatter",
+    mode: "lines",
+    name,
+    x: pts.map((p) => p[0]),
+    y: pts.map((p) => p[1]),
+    line: { color: "#000000", dash, width: 2 },
+  };
+}
+
 /* ---------------- Page ---------------- */
 
 export default function EcdllPage() {
@@ -101,13 +149,14 @@ export default function EcdllPage() {
   const [parPts, setParPts] = useState<Pt[] | null>(null);
   const [sshPts, setSshPts] = useState<Pt[] | null>(null);
 
-  // Summaries per method (selected rep)
-  const [dirSum, setDirSum] = useState<SummaryRow | null>(null);
-  const [parSum, setParSum] = useState<SummaryRow | null>(null);
-  const [sshSum, setSshSum] = useState<SummaryRow | null>(null);
+  // Summaries per method (selected rep) — values not rendered yet, so prefix with "_" to silence unused-var lint
+  const [_dirSum, setDirSum] = useState<SummaryRow | null>(null);
+  const [_parSum, setParSum] = useState<SummaryRow | null>(null);
+  const [_sshSum, setSshSum] = useState<SummaryRow | null>(null);
 
-  // Tuning for composite transform
+  // Tuning for composite transform & Box–Cox
   const [alpha, setAlpha] = useState<number>(0.5);
+  const [lambda, setLambda] = useState<number>(0.5); // Box–Cox λ
 
   // Read selected job id
   useEffect(() => {
@@ -244,11 +293,20 @@ export default function EcdllPage() {
     [baseLayout]
   );
 
-  /* -------- Build traces -------- */
+  const boxCoxLayout: Partial<Layout> = useMemo(
+    () => ({
+      ...baseLayout,
+      yaxis: { title: { text: `Box–Cox (λ=${lambda.toFixed(2)})` } },
+      height: 360,
+    }),
+    [baseLayout, lambda]
+  );
+
+  /* -------- Build traces (monochrome styles) -------- */
 
   const compositeTraces = useMemo(() => {
     const traces: Partial<PlotData>[] = [];
-    const push = (name: string, pts: Pt[] | null) => {
+    const push = (name: string, pts: Pt[] | null, dash: "solid" | "dash" | "dot") => {
       if (!pts || !pts.length) return;
       const t = transformGapPower(pts, alpha);
       traces.push({
@@ -257,27 +315,51 @@ export default function EcdllPage() {
         name,
         x: t.map((p) => p[0]),
         y: t.map((p) => p[1]),
+        line: { color: "#000000", dash, width: 2 },
       });
     };
-    push("Dirichlet", dirPts);
-    push("Parsimony", parPts);
-    push("SSH", sshPts);
+    push("Dirichlet", dirPts, "solid");
+    push("Parsimony", parPts, "dash");
+    push("SSH", sshPts, "dot");
     return traces;
   }, [dirPts, parPts, sshPts, alpha]);
 
-  const makeTrace = (name: string, pts: Pt[] | null): Partial<PlotData> | null =>
-    pts && pts.length
-      ? { type: "scatter", mode: "lines", name, x: pts.map((p) => p[0]), y: pts.map((p) => p[1]) }
-      : null;
+  const boxCoxTraces = useMemo(() => {
+    const transformed = boxCoxTransformThree(
+      [
+        { name: "Dirichlet", pts: dirPts },
+        { name: "Parsimony", pts: parPts },
+        { name: "SSH", pts: sshPts },
+      ],
+      lambda
+    );
+    const ds: Partial<PlotData>[] = [];
+    const add = (name: string, dash: "solid" | "dash" | "dot") => {
+      const pts = transformed[name] || [];
+      if (!pts.length) return;
+      ds.push({
+        type: "scatter",
+        mode: "lines",
+        name,
+        x: pts.map((p) => p[0]),
+        y: pts.map((p) => p[1]),
+        line: { color: "#000000", dash, width: 2 },
+      });
+    };
+    add("Dirichlet", "solid");
+    add("Parsimony", "dash");
+    add("SSH", "dot");
+    return ds;
+  }, [dirPts, parPts, sshPts, lambda]);
 
-  const dirTrace = useMemo(() => makeTrace("Dirichlet", dirPts), [dirPts]);
-  const parTrace = useMemo(() => makeTrace("Parsimony", parPts), [parPts]);
-  const sshTrace = useMemo(() => makeTrace("SSH", sshPts), [sshPts]);
+  const dirTrace = useMemo(() => monoTrace("Dirichlet", dirPts, "solid"), [dirPts]);
+  const parTrace = useMemo(() => monoTrace("Parsimony", parPts, "dash"), [parPts]);
+  const sshTrace = useMemo(() => monoTrace("SSH", sshPts, "dot"), [sshPts]);
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-5">
       <div className="flex items-end gap-3">
-        <h1 className="text-2xl font-bold">ECD-LL Convergence</h1>
+        <h1 className="text-2xl font-bold">Expected Complete-Data LL Convergence</h1>
         <div className="text-sm ml-2">
           Job: <span className="font-mono">{job || "(none)"} </span>
         </div>
@@ -308,49 +390,35 @@ export default function EcdllPage() {
         </button>
       </div>
 
-      {/* Summary table (for the selected repetition) */}
+      {/* -------- NEW: Box–Cox overlay plot (top) -------- */}
       <section className="border rounded p-3">
-        <h2 className="text-lg font-semibold mb-2">Summary (rep {rep ?? "–"})</h2>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-left border-b">
-                <th className="py-2 pr-4">Method</th>
-                <th className="py-2 pr-4">Root</th>
-                <th className="py-2 pr-4">Num Iterations</th>
-                <th className="py-2 pr-4">LL Init</th>
-                <th className="py-2 pr-4">ECD-LL First</th>
-                <th className="py-2 pr-4">ECD-LL Final</th>
-                <th className="py-2 pr-4">LL Final</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                ["Dirichlet", dirSum] as const,
-                ["Parsimony", parSum] as const,
-                ["SSH", sshSum] as const,
-              ].map(([name, s]) => (
-                <tr key={name} className="border-b">
-                  <td className="py-2 pr-4">{name}</td>
-                  <td className="py-2 pr-4">{s?.root ?? "—"}</td>
-                  <td className="py-2 pr-4">{s?.num_iterations ?? "—"}</td>
-                  <td className="py-2 pr-4">
-                    {s?.ll_init != null ? s.ll_init.toFixed(3) : "—"}
-                  </td>
-                  <td className="py-2 pr-4">
-                    {s?.ecd_ll_first != null ? s.ecd_ll_first.toFixed(3) : "—"}
-                  </td>
-                  <td className="py-2 pr-4">
-                    {s?.ecd_ll_final != null ? s.ecd_ll_final.toFixed(3) : "—"}
-                  </td>
-                  <td className="py-2 pr-4">
-                    {s?.ll_final != null ? s.ll_final.toFixed(3) : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg font-semibold">Box–Cox transform (overlay)</h2>
+          <div className="flex items-center gap-3 text-sm">
+            <label className="flex items-center gap-2">
+              λ:
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={lambda}
+                onChange={(e) => setLambda(Number(e.target.value))}
+              />
+              <span className="text-gray-600">{lambda.toFixed(2)}</span>
+            </label>
+          </div>
         </div>
+        {boxCoxTraces.length ? (
+          <Plot
+            data={boxCoxTraces}
+            layout={boxCoxLayout}
+            config={{ displayModeBar: false, responsive: true }}
+            style={{ width: "100%", height: "100%" }}
+          />
+        ) : (
+          <div className="text-sm text-gray-600">No data available for Box–Cox plot.</div>
+        )}
       </section>
 
       {/* Alpha control for composite transform */}
@@ -367,7 +435,7 @@ export default function EcdllPage() {
         <div className="text-xs text-gray-500">α = {alpha.toFixed(2)}</div>
       </div>
 
-      {/* Composite plot (Gap^α) */}
+      {/* Composite plot (Gap^α) – monochrome line styles */}
       <section className="border rounded p-3">
         <h2 className="text-lg font-semibold mb-2">Composite (Gap^α transform)</h2>
         {compositeTraces.length ? (
@@ -382,20 +450,12 @@ export default function EcdllPage() {
         )}
       </section>
 
-      {/* Individual plots */}
+      {/* Individual plots – monochrome line styles */}
       <section className="border rounded p-3">
         <h2 className="text-lg font-semibold mb-2">Dirichlet</h2>
-        {dirPts && dirPts.length ? (
+        {dirTrace ? (
           <Plot
-            data={[
-              {
-                type: "scatter",
-                mode: "lines",
-                name: "Dirichlet",
-                x: dirPts.map((p) => p[0]),
-                y: dirPts.map((p) => p[1]),
-              } as Partial<PlotData>,
-            ]}
+            data={[dirTrace as Partial<PlotData>]}
             layout={baseLayout}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%", height: "100%" }}
@@ -407,17 +467,9 @@ export default function EcdllPage() {
 
       <section className="border rounded p-3">
         <h2 className="text-lg font-semibold mb-2">Parsimony</h2>
-        {parPts && parPts.length ? (
+        {parTrace ? (
           <Plot
-            data={[
-              {
-                type: "scatter",
-                mode: "lines",
-                name: "Parsimony",
-                x: parPts.map((p) => p[0]),
-                y: parPts.map((p) => p[1]),
-              } as Partial<PlotData>,
-            ]}
+            data={[parTrace as Partial<PlotData>]}
             layout={baseLayout}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%", height: "100%" }}
@@ -429,17 +481,9 @@ export default function EcdllPage() {
 
       <section className="border rounded p-3">
         <h2 className="text-lg font-semibold mb-2">SSH</h2>
-        {sshPts && sshPts.length ? (
+        {sshTrace ? (
           <Plot
-            data={[
-              {
-                type: "scatter",
-                mode: "lines",
-                name: "SSH",
-                x: sshPts.map((p) => p[0]),
-                y: sshPts.map((p) => p[1]),
-              } as Partial<PlotData>,
-            ]}
+            data={[sshTrace as Partial<PlotData>]}
             layout={baseLayout}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%", height: "100%" }}

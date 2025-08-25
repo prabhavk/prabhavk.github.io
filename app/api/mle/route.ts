@@ -5,6 +5,7 @@ import { db } from "@/lib/pscale";
 export const runtime = "edge";
 
 type MleRow = {
+  rep: string | number | null;
   root_prob_final: string | number[] | null;
   trans_prob_final: string | number[][] | number[] | null;
   root_name: string | null;
@@ -18,18 +19,37 @@ type MleRow = {
   d_m_4: number | null;
 };
 
+type RepOnly = { rep: string | number | null };
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const jobId = (searchParams.get("job_id") || "").trim();
     const method = (searchParams.get("method") || "dirichlet").trim();
+    const repParam = (searchParams.get("rep") || "").trim() || null;
 
     if (!jobId) {
       return NextResponse.json({ error: "Missing job_id" }, { status: 400 });
     }
 
-    const sql = `
+    const conn = db();
+
+    // 1) Distinct reps for this job+method (used to populate the dropdown on the client)
+    const repsSql = `
+      SELECT DISTINCT br.rep
+      FROM emtr_all_info AS br
+      WHERE br.job_id = ? AND br.method = ?
+      ORDER BY br.rep
+    `;
+    const { rows: repsRows } = await conn.execute<RepOnly>(repsSql, [jobId, method]);
+    const reps = (repsRows || [])
+      .map(r => (r.rep == null ? null : String(r.rep)))
+      .filter((x): x is string => !!x);
+
+    // 2) Main row — filter by rep if provided, else latest by created_at
+    const rowSql = `
       SELECT
+        br.rep,
         br.root_prob_final,
         br.trans_prob_final,
         br.root_name,
@@ -38,17 +58,21 @@ export async function GET(req: NextRequest) {
       FROM emtr_all_info AS br
       LEFT JOIN emtr_jobs AS j ON j.job_id = br.job_id
       WHERE br.job_id = ? AND br.method = ?
+      ${repParam ? "AND br.rep = ?" : ""}
       ORDER BY br.created_at DESC
       LIMIT 1
     `;
-
-    const conn = db();
-    const { rows } = await conn.execute<MleRow>(sql, [jobId, method]);
+    const { rows } = await conn.execute<MleRow>(
+      rowSql,
+      repParam ? [jobId, method, repParam] : [jobId, method]
+    );
 
     if (!rows || rows.length === 0) {
       return NextResponse.json({
         job_id: jobId,
         method,
+        rep: repParam,          // echo requested rep (may be null)
+        reps,                   // list for UI
         root: null,
         trans: null,
         root_name: null,
@@ -86,11 +110,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       job_id: jobId,
       method,
+      rep: row.rep == null ? null : String(row.rep),   // include the row's rep
+      reps,                                            // and the list
       root: Array.isArray(root) ? root : null,
-      trans: transRaw ?? null,      // could be 4x4, flat-16, or map of 4x4s
+      trans: transRaw ?? null,                         // 4x4, flat-16, or map of 4x4s
       root_name: row.root_name ?? null,
-      D_pi,                        
-      D_M,                         
+      D_pi,
+      D_M,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
