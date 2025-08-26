@@ -1,7 +1,6 @@
-// app/api/mwu/route.ts
+// app/api/wmw_comp_method/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
-import { mwu } from "@bunchmark/stats";
 
 export const runtime = "nodejs";
 
@@ -26,6 +25,7 @@ type ApiResp = {
   pairs: Record<PairKey, PairResult>;
 };
 
+// --- helpers ---
 function normalizeMethod(s: string): MethodName | null {
   const m = s.trim().toLowerCase();
   if (m.includes("pars")) return "Parsimony";
@@ -34,10 +34,6 @@ function normalizeMethod(s: string): MethodName | null {
   return null;
 }
 
-// --- math helpers ---
-function phi(x: number): number {
-  return 0.5 * (1 + erf(x / Math.SQRT2));
-}
 function erf(x: number): number {
   const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741;
   const a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
@@ -46,6 +42,9 @@ function erf(x: number): number {
   const t = 1 / (1 + p * ax);
   const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-ax * ax);
   return sign * y;
+}
+function phi(x: number): number {
+  return 0.5 * (1 + erf(x / Math.SQRT2));
 }
 function clamp01(v: number): number {
   if (!Number.isFinite(v)) return 1;
@@ -61,17 +60,27 @@ function median(xs: number[]): number {
   return n % 2 ? a[mid] : 0.5 * (a[mid - 1] + a[mid]);
 }
 
-// Decide winner with one-sided p = 1 - Phi(|z|); direction chosen from medians
-function decideOneSided(
+// safe MWU import
+async function safeMWU(A: number[], B: number[]): Promise<{ z: number }> {
+  try {
+    const mod = await import("@bunchmark/stats");
+    const { z } = mod.mwu(A, B);
+    return { z: Number.isFinite(z) ? z : 0 };
+  } catch {
+    return { z: 0 };
+  }
+}
+
+async function decideOneSided(
   A: number[], B: number[],
   nameA: MethodName, nameB: MethodName,
   alpha: number
-): PairResult {
+): Promise<PairResult> {
   if (A.length === 0 || B.length === 0) {
     return { winner: "none", p_value: 1, z: 0, nA: A.length, nB: B.length };
   }
 
-  const { z } = mwu(A, B);
+  const { z } = await safeMWU(A, B);
   const p_one = clamp01(1 - phi(Math.abs(z)));
 
   const mA = median(A);
@@ -85,31 +94,31 @@ function decideOneSided(
 }
 
 export async function GET(req: NextRequest) {
+  const url = new URL(req.url);
+  const job = url.searchParams.get("job") || "";
+  const node = url.searchParams.get("node") || undefined;
+  const alpha = Number(url.searchParams.get("alpha") ?? 0.05);
+
+  if (!job) {
+    return NextResponse.json({ ok: false, error: "Missing ?job=<job_id>" }, { status: 400 });
+  }
+  if (!Number.isFinite(alpha) || alpha <= 0 || alpha >= 1) {
+    return NextResponse.json({ ok: false, error: "Invalid alpha (0 < alpha < 1)" }, { status: 400 });
+  }
+
+  const nodeFilter = node ? "AND root = ?" : "";
+  const sql = `
+    SELECT LOWER(method) AS method, CAST(ll_final AS DOUBLE) AS ll_final
+    FROM emtr_init_final
+    WHERE job_id = ?
+      ${nodeFilter}
+      AND ll_final IS NOT NULL
+    ORDER BY root, method, rep
+  `;
+  const params: (string | number)[] = node ? [job, node] : [job];
+
   try {
-    const { searchParams } = new URL(req.url);
-    const job = searchParams.get("job");
-    const node = searchParams.get("node") ?? undefined; // e.g., "h_21"
-    const alpha = Number(searchParams.get("alpha") ?? 0.05);
-
-    if (!job) return NextResponse.json({ error: "Missing ?job=<job_id>" }, { status: 400 });
-    if (!Number.isFinite(alpha) || alpha <= 0 || alpha >= 1) {
-      return NextResponse.json({ error: "Invalid alpha (0 < alpha < 1)" }, { status: 400 });
-    }
-
-    // If your node column isn't named `root`, change below.
-    const params: string[] = node ? [job, node] : [job];
-    const nodeFilter = node ? "AND root = ?" : "";
-
-    const rows = await query<DBRow>(
-      `
-      SELECT method, ll_final
-        FROM emtr_init_final
-       WHERE job_id = ?
-         ${nodeFilter}
-         AND ll_final IS NOT NULL
-      `,
-      params
-    );
+    const rows = await query<DBRow>(sql, params);
 
     const groups: Record<MethodName, number[]> = { Parsimony: [], Dirichlet: [], SSH: [] };
     for (const r of rows) {
@@ -119,11 +128,11 @@ export async function GET(req: NextRequest) {
       if (Number.isFinite(v)) groups[m].push(v);
     }
 
-    const pairs: Record<PairKey, PairResult> = {
-      parsimony_vs_dirichlet: decideOneSided(groups.Parsimony, groups.Dirichlet, "Parsimony", "Dirichlet", alpha),
-      parsimony_vs_ssh:       decideOneSided(groups.Parsimony, groups.SSH,       "Parsimony", "SSH",       alpha),
-      dirichlet_vs_ssh:       decideOneSided(groups.Dirichlet, groups.SSH,       "Dirichlet", "SSH",       alpha),
-    };
+    const [pd, ps, ds] = await Promise.all([
+      decideOneSided(groups.Parsimony, groups.Dirichlet, "Parsimony", "Dirichlet", alpha),
+      decideOneSided(groups.Parsimony, groups.SSH,       "Parsimony", "SSH",       alpha),
+      decideOneSided(groups.Dirichlet, groups.SSH,       "Dirichlet", "SSH",       alpha),
+    ]);
 
     const payload: ApiResp = {
       job_id: job,
@@ -134,12 +143,19 @@ export async function GET(req: NextRequest) {
         Dirichlet: groups.Dirichlet.length,
         SSH: groups.SSH.length,
       },
-      pairs,
+      pairs: {
+        parsimony_vs_dirichlet: pd,
+        parsimony_vs_ssh: ps,
+        dirichlet_vs_ssh: ds,
+      },
     };
 
-    return NextResponse.json(payload);
+    return NextResponse.json(payload, { status: 200 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Internal error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      { ok: false, error: "Query failed", detail: message, sql: sql.trim(), params },
+      { status: 500 }
+    );
   }
 }

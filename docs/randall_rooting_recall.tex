@@ -1,5 +1,6 @@
 \documentclass[]{article}
 \usepackage{authblk}
+\usepackage{booktabs}
 
 %opening
 \title{EM-Driven GMM Optimization for the Randall Dataset: Rooting and Recall}
@@ -35,8 +36,44 @@
 		\end{figure}
 		
 		\subsection{Wilcoxon-Mann-Whitney tests for difference in log likelihood scores}
-			\subsubsection{Initialization Method}
-			\subsubsection{Change across root locations}				
+			\subsubsection{Impact on initialization method}
+			\subsubsection{Impact on root location}
+			\begin{table}[htbp]
+				\centering
+				\small
+				\setlength{\tabcolsep}{4pt}
+				\renewcommand{\arraystretch}{1.1}
+				\begin{tabular}{l*{17}{c}}
+					\toprule
+					row $\downarrow$ / col $\rightarrow$
+					& h\_21 & h\_22 & h\_23 & h\_24 & h\_25 & h\_26 & h\_27 & h\_28 & h\_29 & h\_30 & h\_31 & h\_32 & h\_33 & h\_34 & h\_35 & h\_36 & h\_37 \\
+					\midrule
+					\textit{sample size (per node)}
+					& 30 & 30 & 30 & 30 & 30 & 30 & 30 & 30 & 30 & 30 & 30 & 30 & 30 & 30 & 30 & 30 & 30 \\
+					\midrule
+					h\_21 & \textemdash & 2 & 3 & 3 & 3 & 3 & 3 & 2 & 2 & 3 & 2 & 3 & 3 & 3 & 3 & 3 & 0 \\
+					h\_22 & 1 & \textemdash & 3 & 3 & 3 & 3 & 3 & 2 & 2 & 3 & 1 & 3 & 3 & 3 & 3 & 3 & 0 \\
+					h\_23 & 0 & 0 & \textemdash & 3 & 3 & 3 & 3 & 1 & 2 & 1 & 0 & 3 & 3 & 3 & 3 & 3 & 0 \\
+					h\_24 & 0 & 0 & 0 & \textemdash & 3 & 3 & 3 & 0 & 2 & 0 & 0 & 3 & 3 & 3 & 3 & 1 & 0 \\
+					h\_25 & 0 & 0 & 0 & 0 & \textemdash & 3 & 0 & 0 & 0 & 0 & 0 & 3 & 1 & 1 & 1 & 1 & 0 \\
+					h\_26 & 0 & 0 & 0 & 0 & 0 & \textemdash & 0 & 0 & 0 & 0 & 0 & 3 & 1 & 1 & 1 & 1 & 0 \\
+					h\_27 & 0 & 0 & 0 & 0 & 3 & 3 & \textemdash & 0 & 2 & 0 & 0 & 3 & 3 & 3 & 3 & 1 & 0 \\
+					h\_28 & 1 & 1 & 2 & 3 & 3 & 3 & 3 & \textemdash & 3 & 3 & 1 & 3 & 3 & 3 & 3 & 3 & 0 \\
+					h\_29 & 1 & 1 & 1 & 1 & 3 & 3 & 1 & 0 & \textemdash & 1 & 0 & 3 & 3 & 3 & 1 & 1 & 0 \\
+					h\_30 & 0 & 0 & 2 & 3 & 3 & 3 & 3 & 0 & 2 & \textemdash & 0 & 3 & 3 & 3 & 3 & 3 & 0 \\
+					h\_31 & 1 & 2 & 3 & 3 & 3 & 3 & 3 & 2 & 3 & 3 & \textemdash & 3 & 3 & 3 & 3 & 3 & 1 \\
+					h\_32 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & \textemdash & 1 & 0 & 0 & 1 & 0 \\
+					h\_33 & 0 & 0 & 0 & 0 & 2 & 2 & 0 & 0 & 0 & 0 & 0 & 2 & \textemdash & 0 & 0 & 1 & 0 \\
+					h\_34 & 0 & 0 & 0 & 0 & 2 & 2 & 0 & 0 & 0 & 0 & 0 & 3 & 3 & \textemdash & 0 & 1 & 0 \\
+					h\_35 & 0 & 0 & 0 & 0 & 2 & 2 & 0 & 0 & 2 & 0 & 0 & 3 & 3 & 3 & \textemdash & 1 & 0 \\
+					h\_36 & 0 & 0 & 0 & 2 & 2 & 2 & 2 & 0 & 2 & 0 & 0 & 2 & 2 & 2 & 2 & \textemdash & 0 \\
+					h\_37 & 3 & 3 & 3 & 3 & 3 & 3 & 3 & 3 & 3 & 3 & 2 & 3 & 3 & 3 & 3 & 3 & \textemdash \\
+					\bottomrule
+				\end{tabular}
+				\caption{Agreement counts: number of methods supporting column $>$ row for each node pair.}
+				\label{tab:wmw_agreement}
+			\end{table}
+			
 		\subsection{Significance of recall values}
 		
 	\section{Methods}		

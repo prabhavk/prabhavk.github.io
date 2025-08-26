@@ -7,14 +7,15 @@ import { usePathname } from "next/navigation";
 type Tab = { href: string; label: string; mode: "exact" | "deep" };
 
 const tabs: Tab[] = [
-  { href: "/",          label: "Input Form",              mode: "exact" },
-  { href: "/runs",      label: "Precomputed Results",     mode: "deep"  },
-  { href: "/violin",    label: "MLL D,P&S",               mode: "deep"  },
-  { href: "/mle",       label: "MLE in D",                mode: "deep"  },
-  { href: "/ecdll",     label: "ECDLL",                   mode: "deep"  },
-  { href: "/wmw",       label: "Wilcoxon-Mann-Whitney",   mode: "deep"  },  
-  { href: "/sigrec",    label: "Distribution of Recall",  mode: "deep"  },  
-  { href: "/rhodonea",  label: "Rhodonea Curves",         mode: "deep"  },  
+  { href: "/",                label: "Input Form",              mode: "exact" },
+  { href: "/runs",            label: "Precomputed Results",     mode: "deep"  },
+  { href: "/violin",          label: "MLL D,P&S",               mode: "deep"  },
+  { href: "/mle",             label: "MLE in D",                mode: "deep"  },
+  { href: "/ecdll",           label: "ECDLL",                   mode: "deep"  },
+  { href: "/wmw_comp_method",  label: "WMW comp method",         mode: "deep"  },  
+  { href: "/wmw_comp_root",    label: "WMW comp root",           mode: "deep"  },  
+  { href: "/sigrec",          label: "Distribution of Recall",  mode: "deep"  },  
+  { href: "/rhodonea",        label: "Rhodonea Curves",         mode: "deep"  },  
   
 ];
 
@@ -27,7 +28,6 @@ export default function Nav() {
     "transition-colors outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 " +
     "focus-visible:ring-offset-2 focus-visible:ring-offset-black";
 
-  // const active = "bg-gray-200 text-black shadow-md";
   const active    = "bg-gray-200 text-black shadow-md hover:bg-white hover:!text-black";
   const idleDefault = "bg-gray-700 text-white hover:bg-yellow-500";
   const idleRuns    = "bg-gray-700 text-white hover:bg-white hover:!text-black";

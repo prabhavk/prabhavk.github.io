@@ -1,7 +1,7 @@
 // app/ecdll/page.tsx
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type { Layout, PlotData } from "plotly.js";
 import type { PlotParams } from "react-plotly.js";
@@ -66,7 +66,6 @@ function normalizePoints(x: unknown): Pt[] {
  * Gap^alpha transform for ECD-LL curves (composite plot only).
  * - Let best = max(ll). gap = best - ll >= 0.
  * - y' = (gap / maxGap)^alpha in [0,1]. (0 best, 1 worst/earliest)
- * - alpha in (0,1): compresses big early gaps, stretches late small gaps.
  */
 function transformGapPower(points: Pt[], alpha: number = 0.5, eps = 1e-9): Pt[] {
   if (!Array.isArray(points) || points.length === 0) return points;
@@ -86,9 +85,7 @@ function transformGapPower(points: Pt[], alpha: number = 0.5, eps = 1e-9): Pt[] 
 }
 
 /**
- * Box–Cox transform (shared positive shift across all series):
- * - For comparability, we compute a global shift so all y > 0.
- * - If lambda = 0, use log; else (y^λ - 1)/λ
+ * Box–Cox transform (shared positive shift across all series)
  */
 function boxCoxTransformThree(
   series: { name: string; pts: Pt[] | null }[],
@@ -149,7 +146,7 @@ export default function EcdllPage() {
   const [parPts, setParPts] = useState<Pt[] | null>(null);
   const [sshPts, setSshPts] = useState<Pt[] | null>(null);
 
-  // Summaries per method (selected rep) — values not rendered yet, so prefix with "_" to silence unused-var lint
+  // Summaries per method (selected rep)
   const [_dirSum, setDirSum] = useState<SummaryRow | null>(null);
   const [_parSum, setParSum] = useState<SummaryRow | null>(null);
   const [_sshSum, setSshSum] = useState<SummaryRow | null>(null);
@@ -157,6 +154,15 @@ export default function EcdllPage() {
   // Tuning for composite transform & Box–Cox
   const [alpha, setAlpha] = useState<number>(0.5);
   const [lambda, setLambda] = useState<number>(0.5); // Box–Cox λ
+
+  // Refs to Plotly graph divs for downloads
+  const graphRefs = useRef<Record<string, HTMLDivElement | null>>({
+    boxcox: null,
+    composite: null,
+    dir: null,
+    par: null,
+    ssh: null,
+  });
 
   // Read selected job id
   useEffect(() => {
@@ -356,6 +362,72 @@ export default function EcdllPage() {
   const parTrace = useMemo(() => monoTrace("Parsimony", parPts, "dash"), [parPts]);
   const sshTrace = useMemo(() => monoTrace("SSH", sshPts, "dot"), [sshPts]);
 
+  /* -------- Download helpers (no 'plotly.js-dist-min' dependency) -------- */
+
+  type PlotKey = "boxcox" | "composite" | "dir" | "par" | "ssh";
+
+interface PlotlyLike {
+  downloadImage: (
+    gd: HTMLElement,
+    opts: {
+      format?: "png" | "jpeg" | "svg" | "webp";
+      width?: number;
+      height?: number;
+      filename?: string;
+    }
+  ) => Promise<string>;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function isPlotlyLike(v: unknown): v is PlotlyLike {
+  return isRecord(v) && typeof v["downloadImage"] === "function";
+}
+
+async function resolvePlotlyFrom(gd: HTMLDivElement): Promise<PlotlyLike> {
+  // 1) Plotly already on window (UMD path)
+  const win = (gd.ownerDocument?.defaultView ?? null) as (Window & { Plotly?: unknown }) | null;
+  if (win?.Plotly && isPlotlyLike(win.Plotly)) return win.Plotly;
+
+  // 2) Bundled dist (avoids Node polyfills)
+  const mod = (await import("plotly.js-dist")) as unknown;
+  const candidate =
+    isRecord(mod) && "default" in mod ? ((mod as { default: unknown }).default as unknown) : mod;
+  if (isPlotlyLike(candidate)) return candidate;
+
+  throw new Error("Plotly not found. Install 'plotly.js-dist' or expose window.Plotly.");
+}
+
+const downloadFigure = React.useCallback(
+  async (key: PlotKey, filename: string, w = 1600, h = 900) => {
+    const gd = graphRefs.current[key];
+    if (!gd) return;
+    const Plotly = await resolvePlotlyFrom(gd);
+    await Plotly.downloadImage(gd, { format: "png", width: w, height: h, filename });
+  },
+  []
+);
+
+const downloadAll = React.useCallback(async () => {
+  const tasks: Array<Promise<void>> = [];
+  const base = `ecdll_job-${job || "unknown"}_rep-${rep ?? "na"}`;
+
+  if (graphRefs.current.boxcox)
+    tasks.push(downloadFigure("boxcox", `${base}_boxcox_lambda-${lambda.toFixed(2)}`));
+  if (graphRefs.current.composite)
+    tasks.push(downloadFigure("composite", `${base}_composite_alpha-${alpha.toFixed(2)}`));
+  if (graphRefs.current.dir) tasks.push(downloadFigure("dir", `${base}_dirichlet`));
+  if (graphRefs.current.par) tasks.push(downloadFigure("par", `${base}_parsimony`));
+  if (graphRefs.current.ssh) tasks.push(downloadFigure("ssh", `${base}_ssh`));
+
+  // run sequentially to avoid overwhelming the browser
+  for (const t of tasks) await t;
+  }, [alpha, lambda, job, rep, downloadFigure]);
+
+  /* ---------------- Render ---------------- */
+
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-5">
       <div className="flex items-end gap-3">
@@ -383,14 +455,25 @@ export default function EcdllPage() {
         <button
           type="button"
           onClick={() => void load()}
-          className="ml-auto px-4 py-2 rounded bg-black text-white disabled:opacity-50"
+          className="ml-auto px-3 py-1.5 rounded bg-black text-white disabled:opacity-50 text-sm"
           disabled={!job || rep === null || loading}
         >
           {loading ? "Loading…" : "Reload"}
         </button>
+
+        {/* Download ALL */}
+        <button
+          type="button"
+          onClick={() => void downloadAll()}
+          className="px-3 py-1.5 rounded bg-black text-white disabled:opacity-50 text-sm"
+          disabled={loading}
+          title="Download all figures as PNG"
+        >
+          Download all PNGs
+        </button>
       </div>
 
-      {/* -------- NEW: Box–Cox overlay plot (top) -------- */}
+      {/* -------- Box–Cox overlay plot -------- */}
       <section className="border rounded p-3">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-lg font-semibold">Box–Cox transform (overlay)</h2>
@@ -407,6 +490,18 @@ export default function EcdllPage() {
               />
               <span className="text-gray-600">{lambda.toFixed(2)}</span>
             </label>
+            <button
+              type="button"
+              onClick={() =>
+                downloadFigure(
+                  "boxcox",
+                  `ecdll_job-${job || "unknown"}_rep-${rep ?? "na"}_boxcox_lambda-${lambda.toFixed(2)}`
+                )
+              }
+              className="px-2 py-1 rounded bg-black text-white"
+            >
+              Download PNG
+            </button>
           </div>
         </div>
         {boxCoxTraces.length ? (
@@ -415,6 +510,8 @@ export default function EcdllPage() {
             layout={boxCoxLayout}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%", height: "100%" }}
+            onInitialized={(_, gd) => { graphRefs.current.boxcox = gd as HTMLDivElement; }}
+            onUpdate={(_, gd) => { graphRefs.current.boxcox = gd as HTMLDivElement; }}
           />
         ) : (
           <div className="text-sm text-gray-600">No data available for Box–Cox plot.</div>
@@ -435,30 +532,59 @@ export default function EcdllPage() {
         <div className="text-xs text-gray-500">α = {alpha.toFixed(2)}</div>
       </div>
 
-      {/* Composite plot (Gap^α) – monochrome line styles */}
+      {/* Composite plot (Gap^α) */}
       <section className="border rounded p-3">
-        <h2 className="text-lg font-semibold mb-2">Composite (Gap^α transform)</h2>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg font-semibold">Composite (Gap^α transform)</h2>
+          <button
+            type="button"
+            onClick={() =>
+              downloadFigure(
+                "composite",
+                `ecdll_job-${job || "unknown"}_rep-${rep ?? "na"}_composite_alpha-${alpha.toFixed(2)}`
+              )
+            }
+            className="px-2 py-1 rounded bg-black text-white"
+          >
+            Download PNG
+          </button>
+        </div>
         {compositeTraces.length ? (
           <Plot
             data={compositeTraces}
             layout={compositeLayout}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%", height: "100%" }}
+            onInitialized={(_, gd) => { graphRefs.current.composite = gd as HTMLDivElement; }}
+            onUpdate={(_, gd) => { graphRefs.current.composite = gd as HTMLDivElement; }}
           />
         ) : (
           <div className="text-sm text-gray-600">No ECD-LL data found for any method.</div>
         )}
       </section>
 
-      {/* Individual plots – monochrome line styles */}
+      {/* Individual plots */}
       <section className="border rounded p-3">
-        <h2 className="text-lg font-semibold mb-2">Dirichlet</h2>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg font-semibold">Dirichlet</h2>
+          <button
+            type="button"
+            onClick={() =>
+              downloadFigure("dir", `ecdll_job-${job || "unknown"}_rep-${rep ?? "na"}_dirichlet`)
+            }
+            className="px-2 py-1 rounded bg-black text-white"
+          >
+            Download PNG
+          </button>
+        </div>
         {dirTrace ? (
           <Plot
             data={[dirTrace as Partial<PlotData>]}
             layout={baseLayout}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%", height: "100%" }}
+            onInitialized={(_, gd) => { graphRefs.current.dir = gd as HTMLDivElement; }}
+            onUpdate={(_, gd) => { graphRefs.current.dir = gd as HTMLDivElement; }}
           />
         ) : (
           <div className="text-sm text-gray-600">No ECD-LL data.</div>
@@ -466,13 +592,26 @@ export default function EcdllPage() {
       </section>
 
       <section className="border rounded p-3">
-        <h2 className="text-lg font-semibold mb-2">Parsimony</h2>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg font-semibold">Parsimony</h2>
+          <button
+            type="button"
+            onClick={() =>
+              downloadFigure("par", `ecdll_job-${job || "unknown"}_rep-${rep ?? "na"}_parsimony`)
+            }
+            className="px-2 py-1 rounded bg-black text-white"
+          >
+            Download PNG
+          </button>
+        </div>
         {parTrace ? (
           <Plot
             data={[parTrace as Partial<PlotData>]}
             layout={baseLayout}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%", height: "100%" }}
+            onInitialized={(_, gd) => { graphRefs.current.par = gd as HTMLDivElement; }}
+            onUpdate={(_, gd) => { graphRefs.current.par = gd as HTMLDivElement; }}
           />
         ) : (
           <div className="text-sm text-gray-600">No ECD-LL data.</div>
@@ -480,13 +619,26 @@ export default function EcdllPage() {
       </section>
 
       <section className="border rounded p-3">
-        <h2 className="text-lg font-semibold mb-2">SSH</h2>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg font-semibold">SSH</h2>
+          <button
+            type="button"
+            onClick={() =>
+              downloadFigure("ssh", `ecdll_job-${job || "unknown"}_rep-${rep ?? "na"}_ssh`)
+            }
+            className="px-2 py-1 rounded bg-black text-white"
+          >
+            Download PNG
+          </button>
+        </div>
         {sshTrace ? (
           <Plot
             data={[sshTrace as Partial<PlotData>]}
             layout={baseLayout}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%", height: "100%" }}
+            onInitialized={(_, gd) => { graphRefs.current.ssh = gd as HTMLDivElement; }}
+            onUpdate={(_, gd) => { graphRefs.current.ssh = gd as HTMLDivElement; }}
           />
         ) : (
           <div className="text-sm text-gray-600">No ECD-LL data.</div>

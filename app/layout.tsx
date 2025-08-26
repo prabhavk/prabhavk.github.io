@@ -1,11 +1,11 @@
 // app/layout.tsx
 import "./globals.css";
 import type { Metadata } from "next";
-import Nav from "@/components/Nav"; // or: import Nav from "../components/Nav";
+import Nav from "@/components/Nav"; 
 
 export const metadata: Metadata = {
-  title: "EMTR UI",
-  description: "Run EMTR and view results",
+  title: "emtree UI",
+  description: "Run emtree and view results",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

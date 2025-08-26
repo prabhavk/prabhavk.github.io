@@ -1,4 +1,4 @@
-// app/wmw/page.tsx
+// app/wmw_comp_method/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -40,6 +40,41 @@ type TableRow = {
 
 const NODES: string[] = Array.from({ length: 17 }, (_, i) => `h_${21 + i}`);
 
+/* ---------- robust fetch helper ---------- */
+function isRecord(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null;
+}
+function isApiErr(x: unknown): x is { error: string } {
+  return isRecord(x) && typeof x["error"] === "string";
+}
+async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  const ct = res.headers.get("content-type") || "";
+  const body = await res.text(); // read once for better errors
+
+  if (!ct.toLowerCase().includes("application/json")) {
+    throw new Error(
+      `Expected JSON but got ${ct || "unknown"} (HTTP ${res.status}). ` +
+      body.slice(0, 200)
+    );
+  }
+
+  let json: unknown;
+  try {
+    json = body ? JSON.parse(body) : {};
+  } catch (e) {
+    throw new Error(`Invalid JSON from ${url}: ${(e as Error).message}`);
+  }
+
+  if (!res.ok) {
+    const msg = isApiErr(json) ? json.error : `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+
+  return json as T;
+}
+/* ---------------------------------------- */
+
 export default function WmwPage() {
   const [jobId, setJobId] = useState<string>("");
   const [alpha, setAlpha] = useState<number>(0.05);
@@ -66,17 +101,15 @@ export default function WmwPage() {
     try {
       const results = await Promise.all(
         NODES.map(async (node) => {
-          const u = new URL("/api/mwu", window.location.origin);
+          const u = new URL("/api/wmw_comp_method", window.location.origin);
           u.searchParams.set("job", jobId);
           u.searchParams.set("node", node);
           u.searchParams.set("alpha", String(alpha));
-          const res = await fetch(u.toString(), { cache: "no-store" });
-          const json: unknown = await res.json();
-          if (!res.ok) {
-            const msg = isApiErr(json) ? json.error : `HTTP ${res.status}`;
-            throw new Error(msg);
-          }
-          if (!isApiResp(json)) throw new Error("Invalid response from /api/mwu");
+
+          // Use robust JSON fetcher (prevents JSON.parse HTML errors)
+          const json = await fetchJSON<ApiResp>(u.toString(), { cache: "no-store" });
+
+          if (!isApiResp(json)) throw new Error("Invalid response from /api/wmw_comp_method");
 
           const pd = json.pairs.parsimony_vs_dirichlet;
           const ps = json.pairs.parsimony_vs_ssh;
@@ -142,13 +175,13 @@ export default function WmwPage() {
           >
             <div className="Compute rounded-md hover:bg-gray-600">
               {loading ? "Computing…" : "Compute"}
-            </div>            
+            </div>
           </button>
         </div>
 
         <div className="overflow-auto border rounded-xl">
           <table className="min-w-full text-sm">
-            <thead className="bg-black text-white">
+            <thead className="bg黑 text-white">
               <tr>
                 <Th rowSpan={2}>root</Th>
                 <Th colSpan={3} className="text-center">Parsimony vs Dirichlet</Th>
@@ -206,9 +239,6 @@ export default function WmwPage() {
 
 // ---------- helpers & type guards ----------
 
-function isRecord(x: unknown): x is Record<string, unknown> {
-  return typeof x === "object" && x !== null;
-}
 function isPairResult(x: unknown): x is PairResult {
   return (
     isRecord(x) &&
@@ -218,9 +248,6 @@ function isPairResult(x: unknown): x is PairResult {
     typeof x.nA === "number" &&
     typeof x.nB === "number"
   );
-}
-function isApiErr(x: unknown): x is { error: string } {
-  return isRecord(x) && typeof x["error"] === "string";
 }
 function isApiResp(x: unknown): x is ApiResp {
   if (!isRecord(x) || !isRecord(x["pairs"])) return false;

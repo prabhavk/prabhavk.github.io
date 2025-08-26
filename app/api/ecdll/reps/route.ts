@@ -4,14 +4,20 @@ import { db } from "@/lib/pscale";
 
 export const runtime = "edge";
 
-type Row = { rep: number | null };
+// PlanetScale/MySQL often returns numbers as strings; handle both.
+type Row = { rep: string | number | null };
+
+// Safe integer coercion (returns null if not finite)
+function toInt(x: unknown): number | null {
+  const n = Number(x);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const jobId = (searchParams.get("job_id") || "").trim();
-    // optional; default to 'dirichlet' if you want to scope reps per method
-    const method = (searchParams.get("method") || "").trim().toLowerCase();
+    const jobId = (searchParams.get("job_id") || searchParams.get("job") || "").trim();
+    const method = (searchParams.get("method") || "").trim().toLowerCase(); // optional
 
     if (!jobId) {
       return NextResponse.json({ ok: false, error: "Missing job_id" }, { status: 400 });
@@ -19,7 +25,7 @@ export async function GET(req: NextRequest) {
 
     const conn = db();
 
-    // Build SQL dynamically only to include method filter if provided
+    // Build SQL; include method filter only if provided
     let sql = `
       SELECT DISTINCT rep
       FROM emtr_all_info
@@ -29,7 +35,7 @@ export async function GET(req: NextRequest) {
     const params: Array<string | number> = [jobId];
 
     if (method) {
-      sql += ` AND method = ?`;
+      sql += ` AND LOWER(method) = ?`;
       params.push(method);
     }
 
@@ -37,15 +43,19 @@ export async function GET(req: NextRequest) {
 
     const { rows } = await conn.execute<Row>(sql, params);
 
+    // Coerce to integers; keep only finite ints
     const reps = (rows ?? [])
-      .map((r) => (typeof r.rep === "number" && Number.isFinite(r.rep) ? r.rep : null))
+      .map((r) => toInt(r.rep))
       .filter((v): v is number => v !== null);
+
+    // rows are DISTINCT + ORDER BY already, but normalize just in case
+    const uniqSorted = Array.from(new Set(reps)).sort((a, b) => a - b);
 
     return NextResponse.json({
       ok: true,
       job_id: jobId,
       method: method || null,
-      reps,
+      reps: uniqSorted,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";

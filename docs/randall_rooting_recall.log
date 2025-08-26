@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2025.8.25)  25 AUG 2025 18:35
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2025.8.25)  26 AUG 2025 05:53
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -31,9 +31,29 @@ Package: authblk 2001/02/27 1.3 (PWD)
 \c@authors=\count196
 \c@affil=\count197
 )
+(/usr/share/texlive/texmf-dist/tex/latex/booktabs/booktabs.sty
+Package: booktabs 2020/01/12 v1.61803398 Publication quality tables
+\heavyrulewidth=\dimen141
+\lightrulewidth=\dimen142
+\cmidrulewidth=\dimen143
+\belowrulesep=\dimen144
+\belowbottomsep=\dimen145
+\aboverulesep=\dimen146
+\abovetopsep=\dimen147
+\cmidrulesep=\dimen148
+\cmidrulekern=\dimen149
+\defaultaddspace=\dimen150
+\@cmidla=\count198
+\@cmidlb=\count199
+\@aboverulesep=\dimen151
+\@belowrulesep=\dimen152
+\@thisruleclass=\count266
+\@lastruleclass=\count267
+\@thisrulewidth=\dimen153
+)
 (/usr/share/texlive/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def
 File: l3backend-pdftex.def 2024-01-04 L3 backend support: PDF output (pdfTeX)
-\l__color_backend_stack_int=\count198
+\l__color_backend_stack_int=\count268
 \l__pdf_internal_box=\box51
 )
 (./randall_rooting_recall.aux
@@ -43,29 +63,29 @@ LaTeX Warning: Label `fig:my_label' multiply defined.
 )
 \openout1 = `randall_rooting_recall.aux'.
 
-LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 9.
-LaTeX Font Info:    ... okay on input line 9.
-LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 9.
-LaTeX Font Info:    ... okay on input line 9.
-LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 9.
-LaTeX Font Info:    ... okay on input line 9.
-LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 9.
-LaTeX Font Info:    ... okay on input line 9.
-LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 9.
-LaTeX Font Info:    ... okay on input line 9.
-LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 9.
-LaTeX Font Info:    ... okay on input line 9.
-LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 9.
-LaTeX Font Info:    ... okay on input line 9.
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 10.
+LaTeX Font Info:    ... okay on input line 10.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 10.
+LaTeX Font Info:    ... okay on input line 10.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 10.
+LaTeX Font Info:    ... okay on input line 10.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 10.
+LaTeX Font Info:    ... okay on input line 10.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 10.
+LaTeX Font Info:    ... okay on input line 10.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 10.
+LaTeX Font Info:    ... okay on input line 10.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 10.
+LaTeX Font Info:    ... okay on input line 10.
 LaTeX Font Info:    External font `cmex10' loaded for size
-(Font)              <12> on input line 11.
+(Font)              <12> on input line 12.
 LaTeX Font Info:    External font `cmex10' loaded for size
-(Font)              <8> on input line 11.
+(Font)              <8> on input line 12.
 LaTeX Font Info:    External font `cmex10' loaded for size
-(Font)              <6> on input line 11.
+(Font)              <6> on input line 12.
 
 ! Undefined control sequence.
-l.24 			\includegraphics
+l.25 			\includegraphics
                         [width=0.8\textwidth]{"/home/pk/projects/prabhavk.gi...
 The control sequence at the end of the top line
 of your error message was never \def'ed. If you have
@@ -76,7 +96,7 @@ and I'll forget about whatever was undefined.
 ! Missing number, treated as zero.
 <to be read again> 
                    ]
-l.24 			\includegraphics[width=0.8\textwidth]
+l.25 			\includegraphics[width=0.8\textwidth]
                                              {"/home/pk/projects/prabhavk.gi...
 A number should have been here; I inserted `0'.
 (If you can't figure out why I needed to see a number,
@@ -85,7 +105,7 @@ look up `weird error' in the index to The TeXbook.)
 ! Illegal unit of measure (pt inserted).
 <to be read again> 
                    ]
-l.24 			\includegraphics[width=0.8\textwidth]
+l.25 			\includegraphics[width=0.8\textwidth]
                                              {"/home/pk/projects/prabhavk.gi...
 Dimensions can be in units of em, ex, in, pt, pc,
 cm, mm, dd, cc, nd, nc, bp, or sp; but yours is a new one!
@@ -97,19 +117,19 @@ two letters. (See Chapter 27 of The TeXbook.)
 ! Missing $ inserted.
 <inserted text> 
                 $
-l.24 ...thub.io/public/figures/wasm-1756002951415_
+l.25 ...thub.io/public/figures/wasm-1756002951415_
                                                   _violin__ll_final_violin__...
 I've inserted a begin-math/end-math symbol since I think
 you left one out. Proceed, with fingers crossed.
 
 LaTeX Font Info:    External font `cmex10' loaded for size
-(Font)              <7> on input line 24.
+(Font)              <7> on input line 25.
 LaTeX Font Info:    External font `cmex10' loaded for size
-(Font)              <5> on input line 24.
+(Font)              <5> on input line 25.
 ! Missing { inserted.
 <to be read again> 
                    _
-l.24 ...hub.io/public/figures/wasm-1756002951415__
+l.25 ...hub.io/public/figures/wasm-1756002951415__
                                                   violin__ll_final_violin__t...
 A left brace was mandatory here, so I've put one in.
 You might want to delete and/or insert some corrections
@@ -119,7 +139,7 @@ so that I will find a matching right brace soon.
 ! Missing { inserted.
 <to be read again> 
                    _
-l.24 ...ublic/figures/wasm-1756002951415__violin__
+l.25 ...ublic/figures/wasm-1756002951415__violin__
                                                   ll_final_violin__t20250824...
 A left brace was mandatory here, so I've put one in.
 You might want to delete and/or insert some corrections
@@ -129,7 +149,7 @@ so that I will find a matching right brace soon.
 ! Missing { inserted.
 <to be read again> 
                    _
-l.24 ...m-1756002951415__violin__ll_final_violin__
+l.25 ...m-1756002951415__violin__ll_final_violin__
                                                   t20250824_225734Z.png"}
 A left brace was mandatory here, so I've put one in.
 You might want to delete and/or insert some corrections
@@ -139,7 +159,7 @@ so that I will find a matching right brace soon.
 ! Missing $ inserted.
 <inserted text> 
                 $
-l.25 ...his is the caption describing the figure.}
+l.26 ...his is the caption describing the figure.}
                                                   
 I've inserted a begin-math/end-math symbol since I think
 you left one out. Proceed, with fingers crossed.
@@ -147,7 +167,7 @@ you left one out. Proceed, with fingers crossed.
 ! Missing } inserted.
 <inserted text> 
                 }
-l.25 ...his is the caption describing the figure.}
+l.26 ...his is the caption describing the figure.}
                                                   
 I've inserted something that you may have forgotten.
 (See the <inserted text> above.)
@@ -158,7 +178,7 @@ my insertion and my current dilemma will both disappear.
 ! Missing } inserted.
 <inserted text> 
                 }
-l.25 ...his is the caption describing the figure.}
+l.26 ...his is the caption describing the figure.}
                                                   
 I've inserted something that you may have forgotten.
 (See the <inserted text> above.)
@@ -169,7 +189,7 @@ my insertion and my current dilemma will both disappear.
 ! Missing } inserted.
 <inserted text> 
                 }
-l.27 		\end{figure}
+l.28 		\end{figure}
                    
 I've inserted something that you may have forgotten.
 (See the <inserted text> above.)
@@ -178,7 +198,7 @@ really didn't forget anything, try typing `2' now; then
 my insertion and my current dilemma will both disappear.
 
 ! Undefined control sequence.
-l.32 			\includegraphics
+l.33 			\includegraphics
                         [width=0.8\textwidth]{path/to/your/figure.png}
 The control sequence at the end of the top line
 of your error message was never \def'ed. If you have
@@ -189,7 +209,7 @@ and I'll forget about whatever was undefined.
 ! Missing number, treated as zero.
 <to be read again> 
                    ]
-l.32 			\includegraphics[width=0.8\textwidth]
+l.33 			\includegraphics[width=0.8\textwidth]
                                              {path/to/your/figure.png}
 A number should have been here; I inserted `0'.
 (If you can't figure out why I needed to see a number,
@@ -198,7 +218,7 @@ look up `weird error' in the index to The TeXbook.)
 ! Illegal unit of measure (pt inserted).
 <to be read again> 
                    ]
-l.32 			\includegraphics[width=0.8\textwidth]
+l.33 			\includegraphics[width=0.8\textwidth]
                                              {path/to/your/figure.png}
 Dimensions can be in units of em, ex, in, pt, pc,
 cm, mm, dd, cc, nd, nc, bp, or sp; but yours is a new one!
@@ -207,9 +227,16 @@ To recover gracefully from this error, it's best to
 delete the erroneous units; e.g., type `2' to delete
 two letters. (See Chapter 27 of The TeXbook.)
 
+LaTeX Font Info:    External font `cmex10' loaded for size
+(Font)              <9> on input line 46.
+
+Overfull \hbox (190.85933pt too wide) in paragraph at lines 46--73
+ [][] 
+ []
+
 [1
 
-{/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map}] [2]
+{/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map}] [2] [3]
 (./randall_rooting_recall.aux)
  ***********
 LaTeX2e <2023-11-01> patch level 1
@@ -221,27 +248,30 @@ LaTeX Warning: There were multiply-defined labels.
 
  ) 
 Here is how much of TeX's memory you used:
- 552 strings out of 474222
- 10113 string characters out of 5748733
- 1927975 words of memory out of 5000000
- 22870 multiletter control sequences out of 15000+600000
- 562931 words of font info for 52 fonts, out of 8000000 for 9000
+ 637 strings out of 474222
+ 11449 string characters out of 5748733
+ 1954975 words of memory out of 5000000
+ 22948 multiletter control sequences out of 15000+600000
+ 563889 words of font info for 55 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 35i,6n,50p,210b,253s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 35i,9n,50p,233b,265s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb></us
 r/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb></usr/shar
 e/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx9.pfb></usr/share/texli
-ve/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi5.pfb></usr/share/texlive/texm
-f-dist/fonts/type1/public/amsfonts/cm/cmmi7.pfb></usr/share/texlive/texmf-dist/
-fonts/type1/public/amsfonts/cm/cmr10.pfb></usr/share/texlive/texmf-dist/fonts/t
-ype1/public/amsfonts/cm/cmr12.pfb></usr/share/texlive/texmf-dist/fonts/type1/pu
-blic/amsfonts/cm/cmr17.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/am
-sfonts/cm/cmr5.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/c
-m/cmr8.pfb>
-Output written on randall_rooting_recall.pdf (2 pages, 121884 bytes).
+ve/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb></usr/share/texlive/tex
+mf-dist/fonts/type1/public/amsfonts/cm/cmmi5.pfb></usr/share/texlive/texmf-dist
+/fonts/type1/public/amsfonts/cm/cmmi7.pfb></usr/share/texlive/texmf-dist/fonts/
+type1/public/amsfonts/cm/cmr10.pfb></usr/share/texlive/texmf-dist/fonts/type1/p
+ublic/amsfonts/cm/cmr12.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/a
+msfonts/cm/cmr17.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts
+/cm/cmr5.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr8
+.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr9.pfb></u
+sr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy9.pfb></usr/shar
+e/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmti9.pfb>
+Output written on randall_rooting_recall.pdf (3 pages, 162483 bytes).
 PDF statistics:
- 61 PDF objects out of 1000 (max. 8388607)
- 36 compressed objects within 1 object stream
+ 84 PDF objects out of 1000 (max. 8388607)
+ 50 compressed objects within 1 object stream
  0 named destinations out of 1000 (max. 500000)
  1 words of extra memory for PDF output out of 10000 (max. 10000000)
 
