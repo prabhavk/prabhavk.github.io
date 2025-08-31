@@ -9,14 +9,13 @@ type Tab = { href: string; label: string; mode: "exact" | "deep" };
 const tabs: Tab[] = [
   { href: "/",                label: "Input Form",              mode: "exact" },
   { href: "/runs",            label: "Precomputed Results",     mode: "deep"  },
-  // { href: "/violin",          label: "MLL D,P&S",               mode: "deep"  },
-  // { href: "/mle",             label: "MLE in D",                mode: "deep"  },
-  // { href: "/ecdll",           label: "ECDLL",                   mode: "deep"  },
-  // { href: "/wmw_comp_method", label: "WMW comp method",         mode: "deep"  },  
-  // { href: "/wmw_comp_root",   label: "WMW comp root",           mode: "deep"  },  
-  // { href: "/sigrec",          label: "Distribution of Recall",  mode: "deep"  },  
-//{ href: "/rhodonea",        label: "Rhodonea Curves",         mode: "deep"  },
-  // { href: "/spirograph",      label: "Spirographs",             mode: "deep"  },  
+  // { href: "/trees",           label: "Trees",                   mode: "deep"  },
+  { href: "/violin",          label: "MLL D,P&S",               mode: "deep"  },
+  { href: "/mle",             label: "MLE in D",                mode: "deep"  },
+  { href: "/ecdll",           label: "ECDLL",                   mode: "deep"  },
+  { href: "/wmw_comp_method", label: "WMW comp method",         mode: "deep"  },  
+  { href: "/wmw_comp_root",   label: "WMW comp root",           mode: "deep"  },    
+  { href: "/dosa",            label: "Dosa Plots",            mode: "deep"  },  
   
 ];
 
@@ -30,14 +29,14 @@ export default function Nav() {
     "focus-visible:ring-offset-2 focus-visible:ring-offset-black";
 
   const active    = "bg-gray-200 text-black shadow-md hover:bg-white hover:!text-black";
-  const idleDefault = "bg-gray-700 text-white hover:bg-yellow-500";
-  const idleRuns    = "bg-gray-700 text-white hover:bg-white hover:!text-black";
+  const idleDefault = "bg-gray-600 text-white hover:bg-yellow-400 hover:!text-black";
+  const idleRuns    = "bg-gray-600 text-white hover:bg-yellow-400 hover:!text-black";
 
   const isActive = (t: Tab) =>
     t.mode === "exact" ? pathname === t.href : pathname === t.href || pathname.startsWith(t.href + "/");
 
   return (
-    <nav className="w-full border-b bg-black">
+    <nav className="w-full border-b bg-sky-500">
       <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap gap-3 justify-center">
         {tabs.map((t) => {
           const on = isActive(t);

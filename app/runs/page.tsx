@@ -51,9 +51,19 @@ type ColumnDef<K extends ColumnKey = ColumnKey> = {
   render?: (row: RunRow) => React.ReactNode;
 };
 
+// ==== Unselected row colors (edit these) ====
+// Idle text color for unselected rows:
+const UNSELECTED_IDLE_TEXT = "text-slate-700";
+// Hover text color for unselected rows:
+const UNSELECTED_HOVER_TEXT = "hover:text-slate-900";
+// Hover background for unselected rows:
+const UNSELECTED_HOVER_BG = "hover:bg-slate-50";
+// ===========================================
+
 // ---- Column config (labels + per-column classes) ----
+// NOTE: keep row-level colors in control; avoid per-cell hardcoded text colors.
 const COLUMNS: ColumnDef[] = [
-  { key: "job_id",      label: "job_id",      thClass: "text-yellow-300", tdClass: "font-mono text-yellow-700" },
+  { key: "job_id",      label: "job_id",      thClass: "text-yellow-300", tdClass: "font-mono" },
   { key: "finished_at", label: "finished_at" },
   { key: "created_at",  label: "created_at" },
   { key: "dur_minutes", label: "dur_minutes", numeric: true },
@@ -85,7 +95,7 @@ export default function RunsPage() {
   const [to, setTo] = useState("");
   const [total, setTotal] = useState(0);
 
-  // New: selected job id
+  // Selected job id
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
   // Initialize selection from URL (?job=...) or localStorage
@@ -104,7 +114,6 @@ export default function RunsPage() {
     if (selectedJobId && selectedJobId.length > 0) {
       window.localStorage.setItem(SELECTED_KEY, selectedJobId);
       url.searchParams.set("job", selectedJobId);
-      // broadcast for other pages/components that care
       const ev: CustomEvent<{ jobId: string }> = new CustomEvent("emtr:selectedJobChanged", {
         detail: { jobId: selectedJobId },
       });
@@ -159,14 +168,17 @@ export default function RunsPage() {
 
   const pages = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [total, pageSize]);
   const columnCount = 1 + COLUMNS.length; // +1 for the selection column
-
   const handleSelect = (jobId: string) => setSelectedJobId(jobId);
+
+  // Row classes
+  const selectedRowCls = "bg-yellow-50 ring-1 ring-yellow-300 text-black";
+  const unselectedRowCls = `group cursor-pointer transition-colors ${UNSELECTED_IDLE_TEXT} ${UNSELECTED_HOVER_TEXT} ${UNSELECTED_HOVER_BG}`;
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
-      <h1 className="text-2xl font-bold mb-4">Completed Runs</h1>
+      <h1 className="text-2xl text-black font-bold mb-4">Completed Runs</h1>
 
-      <form onSubmit={onSearchSubmit} className="flex flex-wrap gap-3 items-end mb-4">
+      <form onSubmit={onSearchSubmit} className="flex text-black flex-wrap gap-3 items-end mb-4">
         <div className="flex flex-col">
           <label className="text-sm">Search job_id</label>
           <input
@@ -195,7 +207,7 @@ export default function RunsPage() {
           />
         </div>
         <div className="flex flex-col">
-          <label className="text-sm">Sort</label>
+          <label className="text-black text-sm">Sort</label>
           <select
             className="border rounded-xl px-3 py-2"
             value={sort}
@@ -213,42 +225,9 @@ export default function RunsPage() {
             <option value="thr:asc">thr ↑</option>
           </select>
         </div>
-        <div className="flex gap-2">
-          <button type="submit" className="px-4 py-2 rounded-xl bg-black text-white">
-            Apply
-          </button>
-          <button
-            type="button"
-            className="px-4 py-2 rounded-xl border"
-            onClick={() => {
-              setQ("");
-              setFrom("");
-              setTo("");
-              setSort("finished_at:desc");
-              setPage(1);
-              void load();
-            }}
-          >
-            Reset
-          </button>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <label className="text-sm">Page size</label>
-          <select
-            className="border rounded-xl px-3 py-2"
-            value={pageSize}
-            onChange={(e) => setPageSize(Number(e.target.value))}
-          >
-            {[10, 20, 50, 100].map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        </div>
       </form>
 
-      <div className="overflow-auto border rounded-2xl">
+      <div className="overflow-auto border border-black rounded-2xl">
         <table className="min-w-full text-sm">
           {/* Header */}
           <thead className="bg-black text-white sticky top-0">
@@ -288,12 +267,7 @@ export default function RunsPage() {
                   <tr
                     key={r.job_id}
                     onClick={() => handleSelect(r.job_id)}
-                    className={
-                      "cursor-pointer " +
-                      (selected
-                        ? "bg-yellow-50 ring-1 ring-yellow-300 text-black"
-                        : "hover:bg-gray-50 hover:text-black")
-                    }
+                    className={selected ? selectedRowCls : unselectedRowCls}
                   >
                     {/* Selection radio */}
                     <Td className="text-center align-middle">

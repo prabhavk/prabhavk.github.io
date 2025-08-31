@@ -211,15 +211,15 @@ export default function WmwCompMethodPage() {
   return (
     <div className="p-6 max-w-[95vw] mx-auto space-y-6">
       <header className="space-y-1">
-        <h1 className="text-2xl font-bold">Method Comparison (WMW one-sided)</h1>
-        <p className="text-sm text-gray-600">
+        <h1 className="text-2xl text-black font-bold">Method Comparison (WMW one-sided)</h1>
+        <p className="text-sm text-black">
           For each selected node, we compare methods pairwise. Cells show one-tailed p for H₁: method with larger median wins.
         </p>
       </header>
 
       <section className="flex flex-wrap items-end gap-3">
         <label className="flex flex-col">
-          <span className="text-sm">Initialization criterion (node/root)</span>
+          <span className="text-black text-sm">Initialization criterion (node/root)</span>
           <select
             value={initChoice}
             onChange={(e) => setInitChoice(e.target.value as (typeof INIT_OPTIONS)[number])}
@@ -230,7 +230,7 @@ export default function WmwCompMethodPage() {
         </label>
 
         <label className="flex flex-col">
-          <span className="text-sm">α (significance)</span>
+          <span className="text-black text-sm">α (significance)</span>
           <input
             type="number"
             step="0.001"
@@ -270,7 +270,7 @@ export default function WmwCompMethodPage() {
 
       <div className="overflow-auto border rounded-xl">
         <table className="min-w-full text-sm">
-          <thead className="bg-white">
+          <thead className="bg-white text-black">
             <tr>
               <Th rowSpan={2}>root</Th>
               <Th colSpan={4} className="text-center">sample size</Th>
@@ -308,7 +308,7 @@ export default function WmwCompMethodPage() {
                 const nDir = r.sizes.Dirichlet ?? 0;
                 const nSSH = r.sizes.SSH ?? 0;
                 return (
-                  <tr key={showNode(r.node)} className="hover:bg-gray-50">
+                  <tr key={showNode(r.node)} className="text-black hover:bg-gray-50">
                     <Td mono>{showNode(r.node)}</Td>
                     <Td num center>{nPar}</Td>
                     <Td num center>{nDir}</Td>

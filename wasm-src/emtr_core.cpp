@@ -4,7 +4,1536 @@
 using namespace std; 
 using namespace emtr;
 
-int ll_precision = 24;
+int ll_precision = 14;
+
+///...///...///...///...///...///...///... Family Joining ...///...///...///...///...///...///...///
+#include <algorithm>
+#include <cctype>
+#include <sstream>
+#include <array>
+#include <cassert>
+#include <cmath>
+#include <cstddef>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <numeric>
+#include <queue>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+#include "third_party/eigen3/Eigen/Dense"
+#include "third_party/eigen3/unsupported/Eigen/MatrixFunctions"
+
+
+class FamilyJoining {
+public:
+	void SetNewick(bool striphidden_node = true) {
+		if (T.vcount() == 0) {
+			throw std::runtime_error("SetNewick: tree is empty. Call SetFJTree() first.");
+		}
+		Graph copy = T;
+		Graph leaf = ConvertGenerallyLabeledTreeToLeafLabeledTree(copy);
+		Graph bin  = ConvertMultifurcatingTreeToBifurcatingTree(leaf);
+		std::string nwk = GetNewickLabelOfLeafLabeledTree(bin);
+		if (striphidden_node) nwk = strip_hidden_node_labels_(nwk);
+		newick_ = std::move(nwk);
+	}
+
+	void EmitNewickJSON(const std::string& job_id = "", const std::string& label  = "familyjoining", const std::string& method  = "5foldcv") const {
+		if (newick_.empty()) {
+			throw std::runtime_error("EmitNewickJSON: Newick not set. Call SetNewick() first.");
+			}
+				std::cout << "[FJ_TREE]{"
+				<< "\"job_id\":\"" << json_escape_(job_id) << "\","
+				<< "\"label\":\""  << json_escape_(label)  << "\","
+				<< "\"method\":\"" << json_escape_(method)   << "\","
+				<< "\"epsilon\":"  << std::setprecision(6) << epsilon_ << ","
+				<< "\"newick\":\"" << json_escape_(newick_) << "\""
+				<< "}" << std::endl;
+		}
+  // ------------------------ Public data types ------------------------
+  struct PairHash {
+    template <class T1, class T2>
+    std::size_t operator()(const std::pair<T1,T2>& p) const noexcept {
+      std::size_t h1 = std::hash<T1>{}(p.first);
+      std::size_t h2 = std::hash<T2>{}(p.second);
+      return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1<<6) + (h1>>2));
+    }
+  };
+
+  struct Graph {
+    struct Edge { int u, v; double length; Edge():u(-1),v(-1),length(0.0){} Edge(int uu,int vv,double L):u(uu),v(vv),length(L){} };
+    std::vector<std::string> name;
+    std::vector<std::vector<int>> adj;
+    std::vector<Edge> edges;
+    std::unordered_map<std::pair<int,int>, int, PairHash> eid;
+
+    int vcount() const { return (int)name.size(); }
+    int ecount() const { return (int)edges.size(); }
+    void reserve_vertices(std::size_t n) { name.resize(n); adj.resize(n); }
+
+    int add_vertex(const std::string& nm) {
+      int id = (int)name.size();
+      name.push_back(nm);
+      adj.emplace_back();
+      return id;
+    }
+    int add_edge(int u, int v, double len=0.0) {
+      if (u==v) throw std::runtime_error("Graph: self-edge not allowed");
+      int id = (int)edges.size();
+      edges.emplace_back(u,v,len);
+      adj[u].push_back(v);
+      adj[v].push_back(u);
+      eid[std::make_pair(std::min(u,v), std::max(u,v))] = id;
+      return id;
+    }
+    int get_eid(int u, int v) const {
+      auto it = eid.find(std::make_pair(std::min(u,v), std::max(u,v)));
+      if (it == eid.end()) throw std::runtime_error("Graph: edge not found");
+      return it->second;
+    }
+    double get_length(int u, int v) const { return edges[get_eid(u,v)].length; }
+    void   set_length(int u, int v, double L) { edges[get_eid(u,v)].length = L; }
+    const std::vector<int>& neighbors(int v) const { return adj[v]; }
+    int degree(int v) const { return (int)adj[v].size(); }
+
+    void rebuild() {
+      eid.clear();
+      for (auto& L : adj) L.clear();
+      adj.resize(name.size());
+      for (int id=0; id<(int)edges.size(); ++id) {
+        const auto& e = edges[id];
+        adj[e.u].push_back(e.v);
+        adj[e.v].push_back(e.u);
+        eid[std::make_pair(std::min(e.u,e.v), std::max(e.u,e.v))] = id;
+      }
+    }
+    void remove_edge(int u, int v) {
+      int id = get_eid(u,v);
+      std::vector<Edge> kept; kept.reserve(edges.size());
+      for (int i=0;i<(int)edges.size();++i) if (i!=id) kept.push_back(edges[i]);
+      edges.swap(kept);
+      rebuild();
+    }
+    void delete_vertex(int v) {
+      int last = vcount()-1;
+      if (v != last) {
+        name[v] = std::move(name[last]);
+        adj[v]  = std::move(adj[last]);
+        for (auto& e : edges) { if (e.u==last) e.u=v; if (e.v==last) e.v=v; }
+      }
+      name.pop_back();
+      adj.pop_back();
+      std::vector<Edge> kept; kept.reserve(edges.size());
+      for (auto& e : edges) if (e.u!=v && e.v!=v) kept.push_back(e);
+      edges.swap(kept);
+      rebuild();
+    }
+  };
+
+  const Graph& GetTree() const { return T; }
+
+  // ------------------------ Construction ------------------------
+  FamilyJoining(const std::string& alignment_path, double epsilon) : epsilon_(epsilon) {
+    ReadAlignment(alignment_path, alignment_);
+
+    // dm_ = ComputeNHDistances(alignment_);
+	int k = 5;
+	int repeats = 2;
+	dm_ = ComputeLogDetDistances(alignment_);
+	SetFJTree(epsilon);
+	SetNewick();
+	EmitNewickJSON();
+	// double e_ubound = GetEpsilonUpper(dm_);
+	// cout << "Upper bound for epsilon is " << e_ubound << endl;
+	// std::map<std::pair<int, int>, std::pair<FamilyJoining::DistanceMap, FamilyJoining::DistanceMap>> kfoldDM_ = ComputeKFoldCVDistances(alignment_,k,repeats);
+	
+	// select epsilon by minimizing test error
+	
+	
+  }
+
+  // Build FJ tree from distances computed in constructor
+  void SetFJTree(double epsilon) {
+    // collect names from distances
+    std::unordered_set<std::string> setnames;
+    for (const auto& kv : dm_) {
+      setnames.insert(kv.first.first);
+      setnames.insert(kv.first.second);
+    }
+    std::vector<std::string> vertList(setnames.begin(), setnames.end());
+    std::sort(vertList.begin(), vertList.end());
+
+    // build topology, then fit lengths, then clamp negatives
+    DistanceMap dm_copy = dm_;
+    T = GetFJTreeTopology(std::move(dm_copy), vertList, epsilon);		
+		AssignOLSLengthsToTree(T, dm_);
+		SetNegativeLengthsToZero(T); // edges with negative length cause plotting problems
+  	}
+
+  // Optional getter if you need the string elsewhere
+  const std::string& newick() const { return newick_; }
+
+  // ------------------------ Tree Output (file) ------------------------
+  // Kept for convenience; not used by JSON path.
+  void WriteTree(const Graph& tree,
+                 const std::string& outputFileName,
+                 const std::string& fileFormat = "edgeList") const {
+    if (fileFormat == "edgeList") {
+      std::ofstream out(outputFileName.c_str());
+      if (!out) throw std::runtime_error("Cannot open output: " + outputFileName);
+      for (const auto& e : tree.edges) {
+        out << tree.name[e.u] << '\t' << tree.name[e.v] << '\t' << e.length << '\n';
+      }
+      return;
+    }
+    if (fileFormat == "newick") {
+      Graph copy = tree;
+      Graph leaf = ConvertGenerallyLabeledTreeToLeafLabeledTree(copy);
+      Graph bin  = ConvertMultifurcatingTreeToBifurcatingTree(leaf);
+      std::string nwk = GetNewickLabelOfLeafLabeledTree(bin);
+      // strip hidden_node labels to match Python re.sub
+      nwk = strip_hidden_node_labels_(nwk);
+      std::ofstream out(outputFileName.c_str());
+      if (!out) throw std::runtime_error("Cannot open output: " + outputFileName);
+      out << nwk;
+      return;
+    }
+    throw std::runtime_error("Unknown format (use 'edgeList' or 'newick'): " + fileFormat);
+  }
+
+  Graph T;
+
+  vector <tuple <string, string, double>> GetEdgeVector() {
+	vector <tuple <string, string, double>> edge_vector;
+	for (auto& e : T.edges) {
+		tuple <string,string,double> edge;
+		get<0>(edge)  = T.name[e.u];
+		get<1>(edge)  = T.name[e.v];
+		get<2>(edge)  = e.length;
+		edge_vector.push_back(edge);
+	}
+	return (edge_vector);
+  }
+
+private: 	
+  	string newick_;
+	static std::string strip_hidden_node_labels_(const std::string& s) {
+	std::string out; out.reserve(s.size());
+	std::size_t i = 0, n = s.size();		
+	// get distance_matrices for test/train
+
+	while (i < n) {
+		if (i + 2 <= n && s.compare(i, 2, "h_") == 0) {
+		std::size_t j = i + 12;
+		if (j < n && s[j] == 'T') ++j;
+		if (j < n && s[j] == '_') ++j;
+		while (j < n && std::isdigit((int)s[j])) ++j;
+		if (j < n && s[j] == '_') {
+			++j;
+			while (j < n && std::isdigit((int)s[j])) ++j;
+		}		
+		i = j;
+		continue;
+		}
+		out.push_back(s[i++]);
+	}
+		return out;
+	}
+	
+	static std::string json_escape_(const std::string& s) {
+	std::string out;
+	out.reserve(s.size() + 16);
+	static const char* HEX = "0123456789ABCDEF";
+
+	for (char c : s) {
+		int uc = static_cast<int>(c);
+		switch (c) {
+		case '\"': out += "\\\""; break;
+		case '\\': out += "\\\\"; break;
+		case '\b': out += "\\b";  break;
+		case '\f': out += "\\f";  break;
+		case '\n': out += "\\n";  break;
+		case '\r': out += "\\r";  break;
+		case '\t': out += "\\t";  break;
+		default:
+			if (uc < 0x20) {
+			out += "\\u00";
+			out += HEX[(uc >> 4) & 0x0F];
+			out += HEX[(uc      ) & 0x0F];
+			} else {
+			out += c;  // pass through UTF-8 bytes as-is
+			}
+		}
+	}
+	return out;
+	}
+
+
+  // ------------------------ Internal State ------------------------
+  double epsilon_;
+  std::unordered_map<std::string, std::string> alignment_;
+  
+
+  using DistanceMap = std::unordered_map<std::pair<std::string,std::string>, double, PairHash>;
+  DistanceMap dm_;
+
+  // ------------------------ String helpers ------------------------
+  static std::pair<std::string,std::string> SortedKey(const std::string& a, const std::string& b) {
+    return (a<b) ? std::make_pair(a,b) : std::make_pair(b,a);
+  }
+  static void Trim(std::string& s) {
+    auto sp = [](int ch){ return std::isspace(ch); };
+    while (!s.empty() && sp((int)s.front())) s.erase(s.begin());
+    while (!s.empty() && sp((int)s.back()))  s.pop_back();
+  }
+  static void ToUpper(std::string& s) {
+    for (char& c : s) if (c>='a' && c<='z') c = char(c - 'a' + 'A');
+  }
+  static bool IsHiddenNode(const std::string& nm) {
+    return nm.size()>=2 && (nm.compare(0,2,"h_")==0);
+  }
+ 
+  double GetEpsilonUpper(const DistanceMap& distanceMatrixOriginal) {
+    // Local copy
+    DistanceMap distanceMatrix = distanceMatrixOriginal;
+
+    // Helper to canonicalize keys (sorted pair)
+    auto keyOf = [](const std::string& a, const std::string& b) -> std::pair<std::string,std::string> {
+        return (a < b) ? std::make_pair(a,b) : std::make_pair(b,a);
+    };
+
+    // ---- Build vertex list (unique, sorted) ----
+    std::vector<std::string> fullvertList;
+    fullvertList.reserve(distanceMatrix.size() * 2);
+    for (const auto& kv : distanceMatrix) {
+        fullvertList.push_back(kv.first.first);
+        fullvertList.push_back(kv.first.second);
+    }
+    std::sort(fullvertList.begin(), fullvertList.end());
+    fullvertList.erase(std::unique(fullvertList.begin(), fullvertList.end()), fullvertList.end());
+    std::vector<std::string> vertList = fullvertList;
+
+    int n = static_cast<int>(vertList.size());
+    if (n < 3) return 0.0; 
+
+    // ---- uList initialization ----
+    std::unordered_map<std::string, double> uList;
+    uList.reserve(vertList.size());
+    for (const auto& v : vertList) uList[v] = 0.0;
+
+    // Accumulate sums of pairwise distances
+    for (int ii = 0; ii < n; ++ii) {
+        const auto& i = vertList[ii];
+        for (int jj = ii + 1; jj < n; ++jj) {
+            const auto& j = vertList[jj];
+            const auto it = distanceMatrix.find(keyOf(i,j));
+            if (it == distanceMatrix.end()) {
+                throw std::runtime_error("GetEpsilonUpper: missing distance for pair (" + i + "," + j + ")");
+            }
+            const double dist = it->second;
+            uList[i] += dist;
+            uList[j] += dist;
+        }
+    }
+    // Divide by (n - 2)
+    if (n > 2) {
+        for (const auto& v : vertList) {
+            uList[v] /= static_cast<double>(n - 2);
+        }
+    }
+
+    double epsilon_upper = 0.0;
+
+    // ---- Main reduction loop ----
+    while (static_cast<int>(uList.size()) > 3) {
+        // Find pair (i_selected, j_selected) minimizing neighborDist_current = d(i,j) - u[i] - u[j]
+        double neighborDist = std::numeric_limits<double>::infinity();
+        std::string i_selected, j_selected;
+
+        for (int ii = 0; ii < n; ++ii) {
+            const auto& i = vertList[ii];
+            for (int jj = ii + 1; jj < n; ++jj) {
+                const auto& j = vertList[jj];
+                const auto it = distanceMatrix.find(keyOf(i,j));
+                if (it == distanceMatrix.end()) continue;
+                const double neighborDist_current = it->second - uList[i] - uList[j];
+                if (neighborDist_current < neighborDist) {
+                    neighborDist = neighborDist_current;
+                    i_selected = i;
+                    j_selected = j;
+                }
+            }
+        }
+
+        // Distances & deltas for the selected pair
+        const double d_ij = distanceMatrix.at(keyOf(i_selected, j_selected));
+        const double delta_ij = std::fabs(d_ij + uList[i_selected] - uList[j_selected]);
+        const double delta_ji = std::fabs(d_ij - uList[i_selected] + uList[j_selected]);
+        const double delta_pcvss = std::min(delta_ij, delta_ji) / 2.0;
+
+        double delta_ps2 = delta_pcvss + 1.0;
+
+        // Consider all other k
+        for (const auto& k : vertList) {
+            if (k == i_selected || k == j_selected) continue;
+            const double dik = distanceMatrix.at(keyOf(k, i_selected));
+            const double djk = distanceMatrix.at(keyOf(k, j_selected));
+            const double delta = dik + djk - d_ij;
+            const double delta_sMax = std::fabs(delta) / 4.0;
+            if (delta_sMax < delta_ps2) delta_ps2 = delta_sMax;
+        }
+
+        epsilon_upper = std::max(epsilon_upper, std::min(delta_pcvss, delta_ps2));
+
+        // ----- Case 1: remove 1 node (child) -----
+        if (delta_pcvss < delta_ps2) {
+            // Choose child per Python logic
+            const std::string child = (delta_ij < delta_ji) ? j_selected : i_selected;
+
+            // remove child from uList and update others
+            // Python: n -= 1, then for each vert != child:
+            // u[vert] = (u[vert]*(n-1) - d(vert,child)) / (n-2)
+            // and erase all distances that involve child
+            // Also remove from vertList.
+
+            // Decrement n first (to match Python's order)
+            n -= 1;
+
+            // Update u for all remaining vertices (excluding child)
+            for (const auto& vert : vertList) {
+                if (vert == child) continue;
+                const auto it = distanceMatrix.find(keyOf(vert, child));
+                if (it == distanceMatrix.end()) {
+                    // If missing, assume 0 or throw; Python assumes present
+                    throw std::runtime_error("GetEpsilonUpper: missing distance involving child (" + vert + "," + child + ")");
+                }
+                const double d_vc = it->second;
+                // (n here is already decremented, matching Python)
+                uList[vert] = (uList[vert] * static_cast<double>(n) - d_vc) / static_cast<double>(n - 1);
+            }
+
+            // Erase child from uList
+            uList.erase(child);
+
+            // Erase all distances involving child
+            for (const auto& vert : vertList) {
+                if (vert == child) continue;
+                distanceMatrix.erase(keyOf(vert, child));
+            }
+
+            // Remove child from vertList
+            vertList.erase(std::remove(vertList.begin(), vertList.end(), child), vertList.end());
+        }
+        // ----- Case 2: remove 2 nodes (both i_selected and j_selected) -----
+        else {
+            // vertList.remove(i_selected)
+            // vertList.remove(j_selected)
+            // n -= 2
+            // del u[i_selected], u[j_selected]
+            // for each remaining vert:
+            // u[vert] = (u[vert]*n - d(vert,i) - d(vert,j)) / (n-2)
+            // and erase distances to i and j.
+            // If n <= 2, return epsilon_upper.
+
+            // Decrement n by 2 (to match Python's order)
+            n -= 2;
+
+            // Update u for all remaining vertices
+            for (const auto& vert : vertList) {
+                if (vert == i_selected || vert == j_selected) continue;
+                const double d_vi = distanceMatrix.at(keyOf(vert, i_selected));
+                const double d_vj = distanceMatrix.at(keyOf(vert, j_selected));
+                // (n here is already decremented by 2)
+                if (n > 2) {
+                    uList[vert] = (uList[vert] * static_cast<double>(n) - d_vi - d_vj) / static_cast<double>(n - 2);
+                }
+            }
+
+            // Erase i_selected, j_selected from uList
+            uList.erase(i_selected);
+            uList.erase(j_selected);
+
+            // Erase all distances involving i_selected or j_selected
+            for (const auto& vert : vertList) {
+                if (vert != i_selected) distanceMatrix.erase(keyOf(vert, i_selected));
+                if (vert != j_selected) distanceMatrix.erase(keyOf(vert, j_selected));
+            }
+
+            // Remove i_selected and j_selected from vertList
+            vertList.erase(std::remove(vertList.begin(), vertList.end(), i_selected), vertList.end());
+            vertList.erase(std::remove(vertList.begin(), vertList.end(), j_selected), vertList.end());
+
+            if (n <= 2) {
+                return epsilon_upper;
+            }
+        }
+	}
+	if (vertList.size() == 3) {
+		const std::string& v0 = vertList[0];
+		const std::string& v1 = vertList[1];
+		const std::string& v2 = vertList[2];
+
+		const double d01 = distanceMatrix.at(keyOf(v0, v1));
+		const double d02 = distanceMatrix.at(keyOf(v0, v2));
+		const double d12 = distanceMatrix.at(keyOf(v1, v2));
+
+		const double m = std::min(
+			{ std::fabs(d12 - d01 - d02),
+			std::fabs(d02 - d01 - d12),
+			std::fabs(d01 - d02 - d12) }
+		) / 2.0;
+
+		epsilon_upper = std::max(epsilon_upper, m);
+		}
+
+		return epsilon_upper + 2.0e-10;
+	}
+
+  // ------------------------ Alignment + Distances ------------------------
+  static void ReadAlignment(const std::string& path,
+                            std::unordered_map<std::string,std::string>& aln) {
+    std::ifstream fin(path.c_str());
+    if (!fin) throw std::runtime_error("Cannot open alignment: " + path);
+
+    std::string first;
+    while (std::getline(fin, first)) if (!first.empty()) break;
+    if (!fin && first.empty()) throw std::runtime_error("Empty alignment: " + path);
+
+    bool isFasta = !first.empty() && first[0] == '>';
+    fin.clear();
+    fin.seekg(0, std::ios::beg);
+
+    if (isFasta) {
+      std::string name, seq, line;
+      while (std::getline(fin, line)) {
+        if (line.empty()) continue;
+        if (line[0] == '>') {
+          if (!name.empty()) { ToUpper(seq); aln[name] = seq; seq.clear(); }
+          name = line.substr(1); Trim(name);
+        } else { Trim(line); seq += line; }
+      }
+      if (!name.empty()) { ToUpper(seq); aln[name] = seq; }
+    } else {
+      std::string line;
+      while (std::getline(fin, line)) {
+        if (line.empty()) continue;
+        auto tab = line.find('\t');
+        if (tab == std::string::npos)
+          throw std::runtime_error("Expected NAME<TAB>SEQ; got: " + line);
+        std::string name = line.substr(0, tab);
+        std::string seq  = line.substr(tab+1);
+        Trim(name); Trim(seq); ToUpper(seq);
+        if (name.empty() || seq.empty())
+          throw std::runtime_error("Bad alignment line: " + line);
+        aln[name] = seq;
+      }
+    }
+    if (aln.empty()) throw std::runtime_error("No sequences parsed");
+    const std::size_t L = aln.begin()->second.size();
+    for (const auto& kv : aln) {
+      if (kv.second.size() != L)
+        throw std::runtime_error("Sequences must be aligned (equal length): " + kv.first);
+    }
+  }
+
+  struct CVFold {
+    	std::vector<std::size_t> train_pos;
+    	std::vector<std::size_t> test_pos;
+	};
+
+  inline std::array<CVFold, 5> make5FoldCV(std::size_t Alen, std::uint64_t seed = 22, bool shuffle = true) {
+    std::array<CVFold, 5> folds;
+
+    // 1) Build index list [0, 1, 2, ..., Alen-1]
+    std::vector<std::size_t> idx(Alen);
+    std::iota(idx.begin(), idx.end(), 0);
+
+    // 2) Optional shuffle (for reproducibility via seed)
+    if (shuffle) {
+        std::mt19937_64 rng(seed);
+        std::shuffle(idx.begin(), idx.end(), rng);
+    }
+
+    // 3) Compute fold sizes as even as possible
+    const std::size_t base = Alen / 5;
+    const std::size_t rem  = Alen % 5; // first 'rem' folds get one extra
+
+    std::size_t offset = 0;
+    for (std::size_t f = 0; f < 5; ++f) {
+        const std::size_t take = base + (f < rem ? 1 : 0);
+
+        // test = this slice
+        std::vector<std::size_t> test;
+        test.reserve(take);
+        for (std::size_t k = 0; k < take; ++k)
+            test.push_back(idx[offset + k]);
+
+        // train = everything except this slice
+        std::vector<std::size_t> train;
+        train.reserve(Alen - take);
+        // before slice
+        for (std::size_t k = 0; k < offset; ++k)
+            train.push_back(idx[k]);
+        // after slice
+        for (std::size_t k = offset + take; k < idx.size(); ++k)
+            train.push_back(idx[k]);
+
+        folds[f] = CVFold{ std::move(train), std::move(test) };
+        offset += take;
+    }
+
+    return folds;
+}		
+
+  void compute_distance_matrices_for_train_test_pairs(const std::unordered_map<std::string,std::string>& aln, int num_replicates=100, int k=5) {
+	// only compute log-det distances
+	std::vector<std::string> names; names.reserve(aln.size());
+    for (const auto& kv : aln) names.push_back(kv.first);
+    std::sort(names.begin(), names.end());
+	const std::size_t Alen = aln.at(names[0]).size(); // length of alignment
+    if (names.size() < 2) throw std::runtime_error("Need >= 2 sequences.");
+	// generate positions for train/test alignment pairs
+	// generate distance_matrices for train/test alignment pairs
+  	map <pair<int,int>,pair<DistanceMap,DistanceMap>> kfoldcv_dm;
+	int seq_len;
+
+
+  }
+  
+  static DistanceMap ComputeNHDistances(const std::unordered_map<std::string,std::string>& aln) {
+    std::vector<std::string> names; names.reserve(aln.size());
+    for (const auto& kv : aln) names.push_back(kv.first);
+    std::sort(names.begin(), names.end());
+    if (names.size() < 2) throw std::runtime_error("Need >= 2 sequences.");
+
+    const std::size_t L = aln.at(names[0]).size();
+    DistanceMap D;
+    for (std::size_t i=0;i<names.size();++i) {
+      const std::string& A = names[i]; const std::string& sA = aln.at(A);
+      for (std::size_t j=i+1;j<names.size();++j) {
+        const std::string& B = names[j]; const std::string& sB = aln.at(B);
+        double diff = 0.0; for (std::size_t k=0;k<L;++k) if (sA[k]!=sB[k]) diff += 1.0;
+        D[SortedKey(A,B)] = diff / (double)L;
+      }
+    }
+    return D;
+  }
+
+// Compute LogDet distances for gappy sequences
+
+//   Md DivergenceMatrix;
+  	static int ntIndex(char c) {
+		switch (c) {
+			case 'A': case 'a': return 0;
+			case 'C': case 'c': return 1;
+			case 'G': case 'g': return 2;
+			case 'T': case 't': case 'U': case 'u': return 3;
+			default: return -1;
+		}
+	}
+
+	// Build 4x4 divergence/count matrix D(i,j) for aligned sequences sA vs sB.
+	static Eigen::Matrix4d GetDivergenceMatrix(const std::string& sA, const std::string& sB) {
+		Eigen::Matrix4d D = Eigen::Matrix4d::Zero();
+		const std::size_t L = std::min(sA.size(), sB.size());
+
+		for (std::size_t k = 0; k < L; ++k) {
+			const int ia = ntIndex(sA[k]);
+			const int ib = ntIndex(sB[k]);
+			if (ia >= 0 && ib >= 0) {
+				D(ia, ib) += 1.0;
+			}
+		}
+		return D;
+	}  
+
+	// LogDet (paralinear) distance for a 4x4 divergence matrix D.
+	// D(i,j) = count of aligned sites with pair (i,j).
+	// alpha: Laplace pseudocount added to every cell (0.5 is common).
+	static double LogDet_LD(const Eigen::Matrix4d& D, double alpha = 0.5)
+	{
+		// Smoothed copy (Matrix4d)
+		Eigen::Matrix4d M = D;
+		if (alpha != 0.0) M.array() += alpha;  // elementwise add, still Matrix4d
+
+		// Row/column sums (Vector4d)
+		Eigen::Vector4d rowSums = M.rowwise().sum();
+		Eigen::Vector4d colSums = M.colwise().sum();
+
+		// Guards
+		if ((rowSums.array() <= 0.0).any() || (colSums.array() <= 0.0).any()) {
+			return std::numeric_limits<double>::infinity();
+		}
+
+		const double detM = M.determinant();
+		if (!(detM > 0.0) || !std::isfinite(detM)) {
+			return std::numeric_limits<double>::infinity();
+		}
+
+		// Sum of logs of row/column sums
+		const double sumLogRows = rowSums.array().log().sum();
+		const double sumLogCols = colSums.array().log().sum();
+
+		// N = 4 for DNA
+		constexpr double N = 4.0;
+		return -(1.0 / N) * ( std::log(detM) - 0.5 * (sumLogCols + sumLogRows) );
+	}
+
+   static double GetLogDetDistance(const std::string& sA, const std::string& sB) {
+	Eigen::Matrix4d D = GetDivergenceMatrix(sA,sB);
+	double ldd = LogDet_LD(D);
+	return (ldd);
+   }
+
+  static DistanceMap ComputeLogDetDistances(const std::unordered_map<std::string,std::string>& aln) {
+    std::vector<std::string> names; names.reserve(aln.size());
+    for (const auto& kv : aln) names.push_back(kv.first);
+    std::sort(names.begin(), names.end());
+    if (names.size() < 2) throw std::runtime_error("Need >= 2 sequences.");
+
+    const std::size_t L = aln.at(names[0]).size(); // alignment length
+    DistanceMap D;
+    for (std::size_t i=0;i<names.size();++i) {
+      const std::string& A = names[i]; const std::string& sA = aln.at(A);	  
+      for (std::size_t j=i+1;j<names.size();++j) {
+        const std::string& B = names[j]; const std::string& sB = aln.at(B);
+
+        D[SortedKey(A,B)] = GetLogDetDistance(sA,sB);
+      }
+    }
+    return D;
+  }
+
+  // ----------------------------- k fold CV -----------------------------
+
+  inline Eigen::Matrix4d DivergenceMatrixAt(const std::string& sA, const std::string& sB, const std::vector<std::size_t>& cols) {
+    const std::size_t Lmin = std::min(sA.size(), sB.size());
+    Eigen::Matrix4d D = Eigen::Matrix4d::Zero();
+    for (std::size_t p : cols) {
+        if (p >= Lmin) continue;
+        const int ia = ntIndex(sA[p]);
+        const int ib = ntIndex(sB[p]);
+        if (ia >= 0 && ib >= 0) D(ia, ib) += 1.0;
+    	}
+    	return D;
+	}
+
+	inline double GetLogDetDistanceAt(const std::string& sA, const std::string& sB, const std::vector<std::size_t>& cols) {
+		if (cols.empty()) return std::numeric_limits<double>::quiet_NaN();
+		Eigen::Matrix4d D = DivergenceMatrixAt(sA, sB, cols);
+		return LogDet_LD(D);
+	}
+
+// Split a shuffled index vector into K contiguous folds (balanced sizes)
+	inline std::vector<std::vector<std::size_t>> makeKFoldsFromIndex(const std::vector<std::size_t>& idx, std::size_t K) {
+    std::vector<std::vector<std::size_t>> folds;
+    folds.reserve(K);
+    const std::size_t N = idx.size();
+    const std::size_t base = K ? (N / K) : 0;
+    const std::size_t rem  = K ? (N % K) : 0;
+
+    std::size_t off = 0;
+    for (std::size_t k = 0; k < K; ++k) {
+        const std::size_t take = base + (k < rem ? 1 : 0);
+        std::vector<std::size_t> part;
+        part.reserve(take);
+        for (std::size_t t = 0; t < take; ++t) part.push_back(idx[off + t]);
+        folds.push_back(std::move(part));
+        off += take;
+    }
+    	return folds;
+	}
+
+// --- : repeated K-fold CV distance matrices (train/test) ---
+	inline std::map<std::pair<int,int>, std::pair<DistanceMap,DistanceMap>> 
+ComputeKFoldCVDistances(const std::unordered_map<std::string, std::string>& aln, int K = 5, int R = 32, std::uint64_t seed = 22) {
+    // Collect and sort names
+    std::vector<std::string> names;
+    names.reserve(aln.size());
+    for (const auto& kv : aln) names.push_back(kv.first);
+    std::sort(names.begin(), names.end());
+    if (names.size() < 2) throw std::runtime_error("Need >= 2 sequences.");
+
+    // Use min length across all sequences (robust if some lengths differ)
+    std::size_t NAC = std::numeric_limits<std::size_t>::max();
+    for (const auto& nm : names) NAC = std::min(NAC, aln.at(nm).size());
+	cout << "alignment length is " << NAC << endl;
+    if (NAC == 0) throw std::runtime_error("Alignment length is zero.");
+
+    // Base index 0..NAC-1
+    std::vector<std::size_t> base(NAC);
+    std::iota(base.begin(), base.end(), 0);
+
+    std::map<std::pair<int,int>, std::pair<DistanceMap,DistanceMap>> out;
+
+    // Repeats
+    for (int r = 0; r < R; ++r) {
+        // Shuffle indices deterministically per repeat
+        std::vector<std::size_t> idx = base;
+        std::mt19937_64 rng(seed + 0x9E3779B97F4A7C15ULL * static_cast<std::uint64_t>(r));
+        std::shuffle(idx.begin(), idx.end(), rng);
+
+        // Make K (contiguous) folds on this shuffled order
+        const auto testFolds = makeKFoldsFromIndex(idx, static_cast<std::size_t>(K));
+
+        // Precompute train positions for each fold as complement of test
+        std::vector<std::vector<std::size_t>> trainFolds;
+        trainFolds.reserve(testFolds.size());
+        for (int k = 0; k < K; ++k) {
+            std::vector<std::size_t> train;
+            train.reserve(NAC - testFolds[k].size());
+            for (int kk = 0; kk < K; ++kk) {
+                if (kk == k) continue;
+                train.insert(train.end(), testFolds[kk].begin(), testFolds[kk].end());
+            }
+            trainFolds.push_back(std::move(train));
+        }
+
+        // Debug print only for first repetition
+        if (r == 0) {
+            for (int k = 0; k < K; ++k) {
+                std::cout << "Fold " << k 
+                          << " -> test size: " << testFolds[k].size()
+                          << ", train size: " << trainFolds[k].size() << "\n";
+            }
+            // Print positions in test data for first fold
+            if (!testFolds.empty()) {
+                std::cout << "Test positions (fold 0): ";
+                for (auto pos : testFolds[0]) std::cout << pos << " ";
+                std::cout << "\n";
+				std::cout << "Train positions (fold 0): ";
+                for (auto pos : trainFolds[0]) std::cout << pos << " ";
+                std::cout << "\n";
+            }
+            // Print positions in train data for fifth fold (index 4)
+            if (K >= 5) {
+				std::cout << "Test positions (fold 4): ";
+                for (auto pos : testFolds[4]) std::cout << pos << " ";
+                std::cout << "\n";
+                std::cout << "Train positions (fold 4): ";
+                for (auto pos : trainFolds[4]) std::cout << pos << " ";
+                std::cout << "\n";
+            }
+        }
+
+        // For each fold: compute train/test distance maps
+        for (int k = 0; k < K; ++k) {
+            DistanceMap dmTrain;
+            DistanceMap dmTest;
+
+            const auto& test_pos  = testFolds[k];
+            const auto& train_pos = trainFolds[k];
+
+            for (std::size_t i = 0; i < names.size(); ++i) {
+                const std::string& A  = names[i];
+                const std::string& sA = aln.at(A);
+                for (std::size_t j = i + 1; j < names.size(); ++j) {
+                    const std::string& B  = names[j];
+                    const std::string& sB = aln.at(B);                    
+
+                    const double dTrain = GetLogDetDistanceAt(sA, sB, train_pos);
+                    dmTrain[SortedKey(A, B)] = dTrain;
+
+                    const double dTest  = GetLogDetDistanceAt(sA, sB, test_pos);
+                    dmTest[SortedKey(A, B)]  = dTest;
+                }
+            }
+
+            out[{r, k}] = std::make_pair(std::move(dmTrain), std::move(dmTest));
+        }
+    }
+    return out;
+}
+
+Graph GetFJTree(DistanceMap DM, double epsilon) {
+    // collect names from distances
+    std::unordered_set<std::string> setnames;
+    for (const auto& kv : DM) {
+      setnames.insert(kv.first.first);
+      setnames.insert(kv.first.second);
+    }
+    std::vector<std::string> vertList(setnames.begin(), setnames.end());
+    std::sort(vertList.begin(), vertList.end());
+
+    // build topology, then fit lengths, then clamp negatives
+    
+    Graph fj = GetFJTreeTopology(std::move(DM), vertList, epsilon);
+	AssignOLSLengthsToTree(fj, DM);
+	SetNegativeLengthsToZero(fj); // edges with negative length cause plotting problems
+	return (fj);
+  }
+
+ void GetErrorForFold(Graph fj_train, DistanceMap dm_test) {
+
+ }
+ 
+ void GetTestErrorForKfoldCVatEpsilon(int K, int R, const std::map<std::pair<int, int>, std::pair<DistanceMap, DistanceMap>>&kfoldDM, double epsilon) {	
+	DistanceMap dm_train;
+	DistanceMap dm_test;
+	Graph fj_train;
+	for (int r = 0; r < R; r++) {
+		for (int k = 0; k < K; k++) {
+			auto it = kfoldDM.find({r, k});
+            dm_train = it->second.first;
+            dm_test  = it->second.second;
+			fj_train = GetFJTree(dm_train,epsilon);
+		}
+	}
+}
+
+  // ------------------------ FJ (topology + OLS) ------------------------
+  using IntSet  = std::unordered_set<int>;
+  using EdgeKey = std::pair<int,int>;
+  struct EdgeKeyHash { std::size_t operator()(const EdgeKey& p) const noexcept { return PairHash{}(p); } };
+  using SplitMap = std::unordered_map<EdgeKey, std::pair<IntSet,IntSet>, EdgeKeyHash>;
+  using AtdMap   = std::unordered_map<EdgeKey, double, EdgeKeyHash>;
+
+  static int GetInsertIndex(const std::vector<std::string>& sortedList, int lengthOfSortedList, const std::string& item) {
+    int i = (int)std::floor(lengthOfSortedList/2.0), lower=0, upper=lengthOfSortedList-1;
+    while (true) {
+      if (sortedList[i] > item) {
+        if (i==0) return i;
+        if (sortedList[i-1] > item) { upper=i-1; i=(int)std::floor((lower+i)/2.0); }
+        else return i;
+      } else {
+        if (i==lengthOfSortedList-1) return i+1;
+        if (sortedList[i+1] <= item) { lower=i+1; i=(int)std::ceil((upper+i)/2.0); }
+        else return i+1;
+      }
+    }
+  }
+
+  static void SetWeightedEdges(Graph &T) {
+
+  }
+
+  static void SetNegativeLengthsToZero(Graph& T, double minLen = 0.0) {
+    for (auto& e : T.edges) if (e.length <= 0.0) e.length = minLen;
+  }
+
+  static SplitMap ComputeSplits(const Graph& T, const IntSet& vertSet) {
+    SplitMap splits;
+    std::vector<int> degrees(T.vcount());
+    for (int v=0; v<T.vcount(); ++v) degrees[v] = T.degree(v);
+
+    std::vector<EdgeKey> activeEdges;
+    std::unordered_set<int> passive;
+    std::unordered_map<int,int> countIncident;
+
+    for (int v=0; v<T.vcount(); ++v)
+      if (degrees[v]==1)
+        activeEdges.emplace_back(v, T.neighbors(v)[0]);
+
+    auto addCandidate = [&](int from, int to) {
+      EdgeKey e(from,to), rev(to,from);
+      if (std::find(activeEdges.begin(), activeEdges.end(), e) == activeEdges.end() &&
+          std::find(activeEdges.begin(), activeEdges.end(), rev) == activeEdges.end()) {
+        activeEdges.push_back(e);
+      }
+    };
+
+    while (!activeEdges.empty()) {
+      EdgeKey e = activeEdges.front(); activeEdges.erase(activeEdges.begin());
+      int beta = e.first, alpha = e.second;
+      passive.insert(beta);
+
+      if (degrees[beta]==1) {
+        IntSet L, R; L.insert(beta);
+        for (int x : vertSet) if (x!=beta) R.insert(x);
+        splits[e] = std::make_pair(L,R);
+
+        countIncident[alpha] += 1;
+        if (countIncident[alpha] == T.degree(alpha)-1) {
+          int nxt=-1; for (int nb : T.neighbors(alpha)) if (passive.find(nb)==passive.end()) { nxt=nb; break; }
+          if (nxt!=-1) addCandidate(alpha,nxt);
+        }
+      } else {
+        std::vector<int> visited;
+        for (int nb : T.neighbors(beta)) if (nb!=alpha) visited.push_back(nb);
+
+        IntSet Cleft = splits[EdgeKey(visited[0], beta)].first;
+        for (std::size_t i=1;i<visited.size();++i) {
+          const IntSet& addL = splits[EdgeKey(visited[i], beta)].first;
+          Cleft.insert(addL.begin(), addL.end());
+        }
+        IntSet Cright; for (int x : vertSet) if (Cleft.find(x)==Cleft.end()) Cright.insert(x);
+        if (Cright.find(beta)!=Cright.end()) { Cright.erase(beta); Cleft.insert(beta); }
+        splits[e] = std::make_pair(Cleft, Cright);
+
+        if (passive.find(alpha)==passive.end()) {
+          countIncident[alpha] += 1;
+          if (countIncident[alpha] == T.degree(alpha)-1) {
+            int nxt=-1; for (int nb : T.neighbors(alpha)) if (passive.find(nb)==passive.end()) { nxt=nb; break; }
+            if (nxt!=-1) addCandidate(alpha,nxt);
+          }
+        }
+      }
+    }
+    return splits;
+  }
+
+  static AtdMap ComputeAtd(const Graph& T, const SplitMap& splits,
+                           const IntSet& vertSet, const DistanceMap& DM) {
+    int maxIdx=-1; for (int x : vertSet) maxIdx = std::max(maxIdx, x);
+    std::vector<std::string> vertexNames(maxIdx+1);
+    for (int i=0;i<=maxIdx;++i) vertexNames[i] = T.name[i];
+
+    std::vector<std::string> sortedNames = vertexNames;
+    std::sort(sortedNames.begin(), sortedNames.end());
+
+    std::vector<int> degrees(T.vcount());
+    for (int v=0; v<T.vcount(); ++v) degrees[v] = T.degree(v);
+
+    std::vector<EdgeKey> activeEdges;
+    std::unordered_set<int> passive;
+    std::unordered_map<int,int> countIncident;
+    AtdMap A;
+
+    for (int v=0; v<T.vcount(); ++v)
+      if (degrees[v]==1)
+        activeEdges.emplace_back(v, T.neighbors(v)[0]);
+
+    auto addCandidate = [&](int from, int to) {
+      EdgeKey e(from,to), rev(to,from);
+      if (std::find(activeEdges.begin(), activeEdges.end(), e) == activeEdges.end() &&
+          std::find(activeEdges.begin(), activeEdges.end(), rev) == activeEdges.end()) {
+        activeEdges.push_back(e);
+      }
+    };
+
+    while (!activeEdges.empty()) {
+      EdgeKey e = activeEdges.front(); activeEdges.erase(activeEdges.begin());
+      int beta = e.first, alpha = e.second;
+      passive.insert(beta);
+
+      if (degrees[beta]==1) {
+        double s = 0.0;
+        const std::string& nm = vertexNames[beta];
+        int idx = (int)(std::lower_bound(sortedNames.begin(), sortedNames.end(), nm) - sortedNames.begin());
+        for (int j=0;j<idx;++j) s += DM.at(SortedKey(sortedNames[j], nm));
+        for (int j=idx+1;j<(int)sortedNames.size();++j) s += DM.at(SortedKey(nm, sortedNames[j]));
+        A[e] = s;
+
+        countIncident[alpha] += 1;
+        if (countIncident[alpha] == T.degree(alpha)-1) {
+          int nxt=-1; for (int nb : T.neighbors(alpha)) if (passive.find(nb)==passive.end()) { nxt=nb; break; }
+          if (nxt!=-1) addCandidate(alpha,nxt);
+        }
+      } else {
+        double s = 0.0;
+        std::vector<int> visited;
+        for (int nb : T.neighbors(beta)) if (nb!=alpha) visited.push_back(nb);
+
+        for (int k : visited) s += A.at(EdgeKey(k,beta));
+
+        for (std::size_t i=0;i<visited.size();++i) {
+          int k = visited[i];
+          const IntSet& CkL = splits.at(EdgeKey(k,beta)).first;
+          for (std::size_t j=i+1;j<visited.size();++j) {
+            int l = visited[j];
+            const IntSet& ClL = splits.at(EdgeKey(l,beta)).first;
+            for (int a : CkL) for (int b : ClL) s -= 2.0 * DM.at(SortedKey(vertexNames[a], vertexNames[b]));
+          }
+        }
+
+        if (vertSet.find(beta)!=vertSet.end()) {
+          for (int k : visited) {
+            const IntSet& CkL = splits.at(EdgeKey(k,beta)).first;
+            for (int b : CkL) s -= DM.at(SortedKey(vertexNames[beta], vertexNames[b]));
+          }
+          const auto& Ci = splits.at(EdgeKey(beta,alpha));
+          for (int b : Ci.second) s += DM.at(SortedKey(vertexNames[beta], vertexNames[b]));
+        }
+
+        A[e] = s;
+
+        countIncident[alpha] += 1;
+        if (countIncident[alpha] == T.degree(alpha)-1) {
+          int nxt=-1; for (int nb : T.neighbors(alpha)) if (passive.find(nb)==passive.end()) { nxt=nb; break; }
+          if (nxt!=-1) addCandidate(alpha,nxt);
+        }
+      }
+    }
+    return A;
+  }
+
+  static std::unordered_map<EdgeKey,double,EdgeKeyHash>
+  ComputeEdges(const Graph& T, const SplitMap& splits, const IntSet& vertSet, const AtdMap& A) {
+    const double n = (double)vertSet.size();
+    std::unordered_map<EdgeKey,double,EdgeKeyHash> bl;
+
+    for (const auto& kv : splits) {
+      EdgeKey edge = kv.first;
+      const auto& C_beta = kv.second.first;
+      const auto& C_alpha = kv.second.second;
+      const double P0 = A.at(edge);
+      double numerator = P0, denominator = 0.0;
+
+      std::vector<double> sList, wList, PList, nList;
+      bool caseNby2 = false; int kIdx = -1;
+
+      int beta = edge.first, alpha = edge.second;
+
+      if ((int)C_beta.size() == 1) {
+        denominator = n - 1.0;
+
+        std::vector<int> nbs;
+        for (int nb : T.neighbors(alpha)) if (nb!=beta) nbs.push_back(nb);
+
+        for (int nb : nbs) {
+          const auto* Ci = [&]()->const std::unordered_set<int>*{
+            auto it = splits.find(EdgeKey(alpha,nb));
+            return (it!=splits.end()) ? &it->second.second : &splits.at(EdgeKey(nb,alpha)).first;
+          }();
+          auto itA = A.find(EdgeKey(alpha,nb));
+          PList.push_back(itA!=A.end() ? itA->second : A.at(EdgeKey(nb,alpha)));
+
+          double ni = (double)Ci->size();
+          nList.push_back(ni);
+          if (std::abs(ni - n/2.0) < 1e-12) { sList.push_back(0.0); kIdx=(int)sList.size()-1; caseNby2=true; }
+          else sList.push_back(ni / (n - 2.0*ni));
+        }
+
+        if (caseNby2) {
+          numerator -= PList[kIdx] / nList[kIdx];
+          denominator -= 1.0;
+        } else {
+          double kappa = 1.0; for (double ni : nList) kappa += ni / (n - 2.0*ni);
+          double gamma = 0.0; for (double ni : nList) gamma -= (1.0/kappa) / ((n/ni) - 2.0);
+          double sumW = 0.0;
+          for (std::size_t i=0;i<nList.size();++i) {
+            double wi = (gamma + 1.0) / ((n/nList[i]) - 2.0);
+            wList.push_back(wi);
+            numerator -= wi * PList[i] / nList[i];
+            sumW += wi;
+          }
+          denominator -= sumW;
+        }
+
+      } else {
+        double n_alpha = (double)C_alpha.size();
+        double n_beta  = (double)C_beta.size();
+        denominator = n_alpha * n_beta;
+
+        auto pushNeighbors = [&](int vertex, int other){
+          for (int nb : T.neighbors(vertex)) if (!(nb==other)) {
+            const auto* Ci = [&]()->const std::unordered_set<int>*{
+              auto it = splits.find(EdgeKey(vertex,nb));
+              return (it!=splits.end()) ? &it->second.second : &splits.at(EdgeKey(nb,vertex)).first;
+            }();
+            auto itA = A.find(EdgeKey(vertex,nb));
+            PList.push_back(itA!=A.end() ? itA->second : A.at(EdgeKey(nb,vertex)));
+            double ni = (double)Ci->size();
+            nList.push_back(ni);
+            if (std::abs(ni - n/2.0) < 1e-12) { sList.push_back(0.0); kIdx=(int)sList.size()-1; caseNby2=true; }
+            else sList.push_back(ni / (n - 2.0*ni));
+          }
+        };
+        pushNeighbors(alpha, beta);
+        int mMinusk = (int)T.neighbors(alpha).size() - 1;
+        pushNeighbors(beta,  alpha);
+
+        if (caseNby2) {
+          std::vector<double> w(sList.size(), 0.0);
+          if (kIdx < (int)sList.size() - mMinusk) {
+            w[kIdx] = n_beta;
+            for (int i=(int)sList.size()-mMinusk; i<(int)sList.size(); ++i) {
+              w[i] = (n_alpha - n_beta) / ((n/nList[i]) - 2.0);
+              w[kIdx] += (nList[i] * (n_beta - n_alpha)) / (n - 2.0*nList[i]);
+              numerator -= w[i] * PList[i] / nList[i];
+            }
+            numerator -= w[kIdx] * PList[kIdx] / nList[kIdx];
+            double sumW = std::accumulate(w.begin(), w.end(), 0.0);
+            denominator -= sumW * n_alpha + w[kIdx] * (n_beta - n_alpha);
+          } else {
+            w[kIdx] = n_alpha;
+            for (int i=0; i<(int)sList.size()-mMinusk; ++i) {
+              w[i] = (n_beta - n_alpha) / ((n/nList[i]) - 2.0);
+              w[kIdx] += (nList[i] * (n_alpha - n_beta)) / (n - 2.0*nList[i]);
+              numerator -= w[i] * PList[i] / nList[i];
+            }
+            numerator -= w[kIdx] * PList[kIdx] / nList[kIdx];
+            double sumW = std::accumulate(w.begin(), w.end(), 0.0);
+            denominator -= sumW * n_beta + w[kIdx] * (n_alpha - n_beta);
+          }
+        } else {
+          double kappa = 1.0; for (double ni : nList) kappa += ni / (n - 2.0*ni);
+          double gamma = 0.0;
+          for (int i=0; i<(int)sList.size()-mMinusk; ++i) gamma -= (1.0/kappa) * n_beta  / ((n/nList[i]) - 2.0);
+          for (int i=(int)sList.size()-mMinusk; i<(int)sList.size(); ++i) gamma -= (1.0/kappa) * n_alpha / ((n/nList[i]) - 2.0);
+          double sumL=0.0, sumR=0.0;
+          for (int i=0; i<(int)sList.size()-mMinusk; ++i) {
+            double wi = (gamma + n_beta) / ((n/nList[i]) - 2.0);
+            wList.push_back(wi); numerator -= wi * PList[i] / nList[i]; sumL += wi;
+          }
+          for (int i=(int)sList.size()-mMinusk; i<(int)sList.size(); ++i) {
+            double wi = (gamma + n_alpha) / ((n/nList[i]) - 2.0);
+            wList.push_back(wi); numerator -= wi * PList[i] / nList[i]; sumR += wi;
+          }
+          denominator -= sumL * n_beta + sumR * n_alpha;
+        }
+      }
+
+      bl[edge] = numerator / denominator;
+    }
+    return bl;
+  }
+
+  static void AssignOLSLengthsToTree(Graph& T, const DistanceMap& DM) {
+    const std::size_t M = DM.size();
+    int N = (int)((1.0 + std::sqrt(1.0 + 8.0 * (double)M)) / 2.0);
+    IntSet vertSet; for (int i=0;i<N;++i) vertSet.insert(i);
+    auto splits = ComputeSplits(T, vertSet);
+    auto A      = ComputeAtd(T, splits, vertSet, DM);
+    auto bl     = ComputeEdges(T, splits, vertSet, A);
+    for (const auto& kv : bl) {
+      int u = kv.first.first, v = kv.first.second;
+      T.set_length(u,v, kv.second);
+    }
+  }
+
+  static void GetTreeWithLSLengthsLargerThanThreshold(Graph& T, const DistanceMap& DM, double thresh) {
+    AssignOLSLengthsToTree(T, DM);
+    bool removed = true;
+    while (removed) {
+      removed = false;
+      if (T.edges.empty()) return;
+      double mn = std::numeric_limits<double>::infinity();
+      for (const auto& e : T.edges) mn = std::min(mn, e.length);
+      if (mn > thresh) return;
+
+      std::vector<int> order(T.ecount());
+      std::iota(order.begin(), order.end(), 0);
+      std::sort(order.begin(), order.end(), [&](int a, int b){ return T.edges[a].length < T.edges[b].length; });
+
+      for (int ei : order) {
+        if (ei >= T.ecount()) break;
+        if (T.edges[ei].length >= thresh) break;
+        int i = T.edges[ei].u, j = T.edges[ei].v;
+        bool iLat = IsHiddenNode(T.name[i]), jLat = IsHiddenNode(T.name[j]);
+        if (iLat || jLat) {
+          removed = true;
+          int rm  = iLat ? i : j;
+          int keep= iLat ? j : i;
+
+          auto nbs = T.neighbors(rm);
+          for (int nb : nbs) if (nb != keep) {
+            double edge_length = T.get_length(rm, nb);
+            bool exists=false; for (int x : T.neighbors(keep)) if (x==nb) { exists=true; break; }
+            if (!exists) T.add_edge(keep, nb, edge_length);
+          }
+          T.delete_vertex(rm);
+          break;
+        }
+      }
+    }
+  }
+
+  static Graph GetFJTree(DistanceMap DM, std::vector<std::string> vertList, double epsilon) {
+	Graph T = GetFJTreeTopology(std::move(DM), vertList, epsilon);		
+	AssignOLSLengthsToTree(T, DM);
+	SetNegativeLengthsToZero(T);
+	return (T);
+  }
+
+  static Graph GetFJTreeTopology(DistanceMap DM, std::vector<std::string> vertList, double epsilon) {
+    epsilon += 1e-10;
+    Graph T;
+    T.reserve_vertices(vertList.size());
+    for (std::size_t i=0;i<vertList.size();++i) T.name[i] = vertList[i];
+    int n = (int)vertList.size();
+
+    std::unordered_map<std::string,double> R;
+    for (const auto& nm : vertList) R[nm] = 0.0;
+    for (int i=0;i<n;++i) for (int j=i+1;j<n;++j) {
+      double d = DM.at(SortedKey(vertList[i], vertList[j]));
+      R[vertList[i]] += d; R[vertList[j]] += d;
+    }
+    for (const auto& nm : vertList) R[nm] /= (n-2.0);
+
+    int nodeCounter = 1;
+
+    auto ensure_idx = [&](const std::string& nm)->int {
+      for (int i=0;i<T.vcount();++i) if (T.name[i]==nm) return i;
+      return T.add_vertex(nm);
+    };
+
+    while ((int)R.size() > 3) {
+      double best = std::numeric_limits<double>::infinity();
+      std::string isel, jsel;
+      for (int i=0;i<(int)vertList.size();++i)
+        for (int j=i+1;j<(int)vertList.size();++j) {
+          const std::string& a = vertList[i];
+          const std::string& b = vertList[j];
+          double cand = DM.at(SortedKey(a,b)) - R[a] - R[b];
+          if (cand < best) { best=cand; isel=a; jsel=b; }
+        }
+
+      double d_ij = DM.at(SortedKey(isel,jsel));
+      double delta_ij = std::abs(d_ij + R[isel] - R[jsel]) / 2.0;
+      double delta_ji = std::abs(d_ij - R[isel] + R[jsel]) / 2.0;
+
+      if (std::min(delta_ij, delta_ji) <= epsilon) {
+        const std::string& parent = (delta_ij < delta_ji) ? isel : jsel;
+        const std::string& child  = (delta_ij < delta_ji) ? jsel : isel;
+        // if (verbose) std::cerr << "parent-child: " << parent << " <- " << child << "\n";
+
+        int childIndex = (int)(std::find(vertList.begin(), vertList.end(), child) - vertList.begin());
+        n -= 1;
+        for (int t=0; t<childIndex; ++t) {
+          const std::string& v = vertList[t];
+          R[v] = (R[v]*(n-1) - DM.at(SortedKey(v,child))) / (n-2.0);
+          DM.erase(SortedKey(v,child));
+        }
+        for (int t=childIndex+1; t<(int)vertList.size(); ++t) {
+          const std::string& v = vertList[t];
+          R[v] = (R[v]*(n-1) - DM.at(SortedKey(child,v))) / (n-2.0);
+          DM.erase(SortedKey(child,v));
+        }
+        vertList.erase(vertList.begin()+childIndex);
+        int ip = ensure_idx(isel), jp = ensure_idx(jsel);
+        bool exists = false; for (int x : T.neighbors(ip)) if (x==jp) { exists=true; break; }
+        if (!exists) T.add_edge(ip,jp,0.0);
+
+      } else {
+        bool ps2 = false; std::string ksel;
+        for (const auto& k : vertList) if (k!=isel && k!=jsel) {
+          double delta = std::abs(DM.at(SortedKey(k,isel)) + DM.at(SortedKey(k,jsel)) - d_ij) / 2.0;
+          if (delta <= epsilon) { ps2 = true; ksel = k; break; }
+        }
+        if (ps2) {
+        //   if (verbose) std::cerr << "parent-siblings: parent " << ksel << " with ("<<isel<<","<<jsel<<")\n";
+          vertList.erase(std::remove(vertList.begin(), vertList.end(), isel), vertList.end());
+          vertList.erase(std::remove(vertList.begin(), vertList.end(), jsel), vertList.end());
+          n -= 2;
+
+          int ki = ensure_idx(ksel), ii = ensure_idx(isel), jj = ensure_idx(jsel);
+          bool h1=false,h2=false;
+          for (int x : T.neighbors(ki)) if (x==ii) { h1=true; break; }
+          if (!h1) T.add_edge(ki,ii,0.0);
+          for (int x : T.neighbors(ki)) if (x==jj) { h2=true; break; }
+          if (!h2) T.add_edge(ki,jj,0.0);
+
+          R.erase(isel); R.erase(jsel);
+          if (n > 2) {
+            for (auto& v : vertList) if (v!=ksel) {
+              double newD = 0.5 * (DM.at(SortedKey(v, isel)) + DM.at(SortedKey(v, jsel)) - d_ij);
+              R[v] = (R[v]*n - DM.at(SortedKey(v,isel)) - DM.at(SortedKey(v,jsel)) + newD) / (n-2.0);
+              DM.erase(SortedKey(v, isel));
+              DM.erase(SortedKey(v, jsel));
+              DM[SortedKey(v, ksel)] = newD;
+              R[ksel] += newD;
+            }
+            R[ksel] /= (n-2.0);
+          } else {
+            int a = ensure_idx(vertList[0]), b = ensure_idx(vertList[1]);
+            T.add_edge(a,b,0.0);
+            return T;
+          }
+
+        } else {
+        //   if (verbose) std::cerr << "siblings: ("<<isel<<","<<jsel<<")\n";
+          std::string newNode = "h_" + std::to_string(nodeCounter++);
+          int iNew = T.add_vertex(newNode);
+
+          vertList.erase(std::remove(vertList.begin(), vertList.end(), isel), vertList.end());
+          vertList.erase(std::remove(vertList.begin(), vertList.end(), jsel), vertList.end());
+          int idx = GetInsertIndex(vertList, (int)vertList.size(), newNode);
+          n -= 1;
+          vertList.insert(vertList.begin()+idx, newNode);
+
+          int ii = ensure_idx(isel), jj = ensure_idx(jsel);
+          T.add_edge(iNew, ii, 0.0);
+          T.add_edge(iNew, jj, 0.0);
+
+          R.erase(isel); R.erase(jsel);
+          R[newNode] = 0.0;
+
+          for (int t=0; t<(int)vertList.size(); ++t) if (t!=idx) {
+            const std::string& v = vertList[t];
+            double newD = 0.5 * (DM.at(SortedKey(v, isel)) + DM.at(SortedKey(v, jsel)) - DM.at(SortedKey(isel, jsel)));
+            R[v] = (R[v]*(n-1) - DM.at(SortedKey(v, isel)) - DM.at(SortedKey(v, jsel)) + newD) / (n-2.0);
+            DM.erase(SortedKey(v, isel));
+            DM.erase(SortedKey(v, jsel));
+            DM[SortedKey(v, newNode)] = newD;
+            R[newNode] += newD;
+          }
+          R[newNode] /= (n-2.0);
+        }
+        DM.erase(SortedKey(isel, jsel));
+      }
+    }
+
+    if ((int)vertList.size() == 3) {
+      const std::string& v0 = vertList[0];
+      const std::string& v1 = vertList[1];
+      const std::string& v2 = vertList[2];
+      double d01 = DM.at(SortedKey(v0,v1));
+      double d02 = DM.at(SortedKey(v0,v2));
+      double d12 = DM.at(SortedKey(v1,v2));
+      double D0 = std::abs(d01 + d02 - d12) / 2.0;
+      double D1 = std::abs(d01 + d12 - d02) / 2.0;
+      double D2 = std::abs(d02 + d12 - d01) / 2.0;
+      int i0 = -1, i1=-1, i2=-1;
+      for (int i=0;i<T.vcount();++i) { if (T.name[i]==v0) i0=i; if (T.name[i]==v1) i1=i; if (T.name[i]==v2) i2=i; }
+      if (std::min({D0,D1,D2}) <= epsilon) {
+        if (D0 < D1 && D0 < D2) { T.add_edge(i0,i1,0.0); T.add_edge(i0,i2,0.0); }
+        else if (D1 < D0 && D1 < D2) { T.add_edge(i0,i1,0.0); T.add_edge(i1,i2,0.0); }
+        else { T.add_edge(i0,i2,0.0); T.add_edge(i1,i2,0.0); }
+      } else {
+        std::string newNode = "h_" + std::to_string(nodeCounter++);
+        int x = T.add_vertex(newNode);
+        T.add_edge(i0,x,0.0); T.add_edge(i1,x,0.0); T.add_edge(i2,x,0.0);
+      }
+    } else if ((int)vertList.size() == 2) {
+      int a=-1,b=-1; for (int i=0;i<T.vcount();++i) { if (T.name[i]==vertList[0]) a=i; if (T.name[i]==vertList[1]) b=i; }
+      T.add_edge(a,b,0.0);
+    }
+    return T;
+  }
+
+  // ------------------------ Newick helpers ------------------------	
+
+  Graph ConvertGenerallyLabeledTreeToLeafLabeledTree(Graph tree) const {
+    std::vector<int> deg(tree.vcount());
+    for (int v=0; v<tree.vcount(); ++v) deg[v] = tree.degree(v);
+
+    std::vector<int> internalLabels; internalLabels.reserve(tree.vcount());
+    int hidden_node_count = 1;
+    for (int v=0; v<tree.vcount(); ++v) {
+      if (IsHiddenNode(tree.name[v])) { ++hidden_node_count; continue; }
+      if (deg[v] > 1) internalLabels.push_back(v);
+    }
+
+    for (int vidx=0; vidx<(int)internalLabels.size(); ++vidx) {
+      std::string vertexName = tree.name[internalLabels[vidx]];
+      int v = -1; for (int i=0;i<tree.vcount();++i) if (tree.name[i]==vertexName) { v=i; break; }
+
+      std::string newNode = "h_" + std::to_string(hidden_node_count++);
+      int t = tree.add_vertex(newNode);
+
+      auto nbs = tree.neighbors(v);
+      for (int nb : nbs) {
+        double edge_length = tree.get_length(v, nb);
+        tree.add_edge(nb, t, edge_length);
+        tree.remove_edge(v, nb);
+      }
+      tree.add_edge(v, t, 0.0);
+    }
+    return tree;
+  }
+
+  Graph ConvertMultifurcatingTreeToBifurcatingTree(Graph tree) const {
+    std::vector<int> initialDeg(tree.vcount());
+    for (int v=0; v<tree.vcount(); ++v) initialDeg[v] = tree.degree(v);
+
+    int hidden_node_count = 1;
+    for (int v=0; v<tree.vcount(); ++v)
+      if (IsHiddenNode(tree.name[v])) ++hidden_node_count;
+
+    std::vector<std::string> needResolve;
+    for (int v=0; v<tree.vcount(); ++v)
+      if (initialDeg[v] > 3) needResolve.push_back(tree.name[v]);
+
+    for (const auto& vname : needResolve) {
+      while (true) {
+        int v=-1; for (int i=0;i<tree.vcount();++i) if (tree.name[i]==vname) { v=i; break; }
+        if (v==-1) break;
+        if (tree.degree(v) <= 3) break;
+
+        auto nbs = tree.neighbors(v);
+        int v1 = nbs[0], v2 = nbs[1];
+        std::string newNode = "h_" + std::to_string(hidden_node_count++);
+        int t = tree.add_vertex(newNode);
+
+        double L1 = tree.get_length(v, v1);
+        double L2 = tree.get_length(v, v2);
+        tree.add_edge(v1, t, L1);
+        tree.add_edge(v2, t, L2);
+        tree.add_edge(v,  t, 0.0);
+        tree.remove_edge(v, v1);
+        tree.remove_edge(v, v2);
+      }
+    }
+    return tree;
+  }
+
+  std::string GetNewickLabelOfLeafLabeledTree(Graph tree) const {
+    int leaf=-1; for (int i=0;i<tree.vcount();++i) if (tree.degree(i)==1) { leaf=i; break; }
+    if (leaf==-1) throw std::runtime_error("Cannot find a leaf to root.");
+
+    int parent = tree.neighbors(leaf)[0];
+    double edge_length = tree.get_length(leaf, parent);
+    int root = tree.add_vertex("h_root");
+    tree.add_edge(leaf, root, edge_length/2.0);
+    tree.add_edge(parent, root, edge_length/2.0);
+    tree.remove_edge(leaf, parent);
+
+    std::function<std::string(int,int)> dfs = [&](int u, int p)->std::string {
+      std::vector<int> children;
+      for (int nb : tree.neighbors(u)) if (nb!=p) children.push_back(nb);
+
+      auto labelFor = [&](int node)->std::string {
+        const std::string& nm = tree.name[node];
+        if (IsHiddenNode(nm) || nm=="h_root") return std::string();
+        return nm;
+      };
+
+      if (p == -1) {
+        if (children.empty()) {
+          return (labelFor(u).empty() ? std::string("") : labelFor(u)) + ";";
+        }
+        std::string inside;
+        for (std::size_t i=0;i<children.size();++i) {
+          if (i) inside += ",";
+          inside += dfs(children[i], u);
+        }
+        return "(" + inside + ");";
+      } else if (children.empty()) {
+        std::string nm = labelFor(u);
+        double len = tree.get_length(u, p);
+        return (nm.empty() ? std::string("") : nm) + ":" + to_string_trim(len);
+      } else {
+        std::string inside;
+        for (std::size_t i=0;i<children.size();++i) {
+          if (i) inside += ",";
+          inside += dfs(children[i], u);
+        }
+        std::string nm = labelFor(u);
+        double len = tree.get_length(u, p);
+        return "(" + inside + ")" + (nm.empty() ? std::string("") : nm) + ":" + to_string_trim(len);
+      }
+    };
+
+    return dfs(root, -1);
+  }
+
+  // Convert a Graph to Newick and strip hidden_node labels; ensure trailing ';'.
+  std::string BuildNewickStringFromGraph(const Graph& tree) const {
+    Graph copy = tree;
+    Graph leaf = ConvertGenerallyLabeledTreeToLeafLabeledTree(copy);
+    Graph bin  = ConvertMultifurcatingTreeToBifurcatingTree(leaf);
+    std::string nwk = GetNewickLabelOfLeafLabeledTree(bin);    
+    nwk = this->strip_hidden_node_labels_(nwk);
+    if (nwk.empty() || nwk.back()!=';') nwk.push_back(';');
+    return nwk;
+  }
+
+  static std::string to_string_trim(double x) {
+    std::ostringstream oss;
+    oss.setf(std::ios::fixed); oss.precision(10);
+    oss << x;
+    std::string s = oss.str();
+    while (!s.empty() && s.back()=='0') s.pop_back();
+    if (!s.empty() && s.back()=='.') s.push_back('0');
+    return s;
+  }
+};
 
 
 ///...///...///...///...///...///...///... mst vertex ...///...///...///...///...///...///...///
@@ -18,13 +1547,13 @@ public:
 	int id;
 	int idOfExternalVertex;
 	int rank = 0;	
-	vector <unsigned char> sequence;
-	vector <unsigned char> globallyCompressedSequence;
+	vector <int> sequence;
+	vector <int> globallyCompressedSequence;
 	vector <int> idsOfVerticesInSubtree;
 	vector <MST_vertex *> neighbors;
 	vector <string> dupl_seq_names;
 	void AddNeighbor(MST_vertex * v_ptr);		
-	MST_vertex(int idToAdd, string nameToAdd, vector <unsigned char> sequenceToAdd) {
+	MST_vertex(int idToAdd, string nameToAdd, vector <int> sequenceToAdd) {
 		id = idToAdd;
 		sequence = sequenceToAdd;
 		name = nameToAdd;
@@ -68,32 +1597,32 @@ public:
 	vector <int> idsOfExternalVertices;
 	vector <MST_vertex *> leader_ptrs;  
 	void SetLeaders();
-	map <string, unsigned char> mapDNAtoInteger;	
+	map <string, int> mapDNAtoInteger;	
 	map <string, vector <string>> unique_seq_id_2_dupl_seq_ids;
-	map <vector <unsigned char>, MST_vertex *> unique_seq_2_MST_vertex_ptr;
+	map <vector <int>, MST_vertex *> unique_seq_2_MST_vertex_ptr;
 	MST_vertex * subtree_v_ptr;
 	map <int, MST_vertex *> * vertexMap;
 	map <pair <int, int>, int> edgeWeightsMap;
-	string EncodeAsDNA(vector<unsigned char> sequence);
-	vector<unsigned char> DecompressSequence(vector<unsigned char>* compressedSequence, vector<vector<int>>* sitePatternRepeats);
+	string EncodeAsDNA(vector<int> sequence);
+	vector<int> DecompressSequence(vector<int>* compressedSequence, vector<vector<int>>* sitePatternRepeats);
 	void AddEdgeWeight(int u_id, int v_id, int edgeWeight);
 	void RemoveEdgeWeight(int u_id, int v_id);
 	void AddEdgeWeightToDistanceGraph(int u_id, int v_id, int edgeWeight);
 	void RemoveWeightedEdgesIncidentToVertexInDistanceGraph(int u_id);
 	void SetCompressedSequencesAndSiteWeightsForInputSequences();
-	bool IsSequenceDuplicated(vector<unsigned char> sequence);
-	void AddDuplicatedSequenceName(string name, vector<unsigned char> sequence);
+	bool IsSequenceDuplicated(vector<int> sequence);
+	void AddDuplicatedSequenceName(string name, vector<int> sequence);
 	void SetNumberOfLargeEdgesThreshold(int numberOfLargeEdges);
 	void SetEdgeWeightThreshold(int edgeWeight){edgeWeightThreshold = edgeWeight;}
-	void AddVertex(string name, vector <unsigned char> sequence);
-	void AddVertexWithId(int id, string name, vector <unsigned char> sequence);
+	void AddVertex(string name, vector <int> sequence);
+	void AddVertexWithId(int id, string name, vector <int> sequence);
 	void RemoveVertex(int vertex_id);
 	void AddEdge(int u_id, int v_id, int edgeWeight);
 	void RemoveEdge(int u_id, int v_id);
 	void ResetVertexAttributesForSubtreeSearch();
-	void UpdateMSTWithMultipleExternalVertices(vector <int> idsOfVerticesToKeep, vector <int> idsOfVerticesToRemove, vector <tuple<int,string,vector<unsigned char>>> idAndNameAndSeqTupleForVerticesToAdd, vector <int> idsOfExternalVertices);
+	void UpdateMSTWithMultipleExternalVertices(vector <int> idsOfVerticesToKeep, vector <int> idsOfVerticesToRemove, vector <tuple<int,string,vector<int>>> idAndNameAndSeqTupleForVerticesToAdd, vector <int> idsOfExternalVertices);
 	void UpdateMaxDegree();
-	void UpdateMSTWithOneExternalVertex(vector <int> idsOfVerticesToRemove, string nameOfSequenceToAdd, vector <unsigned char> sequenceToAdd);
+	void UpdateMSTWithOneExternalVertex(vector <int> idsOfVerticesToRemove, string nameOfSequenceToAdd, vector <int> sequenceToAdd);
 	bool ContainsEdge(int u_id, int v_id);
 	int GetEdgeWeight(int u_id, int v_id);
 	int GetEdgeIndex (int vertexIndex1, int vertexIndex2, int numberOfVertices);
@@ -104,19 +1633,19 @@ public:
 	void CLGrouping();		
 	void ResetSubtreeSizeThreshold();	
 	void doubleSubtreeSizeThreshold();
-	int ComputeHammingDistance(vector <unsigned char> recodedSeq1, vector <unsigned char> recodedSeq2);
+	int ComputeHammingDistance(vector <int> recodedSeq1, vector <int> recodedSeq2);
 	pair <vector <int>, vector <int>> GetIdsForSubtreeVerticesAndExternalVertices();
 	pair <bool, MST_vertex *> GetPtrToVertexSubtendingSubtree();
 	pair <vector <int>,vector <int>> GetSubtreeVerticesAndExternalVertices();
-	tuple <vector <string>, vector <vector <unsigned char>>, vector <int>, vector <vector<int>>> GetCompressedSequencesSiteWeightsAndSiteRepeats(vector <int> vertexIdList);
+	tuple <vector <string>, vector <vector <int>>, vector <int>, vector <vector<int>>> GetCompressedSequencesSiteWeightsAndSiteRepeats(vector <int> vertexIdList);
 	vector <int> GetIdsOfClosestUnvisitedVertices(MST_vertex* u_ptr);
 	void SetIdsOfExternalVertices();
 	bool ShouldIComputeALocalPhylogeneticTree();
 	void WriteToFile(string fileName);
-	unsigned char ConvertDNAToChar(char dna);	
+	int ConvertDNAToChar(char dna);	
 	MST() {		
 		this->v_ind = 0;		
-		vector <unsigned char> emptySequence;
+		vector <int> emptySequence;
 		this->allEdgeWeights = new map <pair<int,int>,int> ; 
 		this->vertexMap = new map <int, MST_vertex *>;
 		this->mapDNAtoInteger["A"] = 0;
@@ -155,7 +1684,7 @@ void MST::SetLeaders() {
 	}
 }
 
-bool MST::IsSequenceDuplicated(vector<unsigned char> query_seq) {
+bool MST::IsSequenceDuplicated(vector<int> query_seq) {
 	if (this->unique_seq_2_MST_vertex_ptr.find(query_seq) != this->unique_seq_2_MST_vertex_ptr.end()) {
 		return (true);
 	} else {
@@ -163,7 +1692,7 @@ bool MST::IsSequenceDuplicated(vector<unsigned char> query_seq) {
 	}
 }
 
-void MST::AddDuplicatedSequenceName(string dupl_seq_name, vector <unsigned char> sequence) {	
+void MST::AddDuplicatedSequenceName(string dupl_seq_name, vector <int> sequence) {	
 	MST_vertex * v = this->unique_seq_2_MST_vertex_ptr[sequence];
 	this->unique_seq_id_2_dupl_seq_ids[v->name].push_back(dupl_seq_name);
 	this->num_duplicated_sequences += 1;
@@ -230,20 +1759,6 @@ void MST::ResetSubtreeSizeThreshold() {
 void MST::doubleSubtreeSizeThreshold() {
 	this->numberOfLargeEdgesThreshold = this->numberOfLargeEdgesThreshold * 2;
 }
-int MST::ComputeHammingDistance(vector<unsigned char> recodedSeq1, vector<unsigned char> recodedSeq2) {	
-	int hammingDistance = 0;	
-	for (unsigned int i=0;i<recodedSeq1.size();i++){
-		if (recodedSeq1[i] == 4 or recodedSeq1[i] == 4) {
-			continue;
-		} else {			
-			if (recodedSeq1[i] != recodedSeq2[i]) {
-					hammingDistance+=1.0;
-				}
-		}		
-	}
-	return (hammingDistance);
-};
-
 
 int MST::GetNumberOfVertices() {
 	return this->vertexMap->size();
@@ -254,14 +1769,14 @@ bool MST::ContainsVertex(int vertex_id) {
 	return this->vertexMap->find(vertex_id)!=vertexMap->end();
 }
 
-void MST::AddVertex(string name, vector <unsigned char> sequence) {
+void MST::AddVertex(string name, vector <int> sequence) {
 	MST_vertex * v = new MST_vertex(this->v_ind, name, sequence);
 	this->vertexMap->insert(pair<int,MST_vertex*>(this->v_ind,v));
 	this->unique_seq_2_MST_vertex_ptr[sequence] = v;	
 	this->v_ind += 1;
 }
 
-void MST::AddVertexWithId(int id, string name, vector <unsigned char> sequence) {
+void MST::AddVertexWithId(int id, string name, vector <int> sequence) {
 	MST_vertex * v = new MST_vertex(id, name, sequence);
 	this->vertexMap->insert(pair<int,MST_vertex*>(id,v));
 }
@@ -441,7 +1956,7 @@ void MST::ResetVertexAttributesForSubtreeSearch() {
 }
 
 
-void MST::UpdateMSTWithOneExternalVertex(vector<int> idsOfVerticesToRemove, string nameOfSequenceToAdd, vector <unsigned char> sequenceToAdd) {
+void MST::UpdateMSTWithOneExternalVertex(vector<int> idsOfVerticesToRemove, string nameOfSequenceToAdd, vector <int> sequenceToAdd) {
 	//	Remove vertices		
 	for (int v_id: idsOfVerticesToRemove) {	
 		this->RemoveVertex(v_id);
@@ -529,7 +2044,7 @@ void MST::UpdateMaxDegree() {
 	}
 }
 
-void MST::UpdateMSTWithMultipleExternalVertices(vector<int> idsOfVerticesToKeep, vector<int> idsOfVerticesToRemove, vector<tuple<int,string,vector<unsigned char>>> idAndNameAndSeqTupleForVerticesToAdd, vector<int> idsOfExternalVertices) {
+void MST::UpdateMSTWithMultipleExternalVertices(vector<int> idsOfVerticesToKeep, vector<int> idsOfVerticesToRemove, vector<tuple<int,string,vector<int>>> idAndNameAndSeqTupleForVerticesToAdd, vector<int> idsOfExternalVertices) {
 	// Remove weights of edges incident to vertex
 	//	Remove vertices		
 	for (int v_id: idsOfVerticesToRemove) {
@@ -546,7 +2061,7 @@ void MST::UpdateMSTWithMultipleExternalVertices(vector<int> idsOfVerticesToKeep,
 	}
 	this->numberOfNonZeroWeightEdges = 0;
 	int u_id; int v_id; int edgeWeight;
-	vector <unsigned char> seq_u; vector <unsigned char> seq_v;
+	vector <int> seq_u; vector <int> seq_v;
 	string u_name; string v_name;
 	
 	int numberOfVerticesToKeep = int(idsOfVerticesToKeep.size());
@@ -675,23 +2190,23 @@ void MST::UpdateMSTWithMultipleExternalVertices(vector<int> idsOfVerticesToKeep,
 	}
 }
 
-tuple <vector<string>,vector<vector<unsigned char>>,vector<int>,vector<vector<int>>> MST::GetCompressedSequencesSiteWeightsAndSiteRepeats(vector<int> vertexIdList){	
+tuple <vector<string>,vector<vector<int>>,vector<int>,vector<vector<int>>> MST::GetCompressedSequencesSiteWeightsAndSiteRepeats(vector<int> vertexIdList){	
 	vector <string> names;
-	vector <vector<unsigned char>> compressedSequences;
+	vector <vector<int>> compressedSequences;
 	vector <int> sitePatternWeights_ptr;
 	vector <vector <int>> sitePatternRepeats_ptr;
-	vector <vector<unsigned char>> distinctPatterns;
-	map <vector<unsigned char>,vector<int>> distinctPatternsToSitesWherePatternRepeats;
+	vector <vector<int>> distinctPatterns;
+	map <vector<int>,vector<int>> distinctPatternsToSitesWherePatternRepeats;
 	vector <MST_vertex*> vertexPtrList;
 	for (unsigned int i = 0; i < vertexIdList.size(); i++) {		
 		MST_vertex* v_ptr = (*this->vertexMap)[vertexIdList[i]];
 		vertexPtrList.push_back(v_ptr);
-		vector <unsigned char> compressedSequence;
+		vector <int> compressedSequence;
 		compressedSequences.push_back(compressedSequence);
 		names.push_back(v_ptr->name);
 	}
 	int numberOfSites = vertexPtrList[0]->sequence.size();
-	vector<unsigned char> sitePattern;
+	vector<int> sitePattern;
 	for(int site = 0; site < numberOfSites; site++){
 		sitePattern.clear();
 		for (MST_vertex* v_ptr: vertexPtrList) {
@@ -709,7 +2224,7 @@ tuple <vector<string>,vector<vector<unsigned char>>,vector<int>,vector<vector<in
 			}
 		}
 	}
-	for (vector<unsigned char> sitePattern : distinctPatterns){
+	for (vector<int> sitePattern : distinctPatterns){
 		int sitePatternWeight = distinctPatternsToSitesWherePatternRepeats[sitePattern].size();
 		sitePatternWeights_ptr.push_back(sitePatternWeight);		
 		sitePatternRepeats_ptr.push_back(distinctPatternsToSitesWherePatternRepeats[sitePattern]);
@@ -718,12 +2233,12 @@ tuple <vector<string>,vector<vector<unsigned char>>,vector<int>,vector<vector<in
 }
 
 void MST::SetCompressedSequencesAndSiteWeightsForInputSequences() {				
-	vector <vector<unsigned char>> distinctPatterns;
-	map <vector<unsigned char>,vector<int>> distinctPatternsToSitesWherePatternRepeats;	
+	vector <vector<int>> distinctPatterns;
+	map <vector<int>,vector<int>> distinctPatternsToSitesWherePatternRepeats;	
 	int numberOfSites = (*this->vertexMap)[0]->sequence.size();
 	int numberOfInputSequences = this->vertexMap->size();
 	int sitePatternWeight; int v_id; int site;
-	vector<unsigned char> sitePattern;
+	vector<int> sitePattern;
 	for(site=0; site < numberOfSites; site++) {
 		sitePattern.clear();
 		for (v_id = 0; v_id < numberOfInputSequences; v_id ++) {
@@ -741,7 +2256,7 @@ void MST::SetCompressedSequencesAndSiteWeightsForInputSequences() {
 			}
 		}
 	}
-	for (vector<unsigned char> sitePattern: distinctPatterns) {
+	for (vector<int> sitePattern: distinctPatterns) {
 		sitePatternWeight = distinctPatternsToSitesWherePatternRepeats[sitePattern].size();		
 		this->siteWeights.push_back(sitePatternWeight);		
 	}
@@ -762,9 +2277,9 @@ void MST::WriteToFile(string FileName) {
 	mstFile.close();
 }
 
-unsigned char MST::ConvertDNAToChar(char dna) {
+int MST::ConvertDNAToChar(char dna) {
 	string dna_upper = string(1,toupper(dna));
-	unsigned char dna_char = 4;
+	int dna_char = 4;
 	if (this->mapDNAtoInteger.find(dna_upper) != this->mapDNAtoInteger.end()) {
 		dna_char = this->mapDNAtoInteger[dna_upper];
 	} else {
@@ -779,7 +2294,7 @@ unsigned char MST::ConvertDNAToChar(char dna) {
 void MST::ReadPhyx(string sequenceFileNameToSet) {
     this->sequenceFileName = sequenceFileNameToSet;
     ifstream inputFile(this->sequenceFileName.c_str());    
-    vector <unsigned char> recodedSequence;
+    vector <int> recodedSequence;
     string seqName;
     string seq = "";
     string line; getline(inputFile, line);
@@ -803,11 +2318,11 @@ void MST::ReadPhyx(string sequenceFileNameToSet) {
 
 void MST::ReadFasta(string sequenceFileNameToSet) {
 	this->sequenceFileName = sequenceFileNameToSet;
-	vector <unsigned char> recodedSequence;
+	vector <int> recodedSequence;
 	recodedSequence.clear();
 	unsigned int site = 0;
     unsigned int seq_len = 0;
-	unsigned char dna_char;
+	int dna_char;
 	int num_amb = 0;
 	int num_non_amb = 0;
 	ifstream inputFile(this->sequenceFileName.c_str());
@@ -864,21 +2379,19 @@ void MST::ReadFasta(string sequenceFileNameToSet) {
 	recodedSequence.clear();
 	inputFile.close();
     cout << "Number of sequences in fasta file is " << this->vertexMap->size() << endl;
-    cout << "Sequence length is " << seq_len << endl;
-	// cout << "Number of ambiguous characters is " << double(num_amb) << "\tNumber of nonambiguous characters is " << double(num_non_amb) << endl;
-	// cout << "Fraction of ambiguous characters is " << double(num_amb)/double(num_amb + num_non_amb) << endl;
+    cout << "Sequence length is " << seq_len << endl;	
 }
 
-vector<unsigned char> MST::DecompressSequence(vector<unsigned char>* compressedSequence, vector<vector<int>>* sitePatternRepeats){
+vector<int> MST::DecompressSequence(vector<int>* compressedSequence, vector<vector<int>>* sitePatternRepeats){
 	int totalSequenceLength = 0;
 	for (vector<int> sitePatternRepeat: *sitePatternRepeats){
 		totalSequenceLength += int(sitePatternRepeat.size());
 	}
-	vector <unsigned char> decompressedSequence;
+	vector <int> decompressedSequence;
 	for (int v_ind = 0; v_ind < totalSequenceLength; v_ind++){
 		decompressedSequence.push_back(char(0));
 	}
-	unsigned char dnaToAdd;
+	int dnaToAdd;
 	for (int sitePatternIndex = 0; sitePatternIndex < int(compressedSequence->size()); sitePatternIndex++){
 		dnaToAdd = (*compressedSequence)[sitePatternIndex];
 		for (int pos: (*sitePatternRepeats)[sitePatternIndex]){
@@ -888,10 +2401,10 @@ vector<unsigned char> MST::DecompressSequence(vector<unsigned char>* compressedS
 	return (decompressedSequence);	
 }
 
-string MST::EncodeAsDNA(vector<unsigned char> sequence){
+string MST::EncodeAsDNA(vector<int> sequence){
 	string allDNA = "AGTC";
 	string dnaSequence = "";
-	for (unsigned char s : sequence){
+	for (int s : sequence){
 		dnaSequence += allDNA[s];
 	}
 	return dnaSequence;
@@ -956,11 +2469,15 @@ class SEM_vertex {
 public:
 	int degree = 0;
 	int timesVisited = 0;
-	bool observed = 0;	
-    vector <unsigned char> compressedSequence;
+	bool observed = 0;
+	string completeSequence;
+    vector <int> DNArecoded;
+	vector <int> DNAcompressed;	
+	vector <int> AArecoded;
+	vector <int> AAcompressed;	
 	vector <string> dupl_seq_names;
-	int id = -42;
-	int global_id = -42;
+	int id = -40;
+	int global_id = -40;
 	string newickLabel = "";
 	string name = "";
 	double logScalingFactors = 0;
@@ -984,10 +2501,11 @@ public:
 	emtr::Md transitionMatrix;
 	emtr::Md transitionMatrix_stored;	
 	array <double, 4> rootProbability;
-	array <double, 4> posteriorProbability;	
-	SEM_vertex (int idToAdd, vector <unsigned char> compressedSequenceToAdd) {
+	array <double, 4> posteriorProbability;
+	
+	SEM_vertex (int idToAdd, vector <int> compressedSequenceToAdd) {
 		this->id = idToAdd;
-		this->compressedSequence = compressedSequenceToAdd;
+		this->DNArecoded = compressedSequenceToAdd;
 		this->transitionMatrix = emtr::Md{};
 		this->transitionMatrix_stored = emtr::Md{};
 		for (int dna = 0; dna < 4; dna ++) {
@@ -1048,7 +2566,7 @@ class clique {
 	map <clique *, double> logScalingFactorForMessages;
 	double logScalingFactorForClique;
 	map <clique *, std::array <double, 4>> messagesFromNeighbors;
-    vector <unsigned char> compressedSequence;
+    vector <int> compressedSequence;
 	string name;
 	int id;
 	int inDegree = 0;
@@ -1120,9 +2638,11 @@ void clique::ComputeBelief() {
 	if (this->parent != this) {
 		neighbors.push_back(this->parent);
 	}
+	// cout << "6a" << endl;
 	for (clique * C_neighbor : neighbors) {		
 		this->logScalingFactorForClique += this->logScalingFactorForMessages[C_neighbor];
 		messageFromNeighbor = this->messagesFromNeighbors[C_neighbor];
+		for (int i = 0; i < 4; i ++) if (isnan(messageFromNeighbor[i])) throw mt_error("message contain nan"); ;
 		if (this->y == C_neighbor->x or this->y == C_neighbor->y) {
 //		factor_row_i = factor_row_i (dot) message
 			for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
@@ -1147,21 +2667,26 @@ void clique::ComputeBelief() {
 			cout << "Check product step" << endl;
             throw mt_error("check product step");
 		}
-	}	
+	}
+	// cout << "6b" << endl;	
 	double scalingFactor = 0;
 	for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
 		for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
 			scalingFactor += factor[dna_x][dna_y];
 		}
-	}	
+	}
+	// cout << "6c" << endl;	
 	if (scalingFactor == 0) {
+		cout << "scalingFactor" << endl;
         throw mt_error("check factor");
     }
+	// cout << "6d" << endl;
 	for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
 		for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
 			this->belief[dna_x][dna_y] = factor[dna_x][dna_y]/scalingFactor;
 		}
 	}
+	// cout << "6e" << endl;
 	this->logScalingFactorForClique += log(scalingFactor);
 }
 
@@ -1182,39 +2707,49 @@ void clique::SetInitialPotentialAndBelief(int site) {
 	// Case 1. Y is an observed vertex
 	// Product factor psi = P(Y|X) restricted to observed value xe of X
 	// psi (y|x) is set to 0 if x != xe
+	// of y->DNAcompressed[site] is -1 (gap) then transition matrix is not conditioned
+	// if (y->observed && y->DNAcompressed[site] == -1) {
+	// 	cout << "dealing with gap" << endl;
+	// }
+
 	if (y->observed) {
-		matchingCase = 1;
 		this->initialPotential = y->transitionMatrix;
-		int dna_y = y->compressedSequence[site];
-		for (int dna_p = 0; dna_p < 4; dna_p++) {
-			for (int dna_c = 0; dna_c < 4; dna_c++) {
-				if (dna_c != dna_y) {
-					this->initialPotential[dna_p][dna_c] *= 0;
-				} else {
-					this->initialPotential[dna_p][dna_c] *= 1;
+		int dna_y = y->DNAcompressed[site];
+		if (dna_y == -1) {
+			matchingCase = 1; // gap
+		} else {
+			matchingCase = 2;			
+			for (int dna_p = 0; dna_p < 4; dna_p++) {
+				for (int dna_c = 0; dna_c < 4; dna_c++) {
+					if (dna_c != dna_y) {
+						this->initialPotential[dna_p][dna_c] *= 0;
+					} else {
+						this->initialPotential[dna_p][dna_c] *= 1;
+					}
 				}
-			}
-		}		
+			}	
+		}
 	}
+
 	
 	// Case 2. X and Y are hidden and X is not the root
 	// psi = P(Y|X)
 	if (!y->observed) {
-		matchingCase = 2;
+		matchingCase = 3;
 		this->initialPotential = y->transitionMatrix;		
 	}	
 	
 	// Case 3. X and Y are hidden and X is the root and "this" is not the root clique
 	// psi = P(Y|X)
 	if (!y->observed and (x->parent == x) and (this->parent != this)) {
-		matchingCase = 3;
+		matchingCase = 4;
 		this->initialPotential = y->transitionMatrix;
 	}
 	
 	// Case 4. X and Y are hidden and X is the root and "this" is the root clique
 	// psi = P(X) * P(Y|X) 
 	if (!y->observed and (x->parent == x) and (this->parent == this)) {	
-		matchingCase = 4;
+		matchingCase = 5;
 		this->initialPotential = y->transitionMatrix;
 		for (int dna_p = 0; dna_p < 4; dna_p++) {
 			for (int dna_c = 0; dna_c < 4; dna_c++) {
@@ -1630,8 +3165,8 @@ void cliqueTree::SendMessage(clique * C_from, clique * C_to) {
 	array <double, 4> messageToNeighbor;
 	bool verbose = 0;
 	if (verbose) {
-		cout << "Preparing message to send from " << C_from->name << " to " ;
-		cout << C_to->name << " is " << endl;
+		cout << "Preparing message to send from " << C_from->x->name << "," << C_from->y->name << " to " ;
+		cout << C_to->x->name << "," << C_to->y->name << " is " << endl;
 	}
 	
 	// Perform the three following actions
@@ -1661,16 +3196,30 @@ void cliqueTree::SendMessage(clique * C_from, clique * C_to) {
 	
 	logScalingFactor = 0;
 		// A. PRODUCT: Multiply messages from neighbors that are not C_to
+	// cout << "A step" << endl;
+	bool allZero = 1;
+	for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
+		for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
+			if (factor[dna_x][dna_y] != 0) allZero = 0;
+			// cout << "factor for " << dna_x << "," << dna_y << " " << factor[dna_x][dna_y] << endl;
+			
+		}
+	}
+	if (allZero) {
+		cout << "initial potential is all zero";
+		throw mt_error("all zero in factor");
+		}
+
 	for (clique * C_neighbor : neighbors) {
 		messageFromNeighbor = C_from->messagesFromNeighbors[C_neighbor];
 		if (C_from->y == C_neighbor->x or C_from->y == C_neighbor->y) {
 		// factor_row_i = factor_row_i (dot) message
 			for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
 				for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
-					factor[dna_x][dna_y] *= messageFromNeighbor[dna_y];					
+					factor[dna_x][dna_y] *= messageFromNeighbor[dna_y];	
 				}
 			}
-			if (verbose) {cout << "Performing row-wise multiplication" << endl;}			
+			if (verbose) {cout << "Performing row-wise multiplication" << endl;}
 		} else if (C_neighbor->x == C_from->x or C_neighbor->y == C_from->x) {
 		// factor_col_i = factor_col_i (dot) message
 			for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
@@ -1678,20 +3227,21 @@ void cliqueTree::SendMessage(clique * C_from, clique * C_to) {
 					factor[dna_x][dna_y] *= messageFromNeighbor[dna_x];
 				}
 			}
-			if (verbose) {cout << "Performing column-wise multiplication" << endl;}			
+			if (verbose) {cout << "Performing column-wise multiplication" << endl;}
 		} else {
 			cout << "Check product step" << endl;
 			throw mt_error("check product step");
 		}		
 		// Check to see if each entry in the factor is zero
-		bool allZero = 1;
+		allZero = 1;	
 		for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
 			for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
-				if (factor[dna_x][dna_y] == 0) {
+				if (factor[dna_x][dna_y] != 0) {
 					allZero = 0;
 				}
 			}
-		}		
+		}
+		if (allZero) throw mt_error("all zero in factor");		
 		// Rescale factor
 		largestElement = 0;
 		for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
@@ -1709,6 +3259,16 @@ void cliqueTree::SendMessage(clique * C_from, clique * C_to) {
 		logScalingFactor += log(largestElement);
 		logScalingFactor += C_from->logScalingFactorForMessages[C_neighbor];
 	}
+
+	// cout << "B step" << endl;
+	allZero = 1;
+	for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
+		for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
+			if (factor[dna_x][dna_y] != 0) allZero = 0;
+		}
+	}
+
+	if (allZero) throw mt_error ("all zero in factor");
 	// B. SUM
 		// Marginalize factor by summing over common variable
 	largestElement = 0;
@@ -1745,20 +3305,24 @@ void cliqueTree::SendMessage(clique * C_from, clique * C_to) {
 			largestElement = messageToNeighbor[dna_x];
 		}
 	}
+	if (largestElement == 0) throw mt_error("Division by zero");
 	for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
 		messageToNeighbor[dna_x] /= largestElement;
 	}
 	logScalingFactor += log(largestElement);
 	if (verbose) {
 		cout << "Sending the following message from " << C_from->name << " to " ;
-		cout << C_to->name << " is " << endl;
+		cout << C_to->name << endl;
 		for (int dna = 0; dna < 4; dna ++) {
 			cout << messageToNeighbor[dna] << "\t";
 			if(isnan(messageToNeighbor[dna])){
-                throw mt_error("Check message to neighbor");
-            }
+				throw mt_error("Check message to neighbor");
+			}
 		}
-	}	
+	}
+	// cout << endl;
+	
+	// cout << "C step" << endl;
 	// C. TRANSMIT
 	C_to->logScalingFactorForMessages.insert(make_pair(C_from,logScalingFactor));
 	C_to->messagesFromNeighbors.insert(make_pair(C_from,messageToNeighbor));
@@ -1767,11 +3331,14 @@ void cliqueTree::SendMessage(clique * C_from, clique * C_to) {
 void cliqueTree::CalibrateTree() {
 	clique * C_p; clique * C_c;
 	
-	//	Send messages from leaves to root	
+	//	Send messages from leaves to root
+	// cout << "13a" << endl;	
 	for (pair <clique *, clique *> cliquePair : this->edgesForPostOrderTreeTraversal) {
 		tie (C_p, C_c) = cliquePair;
 		this->SendMessage(C_c, C_p);
 	}
+	
+	// cout << "13b" << endl;
 
 	//	Send messages from root to leaves	
 	for (pair <clique *, clique *> cliquePair : this->edgesForPreOrderTreeTraversal) {
@@ -1779,9 +3346,12 @@ void cliqueTree::CalibrateTree() {
 		this->SendMessage(C_p, C_c);
 	}	
 	//	Compute beliefs
+	// cout << "13c" << endl;
 	for (clique * C: this->cliques) {
 		C->ComputeBelief();		
 	}
+
+	// cout << "13d" << endl;
 }
 
 ///...///...///...///...///...///...///...///... Params Struct ///...///...///...///...///...///...///...///...///
@@ -1812,11 +3382,10 @@ struct EM_struct {
 ///...///...///...///...///...///...///...///...///... SEM ...///...///...///...///...///...///...///...///...///
 
 class SEM {
-private:
-	// ---- helpers (static; no SEM state needed) ----
+private:	
 	static string json_escape(const string& s) {
 		string out; out.reserve(s.size() + 8);
-		for (unsigned char c : s) {
+		for (int c : s) {
 		switch (c) {
 			case '\"': out += "\\\""; break;
 			case '\\': out += "\\\\"; break;
@@ -1826,7 +3395,7 @@ private:
 			case '\r': out += "\\r";  break;
 			case '\t': out += "\\t";  break;
 			default:
-			if (c < 0x20) { // control chars -> \u00XX
+			if (c < 0x20) {
 				char buf[7];
 				snprintf(buf, sizeof(buf), "\\u%04X", c);
 				out += buf;
@@ -1843,9 +3412,9 @@ private:
 	}
 
 	static string jnum(double x) {
-		if (!isfinite(x)) return "null";   // JSON has no NaN/Inf
+		if (!isfinite(x)) return "null";
 		ostringstream os;
-		os << setprecision(17) << x;       // keep high precision
+		os << setprecision(17) << x;
 		return os.str();
 	}
 
@@ -1879,8 +3448,7 @@ private:
 	}
 
 	template<class MapIterVal>
-	static string jseries_iter_val(const MapIterVal& mp) {
-		// Emits [[iter,val], ...] in ascending iter (std::map already ordered)
+	static string jseries_iter_val(const MapIterVal& mp) {		
 		ostringstream os;
 		os << "[";
 		bool first = true;
@@ -1893,31 +3461,40 @@ private:
 		return os.str();
 	}
 public:
+	Eigen::Matrix <double,20,20> Q_D; // Dayhoff rate matrix
+	vector<double> pi_D;
+
+	string dayhoff_rate_matrix_file_name;
 	array <double, 4> alpha_pi;
 	array <double, 4> alpha_M_row;
-	array<double, 4> sample_dirichlet(const array <double, 4>& alpha, mt19937_64& gen);
+	array <double, 4> sample_dirichlet(const array <double, 4>& alpha, mt19937_64& gen);
 	int largestIdOfVertexInMST = 1;
 	default_random_engine generator;
 	bool setParameters;
 	bool verbose = 0;
 	string modelForRooting;
-	map <string,unsigned char> mapDNAtoInteger;
+	map <string,int> mapDNAtoInteger;
 	map <int, SEM_vertex*> * vertexMap;
 	vector <SEM_vertex*> vertices;
 	map <pair<SEM_vertex *,SEM_vertex *>,emtr::Md> * M_hss;
-	vector <int> sitePatternWeights;
+	vector <int> DNAPatternWeights;
+	vector <int> AAPatternWeights;
+	vector <int> gaplesscompressedDNAsites;
+	vector <bool> gapLessDNAFlag;
+	vector <bool> gapLessAAFlag;
+	int num_aa_patterns;
 	vector <vector <int> > sitePatternRepetitions;
 	vector <int> sortedDeltaGCThresholds;
 	int numberOfInputSequences;
 	int numberOfVerticesInSubtree;
 	int numberOfObservedVertices;
 	int numberOfExternalVertices = 0;	
-	int numberOfSitePatterns;
+	int num_dna_patterns;
 	int maxIter;
 	double logLikelihoodConvergenceThreshold = 0.1;	
 	double sumOfExpectedLogLikelihoods = 0;
 	double maxSumOfExpectedLogLikelihoods = 0;
-	int h_ind = 1;
+	int node_ind = 1;
 	chrono::system_clock::time_point t_start_time;
 	chrono::system_clock::time_point t_end_time;
 	// ofstream * logFile;
@@ -1952,7 +3529,8 @@ public:
 	bool flag_JC = 0;
 	bool flag_added_duplicated_sequences = 0;
 	map <string, int> nameToIdMap;
-	string sequenceFileName;
+	string DNAsequenceFileName;
+	string AAsequenceFileName;
 	string phylip_file_name;
 	string topologyFileName;
 	string probabilityFileName;
@@ -1967,7 +3545,7 @@ public:
 	array <double, 4> rootProbability;
 	array <double, 4> rootProbability_stored;
 	SEM_vertex * root_stored;
-	vector <unsigned char> compressedSequenceToAddToMST;
+	vector <int> compressedSequenceToAddToMST;
 	string nameOfSequenceToAddToMST;
 	double logLikelihood;
 	double logLikelihood_exp_counts;
@@ -1980,13 +3558,13 @@ public:
 	vector <int> idsOfVerticesToRemove;
 	vector <int> idsOfVerticesToKeepInMST;	
 	vector <int> idsOfExternalVertices;	
-	vector < tuple <int, string, vector <unsigned char> > > idAndNameAndSeqTuple;
+	vector < tuple <int, string, vector <int> > > idAndNameAndSeqTuple;
 	vector<tuple <string,string,int,int,double,double,double,double>> EMTR_results;
 	// Used for updating global phylogenetic tree
 	vector < pair <int, int> > edgesOfInterest_ind;	
-	vector < pair < vector <unsigned char>, vector <unsigned char> > > edgesOfInterest_seq;
+	vector < pair < vector <int>, vector <int> > > edgesOfInterest_seq;
 	string weightedEdgeListString;
-	map < string, vector <unsigned char>> sequencesToAddToGlobalPhylogeneticTree;
+	map < string, vector <int>> sequencesToAddToGlobalPhylogeneticTree;
 	vector < tuple <string, string, double>> weightedEdgesToAddToGlobalPhylogeneticTree;
 	vector < tuple <string, string, double>> edgeLogLikelihoodsToAddToGlobalPhylogeneticTree;		
 	map <string, double> vertexLogLikelihoodsMapToAddToGlobalPhylogeneticTree;
@@ -1998,7 +3576,10 @@ public:
 	void ClearDirectedEdges();
 	void ClearUndirectedEdges();
 	void ClearAllEdges();
-	void AddVertex(string name, vector <unsigned char> compressedSequenceToAdd);
+	void AddVertex(string name, vector <int> compressedSequenceToAdd);
+	void SetAASequenceForVertex(string name,vector <int> AARecodedSequenceToAdd);
+	void AddFJVertices();
+	void AddFJWeightedEdges();
 	void AddWeightedEdges(vector<tuple<string,string,double>> weightedEdgesToAdd);
 	void AddEdgeLogLikelihoods(vector<tuple<string,string,double>> edgeLogLikelihoodsToAdd);
 	void AddExpectedCountMatrices(map < pair <SEM_vertex * , SEM_vertex *>, emtr::Md > expectedCountsForVertexPair);
@@ -2006,25 +3587,19 @@ public:
 	void SetNumberOfVerticesInSubtree(int numberOfVertices);	
 	void AddSitePatternWeights(vector <int> sitePatternWeightsToAdd);
 	void AddSitePatternRepeats(vector <vector <int> > sitePatternRepetitionsToAdd);
-	void AddSequences(vector <vector <unsigned char>> sequencesToAdd);	
+	void AddSequences(vector <vector <int>> sequencesToAdd);	
 	void OpenAncestralSequencesFile();
 	void AddRootVertex();
 	void SetVertexVector();
-//	void AddCompressedSequencesAndNames(map<string,vector<unsigned char>> sequencesList, vector <vector <int>> sitePatternRepeats);
+//	void AddCompressedSequencesAndNames(map<string,vector<int>> sequencesList, vector <vector <int>> sitePatternRepeats);	
 	void AddAllSequences(string sequencesFileName);
 	void AddNames(vector <string> namesToAdd);
-	void AddGlobalIds(vector <int> idsToAdd);
-	// void ComputeNJTreeUsingHammingDistances(); 
-	void ComputeNJTree_may_contain_uninitialized_values(); // Hamming (default) or LogDet distance
-	void ComputeNJTree();
+	void AddGlobalIds(vector <int> idsToAdd);		
 	double ComputeDistance(int v_i, int v_j);
 	void RootedTreeAlongAnEdgeIncidentToCentralVertex();
 	void RootTreeAlongAnEdgePickedAtRandom();
 	void RootTreeAtAVertexPickedAtRandom();
-	void RootTreeByFittingAGMMViaEM();
-	void RootTreeByFittingUNREST();
-	void RootTreeUsingSpecifiedModel(string modelForRooting);
-	void RootTreeBySumOfExpectedLogLikelihoods();
+	void SetParsimonySites();
 	tuple<int,double,double,double,double> EM_started_with_SSH_parameters_rooted_at(SEM_vertex *v);
 	tuple<int,double,double,double,double> EM_started_with_parsimony_rooted_at(SEM_vertex *v);
 	tuple<int,double,double,double,double> EM_started_with_dirichlet_rooted_at(SEM_vertex *v);
@@ -2034,12 +3609,10 @@ public:
 	void RootTreeAlongEdge(SEM_vertex * u, SEM_vertex * v);
 	void SelectEdgeIncidentToVertexViaMLUnderGMModel(SEM_vertex * v);
 	void InitializeTransitionMatricesAndRootProbability();
-	void ComputeMAPEstimateOfAncestralSequencesUsingHardEM();
 	void ComputeMPEstimateOfAncestralSequences();
 	void ComputeMAPEstimateOfAncestralSequences();
 	void ComputeMAPEstimateOfAncestralSequencesUsingCliques();
-	void RootTreeAtAnEdgeIncidentToVertexThatMaximizesLogLikelihood();
-	void SetEdgesForPreOrderTraversal();	
+	void SetEdgesForPreOrderTraversal();
 	void SetEdgesForPostOrderTraversal();
 	void SetEdgesForTreeTraversalOperations();
 	void SetLeaves();
@@ -2052,16 +3625,17 @@ public:
 	void ComputePosteriorProbabilitiesUsingMAPEstimates();
 	void SetInfoForVerticesToAddToMST();
 	void SetIdsOfExternalVertices();
-	void ClearAncestralSequences();
+	void ResetAncestralSequences();
 	void WriteParametersOfGMM(string GMMparametersFileName);
 	void RemoveEdgeLength(SEM_vertex * u, SEM_vertex * v);
 	void AddEdgeLength(SEM_vertex * u, SEM_vertex * v, double t);
 	double GetEdgeLength(SEM_vertex * u, SEM_vertex * v);
 	double ComputeEdgeLength(SEM_vertex * u, SEM_vertex * v);
 	void SetEdgeLength(SEM_vertex * u, SEM_vertex * v, double t);
+	void SetEdgesFromTupleVector(vector<tuple <string, string, double>> edge_vector);
 	void SetEdgesFromTopologyFile();
-	string EncodeAsDNA(vector<unsigned char> sequence);
-	vector<unsigned char> DecompressSequence(vector<unsigned char>* compressedSequence, vector<vector<int>>* sitePatternRepeats);	
+	string EncodeAsDNA(vector<int> sequence);
+	vector<int> DecompressSequence(vector<int> compressedSequence, vector<vector<int>> sitePatternRepeats);	
 	void ComputeChowLiuTree();
 	void AddSubforestOfInterest(SEM * localPhylogeneticTree);
 	void ReadRootedTree(string treeFileName);
@@ -2072,7 +3646,7 @@ public:
 	void ReadProbabilities();
 	void WriteProbabilities(string fileName);
 	void ReadTransitionProbabilities(string fileName);
-	int GetVertexId(string v_name);
+	int GetVertexId(string v_name);	
 	SEM_vertex * GetVertex(string v_name);
 	bool ContainsVertex(string v_name);
 	int GetEdgeIndex (int vertexIndex1, int vertexIndex2, int numberOfVertices);
@@ -2081,7 +3655,7 @@ public:
 	array <double, 4> GetBaseComposition(SEM_vertex * v);
 	array <double, 4> GetObservedCountsForVariable(SEM_vertex * v);
 	string modelSelectionCriterion;
-	string distance_measure_for_NJ = "Hamming";
+	string distance_measure_for_NJ = "log-det";
 	void SetModelSelectionCriterion(string modelSelectionCriterionToSet);
 	void RootTreeAtVertex(SEM_vertex * r);
 	void StoreEdgeListForChowLiuTree();
@@ -2108,8 +3682,7 @@ public:
 	void SetParametersForRateMatrixForNelderMead(double x[], int rateCat);
 	void NelderMeadForOptimizingParametersForRateCat(int rateCat, int n, double start[], double xmin[], 
 		 double *ynewlo, double reqmin, double step[], int konvge,
-		 int kcount, int *icount, int *numres, int *ifault);
-	void FitAGMModelViaHardEM();
+		 int kcount, int *icount, int *numres, int *ifault);	
 	void ComputeInitialEstimateOfModelParameters();
 	void SetInitialEstimateOfModelParametersUsingDirichlet();
 	void SetInitialEstimateOfModelParametersUsingSSH();
@@ -2139,10 +3712,8 @@ public:
 	void InitializeExpectedCountsForEachVariablePair();
 	void InitializeExpectedCountsForEachEdge();
 	void ResetExpectedCounts();
-	void ConstructCliqueTree();
-//	void ComputeExpectedCounts();
-	void ComputeExpectedCountsForFullStructureSearch();
-	void ComputeExpectedCountsForRootSearch();
+	void ConstructCliqueTree();	
+	void ComputeExpectedCounts();
 	emtr::Md GetObservedCounts(SEM_vertex * u, SEM_vertex * v);
 	void AddToExpectedCounts();
 	void AddToExpectedCountsForEachVariable();
@@ -2157,14 +3728,13 @@ public:
 	// where H is the set of hidden variables and O is the set of observed variables	
 	void RootTreeUsingEstimatedParametersViaML();
 	void SetFlagForFinalIterationOfSEM();
-	void OptimizeTopologyAndParametersOfGMM();
-	int ConvertDNAtoIndex(char dna);	
+	int ConvertDNAtoIndex(char dna);
+	int ConvertAAtoIndex(char aa);
 	char GetDNAfromIndex(int dna_index);			
 	double BIC;
 	double AIC;
 	void ComputeBIC();
 	void ComputeAIC();
-	void TestSEM();
 	void StoreEdgeListAndSeqToAdd();
 	void SelectIndsOfVerticesOfInterestAndEdgesOfInterest();
 	void RenameHiddenVerticesInEdgesOfInterestAndSetIdsOfVerticesOfInterest();
@@ -2172,9 +3742,15 @@ public:
 	void SetWeightedEdgesToAddToGlobalPhylogeneticTree();	
 	void ComputeVertexLogLikelihood(SEM_vertex * v);
 	void ComputeEdgeLogLikelihood(SEM_vertex * u, SEM_vertex * v);	
+	void SetDayhoffRateMatrix();
+	void SetDNASequencesFromFile(string sequenceFileName);
+	void SetAASequencesFromFile(string sequenceFileName);
+	void CompressDNASequences();
+	void CompressAASequences();
 	void SetEdgeAndVertexLogLikelihoods();
 	bool IsNumberOfNonSingletonComponentsGreaterThanZero();
-	void WriteTree();
+	// chat ConvertDNAtoChar(char dna);
+	// void WriteTree();
 	void WriteAncestralSequences();
 	void SetPrefixForOutputFiles(string prefix_for_output_files_to_set);
 	void WriteRootedTreeInNewickFormat(string newickFileName);
@@ -2185,30 +3761,40 @@ public:
 	void ResetData();	
 	void AddDuplicatedSequencesToRootedTree(MST * M);
 	void AddDuplicatedSequencesToUnrootedTree(MST * M);
+	void ReadFasta();
+	double DyadicLogLikelihood(SEM_vertex * u, SEM_vertex * v, double t);
+	double DyadicLogLikelihoodFirstDer(SEM_vertex * u, SEM_vertex * v, double t);
+	double GetNewtonRaphsonDistance(SEM_vertex * u, SEM_vertex * v);
+	void ComputeMLDistances();
+	void GetOLSBranchLengths();
+	void OptimizeQ_D();
+	void SetSitePatternsAndWeights(); // account for gaps
 	void SetParameterFile();	
 	void initialize_GMM(string init_criterion);
-	void EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results(int num_repetitions);
-	void EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
-	void EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(int num_repetitions);
+	void EM_AA_rooted_at_each_internal_vertex_started_with_Dayhoff_store_results(int num_repetitions);
+	void EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(int num_repetitions);
+	void EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results(int num_repetitions);	
+	void EM_DNA_rooted_at_each_internal_vertex_started_with_SSH_store_results(int num_repetitions);
 	void EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
-	void EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int num_repetitions);
-	void EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetitions);
-	void EM_root_search_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
+	void EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
+	void EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetitions);	
 	void EM_root_search_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
 	void EM_root_search_at_each_internal_vertex_started_with_SSH_par(int num_repetitions);
 	void set_alpha_PI(double a1, double a2, double a3, double a4);
 	void set_alpha_M_row(double a1, double a2, double a3, double a4);
+	map <pair<SEM_vertex*, SEM_vertex*>,double> ML_distances;
 	array <double, 4> sample_pi();
     array <double, 4> sample_M_row();
-	vector <EM_struct> EM_runs_pars;
-	vector <EM_struct> EM_runs_diri;
-	vector <EM_struct> EM_runs_ssh;
+	vector <EM_struct> EM_DNA_runs_pars;
+	vector <EM_struct> EM_DNA_runs_diri;
+	vector <EM_struct> EM_DNA_runs_ssh;
 	EM_struct EM_current{};	
 	string em_to_json(const EM_struct& em) const;
 	// Select vertex for rooting Chow-Liu tree and update edges in T
 	// Modify T such that T is a bifurcating tree and likelihood of updated
 	// tree is equivalent to the likelihood of T
-	SEM (int largestIdOfVertexInMST_toSet, double loglikelihood_conv_thresh, int max_EM_iter, bool verbose_flag_to_set) {		
+	SEM (double loglikelihood_conv_thresh, int max_EM_iter, bool verbose_flag_to_set) {
+		// this->SetDayhoffRateMatrix();		
 		this->alpha_pi = {100,100,100,100}; // default value
 		this->alpha_M_row = {100,2,2,2};
 		this->root_search = false;
@@ -2216,9 +3802,8 @@ public:
 		this->maxIter = max_EM_iter;
 		this->distance_measure_for_NJ = "Hamming";		
 		this->flag_Hamming = 1; this->flag_logDet = 0;
-		this->verbose = verbose_flag_to_set;
-		this->largestIdOfVertexInMST = largestIdOfVertexInMST_toSet;
-		this->h_ind = 1;
+		this->verbose = verbose_flag_to_set;		
+		this->node_ind = 0;
 		this->vertexMap = new map <int, SEM_vertex *> ;
 		this->M_hss = new map <pair<SEM_vertex*,SEM_vertex*>,emtr::Md>;
 		// this->vertexName2IdMap = new map <string, int> ;
@@ -2248,6 +3833,225 @@ public:
 	}
 };
 
+double SEM::DyadicLogLikelihood(SEM_vertex * p, SEM_vertex * c, double t) {
+	double ll = 0.0;
+	Eigen::Matrix<double,20,20> P_t;
+	P_t = Q_D*t;
+	P_t = P_t.exp();
+	int aa_p; int aa_c;
+	cout << this->pi_D[0] << endl;
+	cout << this->pi_D[1] << endl;
+	cout << this->pi_D[2] << endl;
+	cout << this->pi_D[3] << endl;
+	for (int i = 0; i < num_aa_patterns; i++) {
+		cout << "loglikelihood " << ll << i << endl;
+		aa_p = p->AAcompressed[i];
+		aa_c = c->AAcompressed[i];
+		if (aa_p > -1 && aa_c > -1) {
+			ll += log(this->pi_D[aa_p]) * this->AAPatternWeights[i];
+			ll += log(P_t(aa_p,aa_c)) * this->AAPatternWeights[i];
+		}
+	}
+	return (ll);
+}
+
+double SEM::DyadicLogLikelihoodFirstDer(SEM_vertex * p, SEM_vertex * c, double t) {
+	double ll_first_der = 0.0;
+	Eigen::Matrix<double,20,20> P_t;
+	P_t = Q_D*t;
+	P_t = P_t.exp();
+	Eigen::Matrix<double,20,20> QP_t = Q_D*P_t;
+	int aa_p; int aa_c;
+	for (int i = 0; i < num_aa_patterns; i++) {
+		aa_p = p->AAcompressed[i];
+		aa_c = c->AAcompressed[i];
+		if (aa_p > -1 && aa_c > -1) {
+			ll_first_der += (QP_t(aa_p,aa_c)/P_t(aa_p,aa_c)) * this->AAPatternWeights[i];
+		}
+	}
+	return (ll_first_der);
+}
+
+double SEM::GetNewtonRaphsonDistance(SEM_vertex * u, SEM_vertex * v) {		
+	float p = 0;
+	double t;
+	int aa_u; int aa_v;
+	float sites_included = 0;
+	double ll_fd;
+	double ll;
+	double nr_convergence = pow(10,-2);
+	int max_iter = 100;
+	int iter = 2;
+	// compute initial estimate of evolutionary distance using Jukes-Cantor estimate
+	cout << u->name << "\t" << v->name << endl;
+	for (int site = 0; site < num_aa_patterns; site++) {
+		aa_u = u->AAcompressed[site];
+		aa_v = v->AAcompressed[site];
+		if (aa_u > -1 && aa_v > -1) {
+			sites_included += this->AAPatternWeights[site];
+			if (aa_u != aa_v) p += this->AAPatternWeights[site];
+		}		
+	}
+	p /= sites_included;
+	t = -19.0/20.0 * log(1-((20.0*p)/19.0));
+	cout << "initial distance is " << t << endl;	
+	ll = this->DyadicLogLikelihood(u,v,t);
+	ll_fd = this->DyadicLogLikelihoodFirstDer(u,v,t);
+	t -= ll/ll_fd;
+	cout << "Distance after first iteration of NR is " << t << endl;
+	cout << "Log likelihood after first iteration of NR is " << ll_fd << endl;
+	cout << "First derivate after first iteration of NR is " << ll_fd << endl;	
+	while (abs(ll_fd) > nr_convergence && iter < max_iter) {
+		ll = this->DyadicLogLikelihood(u,v,t);
+		ll_fd = this->DyadicLogLikelihoodFirstDer(u,v,t);
+		t -= ll/ll_fd;
+		cout << "Distance after iteration " << iter << " of NR is " << t << endl;
+		cout << "Log likelihood after iteration " << iter << " of NR is " << ll_fd << endl;
+		cout << "First derivate after iteration " << iter << " of NR is " << ll_fd << endl;
+		iter++;
+	}
+
+	return (t);
+}
+
+void SEM::ComputeMLDistances() {
+	double ML_d;
+	for (SEM_vertex * u: this->vertices) {
+		for (SEM_vertex * v: this->vertices) {
+			if (u < v) {
+				ML_d = this->GetNewtonRaphsonDistance(u,v);
+				this->ML_distances[make_pair(u,v)] = ML_d;
+				break;
+			}
+		}
+	}
+}
+
+// void SEM::SetDayhoffRateMatrix() {
+// 	// cout << this->Q_D << endl;
+// 	constexpr int K = 20;
+// 	const std::string path = this->dayhoff_rate_matrix_file_name.empty()
+// 							? std::string("/data/Dayhoff.dat")
+// 							: this->dayhoff_rate_matrix_file_name;
+
+// 	ifstream Dayhoff_path(path);
+
+
+// 	Eigen::Matrix<double,K,K> S;
+// 	cout << path << endl;
+// 	int row = 0;
+// 	int lines_parsed = 0;
+// 	while (lines_parsed < 20){}k
+// 	string line; getline(Dayhoff_path, line)		
+// 	vector<string> splitLine = emtr::split_ws(line);
+// 		cout <<  splitLine.size() << "\t" << line << endl;
+// 		row += 1;
+// 	//  row = splitLine.size();
+// 		for (int col = 0; col < row; row++) {
+// 		// S(row,col) = stod(splitLine[col]);
+// 		// S(col,row) = S(row,col);
+// 		}
+
+// 	}
+	// Dayhoff_path.close();
+	// cout << S << endl;
+
+	// std::ifstream in(path);
+	// if (!in) {
+	// 	throw std::runtime_error("SetDayhoffRateMatrix: cannot open file: " + path);
+	// }
+
+	// auto line_to_numbers = [](const std::string& line) -> std::vector<double> {
+	// 	std::string s = line;
+	// 	auto cut = s.find('#'); if (cut != std::string::npos) s.resize(cut);
+	// 	cut = s.find(';');      if (cut != std::string::npos) s.resize(cut);
+	// 	auto c2 = s.find("//");
+	// 	if (c2 != std::string::npos) {
+	// 	if (c2 == 0 || std::isspace(static_cast<unsigned char>(s[c2-1])) || s[c2-1] == ',') {
+	// 		s.resize(c2);
+	// 	}
+	// 	}
+	// 	std::vector<double> out;
+	// 	std::istringstream iss(s);
+	// 	double x;
+	// 	while (iss >> x) out.push_back(x);
+	// 	return out;
+	// };
+
+	// std::vector<double> nums;
+	// nums.reserve(512);
+	// std::string line;
+	// while (std::getline(in, line)) {
+	// 	auto vec = line_to_numbers(line);
+	// 	nums.insert(nums.end(), vec.begin(), vec.end());
+	// }
+
+	// const std::size_t need_tri = static_cast<std::size_t>(K) * (K + 1) / 2; // 210
+	// const std::size_t need_tot = need_tri + K;                               // 230
+
+	// if (nums.size() < need_tot) {
+	// 	throw std::runtime_error(
+	// 	"SetDayhoffRateMatrix: file '" + path +
+	// 	"' has too few numeric entries; expected at least " + std::to_string(need_tot) +
+	// 	" but found " + std::to_string(nums.size())
+	// 	);
+	// }
+
+	// // Split triangular S (including diagonal tokens) and frequencies
+	// const std::vector<double> tri(nums.begin(), nums.begin() + need_tri);
+	// std::vector<double> pi(nums.begin() + need_tri, nums.begin() + need_tri + K);
+
+	// // Normalize pi to sum 1 (robust if file was not normalized)
+	// double pisum = std::accumulate(pi.begin(), pi.end(), 0.0);
+	// if (!(pisum > 0.0)) {
+	// 	throw std::runtime_error("SetDayhoffRateMatrix: non-positive sum of Dayhoff frequencies");
+	// }
+	// for (double& v : pi) v /= pisum;
+
+	// // Rebuild symmetric exchangeability matrix S from lower-triangular listing
+	// Eigen::Matrix<double, K, K> S;
+	// S.setZero();
+	// std::size_t k = 0;
+	// for (int i = 0; i < K; ++i) {
+	// 	for (int j = 0; j <= i; ++j, ++k) {
+	// 	const double v = tri[k];
+	// 	if (i != j) {
+	// 		S(i, j) = v;
+	// 		S(j, i) = v;
+	// 	}
+	// 	// ignore diagonal tri entries
+	// 	}
+	// }
+
+	// // Build Q: Q_ij = S_ij * pi_j for i != j; diag makes rows sum to zero
+	// Eigen::Matrix<double, K, K> Q;
+	// for (int i = 0; i < K; ++i) {
+	// 	double rowsum = 0.0;
+	// 	for (int j = 0; j < K; ++j) {
+	// 	if (i == j) continue;
+	// 	const double qij = S(i, j) * pi[j];
+	// 	Q(i, j) = qij;
+	// 	rowsum += qij;
+	// 	}
+	// 	Q(i, i) = -rowsum;
+	// }
+
+	// // Scale so that the mean rate is 1: -sum_i pi_i * Q_ii = 1
+	// double mean_rate = 0.0;
+	// for (int i = 0; i < K; ++i) mean_rate += pi[i] * (-Q(i, i));
+	// if (!(mean_rate > 0.0)) {
+	// 	throw std::runtime_error("SetDayhoffRateMatrix: non-positive mean rate; check input file");
+	// }
+	// Q /= mean_rate;
+
+	// // ---- Assign to your members ----
+	// // If your SEM has members named differently, adjust these two lines.
+	// this->Q_D = Q;  // Eigen::Matrix<double,20,20> member
+	// for (int i = 0; i < K; ++i) this->pi_D[i] = pi[i]; // e.g., std::array<double,20> pi
+	// cout << this->Q_D << endl;
+	// Optional: log a quick sanity message
+	// std::cout << "Dayhoff matrix loaded from " << path << " (mean rate scaled to 1)\n";
+// }
 
 array <double, 4> SEM::sample_pi() {
 	return sample_dirichlet(this->alpha_pi, rng());
@@ -2301,6 +4105,8 @@ inline string SEM::em_to_json(const EM_struct& em) const {
   return os.str();
 }
 
+void SEM::ReadFasta() {}
+
 void SEM::AddDuplicatedSequencesToRootedTree(MST * M) {
 	// Store dupl seq names in uniq seq vertex
 	double t;
@@ -2310,7 +4116,7 @@ void SEM::AddDuplicatedSequencesToRootedTree(MST * M) {
 	SEM_vertex * p;
 	SEM_vertex * d;
 	SEM_vertex * h;
-	vector <unsigned char> emptySequence;	
+	vector <int> emptySequence;	
 	int v_id = this->vertexMap->size() - 1;
 	for (pair <string, vector <string> > uniq_seq_name_2_dupl_seq_name_vec : M->unique_seq_id_2_dupl_seq_ids) {
 		uniq_seq_name = uniq_seq_name_2_dupl_seq_name_vec.first;
@@ -2322,9 +4128,9 @@ void SEM::AddDuplicatedSequencesToRootedTree(MST * M) {
 		v_id += 1;
 		h = new SEM_vertex(v_id,emptySequence);
 		this->vertexMap->insert(pair<int,SEM_vertex*>(h->id,h));
-		h->name = "h_" + to_string(this->h_ind);
+		h->name = "h_" + to_string(this->node_ind);
 		this->nameToIdMap.insert(make_pair(h->name,h->id));
-		this->h_ind += 1;
+		this->node_ind += 1;
 		
 		u->RemoveParent();
 		p->RemoveChild(u);
@@ -2361,7 +4167,7 @@ void SEM::AddDuplicatedSequencesToUnrootedTree(MST * M) {
 	SEM_vertex * n;
 	SEM_vertex * d;
 	SEM_vertex * h;
-	vector <unsigned char> emptySequence;
+	vector <int> emptySequence;
 	// vector <SEM_vertex *> uniq_vertex_ptr_vec;
 	int v_id = this->vertexMap->size() - 1;
 	for (pair <string, vector <string> > uniq_seq_name_2_dupl_seq_name_vec : M->unique_seq_id_2_dupl_seq_ids) {
@@ -2374,9 +4180,9 @@ void SEM::AddDuplicatedSequencesToUnrootedTree(MST * M) {
 		v_id += 1;
 		h = new SEM_vertex(v_id,emptySequence);
 		this->vertexMap->insert(pair<int,SEM_vertex*>(h->id,h));
-		h->name = "h_" + to_string(this->h_ind);
+		h->name = "h_" + to_string(this->node_ind);
 		this->nameToIdMap.insert(make_pair(h->name,h->id));
-		this->h_ind += 1;
+		this->node_ind += 1;
 		
 		l->RemoveNeighbor(n);
 		n->RemoveNeighbor(l);
@@ -2475,7 +4281,7 @@ void SEM::SetWeightedEdgesToAddToGlobalPhylogeneticTree() {
 void SEM::SetAncestralSequencesString() {
 	vector <SEM_vertex *> verticesOfInterest;
 	int u_id; int v_id;
-	vector <unsigned char> fullSeq;
+	vector <int> fullSeq;
 	string DNAString;
 	SEM_vertex * u;	SEM_vertex * v;
 	this->ancestralSequencesString = "";
@@ -2484,7 +4290,7 @@ void SEM::SetAncestralSequencesString() {
 		u = (*this->vertexMap)[u_id];		
 		v = (*this->vertexMap)[v_id];
 		if (!u->observed and find(verticesOfInterest.begin(),verticesOfInterest.end(),u)==verticesOfInterest.end()) {
-			fullSeq = DecompressSequence(&(u->compressedSequence),&(this->sitePatternRepetitions));
+			fullSeq = this->DecompressSequence(u->DNArecoded,this->sitePatternRepetitions);
 			DNAString = EncodeAsDNA(fullSeq);	
 			this->ancestralSequencesString += ">"; 
 			this->ancestralSequencesString += u->name + "\n";
@@ -2493,7 +4299,7 @@ void SEM::SetAncestralSequencesString() {
 			
 		}		
 		if (!v->observed and find(verticesOfInterest.begin(),verticesOfInterest.end(),v)==verticesOfInterest.end()) {
-			fullSeq = DecompressSequence(&(v->compressedSequence),&(this->sitePatternRepetitions));
+			fullSeq = this->DecompressSequence(v->DNArecoded,this->sitePatternRepetitions);
 			DNAString = EncodeAsDNA(fullSeq);
 			this->ancestralSequencesString += ">"; 
 			this->ancestralSequencesString += v->name + "\n";
@@ -2557,7 +4363,7 @@ void SEM::ResetData() {
 	if(this->vertexMap->size()!=1){
         throw mt_error("vertexMap not set correctly");
     }
-	(*this->vertexMap)[-1]->compressedSequence.clear();	
+	(*this->vertexMap)[-1]->DNArecoded.clear();	
 }
 
 SEM_vertex * SEM::GetVertex(string v_name){
@@ -2663,8 +4469,42 @@ char SEM::GetDNAfromIndex(int dna_index){
 	}
 }
 
+// Dayhoff order indices (K = 20):
+// 0:A 1:R 2:N 3:D 4:C 5:Q 6:E 7:G 8:H 9:I
+// 10:L 11:K 12:M 13:F 14:P 15:S 16:T 17:W 18:Y 19:V
+int SEM::ConvertAAtoIndex(char aa) {
+    switch (std::toupper(static_cast<unsigned char>(aa))) {
+    case 'A': return 0;  // Ala
+    case 'R': return 1;  // Arg
+    case 'N': return 2;  // Asn
+    case 'D': return 3;  // Asp
+    case 'C': return 4;  // Cys
+    case 'Q': return 5;  // Gln
+    case 'E': return 6;  // Glu
+    case 'G': return 7;  // Gly
+    case 'H': return 8;  // His
+    case 'I': return 9;  // Ile
+    case 'L': return 10; // Leu
+    case 'K': return 11; // Lys
+    case 'M': return 12; // Met
+    case 'F': return 13; // Phe
+    case 'P': return 14; // Pro
+    case 'S': return 15; // Ser
+    case 'T': return 16; // Thr
+    case 'W': return 17; // Trp
+    case 'Y': return 18; // Tyr
+    case 'V': return 19; // Val
+    default:
+        // Ambiguous/unknown/stop/gap: B, Z, J, X, U, O, '*', '-',
+        // or any other symbol -> treat as missing.
+        return -1;
+    }
+}
+
+
+
 int SEM::ConvertDNAtoIndex(char dna){
-	int value = -1;
+	int value;
 	switch (dna)
 	{
 	case 'A':
@@ -2680,8 +4520,7 @@ int SEM::ConvertDNAtoIndex(char dna){
 		value = 3;
 		break;
 	default:
-		value = -1;
-        throw mt_error("DNA not valid");
+		value = -1;        
 		break;
 	}	
 	return (value);
@@ -2719,7 +4558,7 @@ void SEM::ReparameterizeGMM() {
 		c = edge.second;
 		
 		emtr::Md M_pc = c->transitionMatrix; // transition matrix of orig GMM parameters 
-		emtr::Md M_cp; 					   // transition matrix of reparameterized GMM
+		emtr::Md M_cp; 					     // transition matrix of reparameterized GMM
 		
 
 		// 1. Store M_pc
@@ -2882,7 +4721,7 @@ void SEM::ReadRootedTree(string treeFileName) {
 	vector <string> ancestorNames;
 	vector <string> nonRootVertexNames;	
 	string rootName = "";
-	vector <unsigned char> emptySequence;
+	vector <int> emptySequence;
 	v_id = 0;
 	ifstream edgeListFile(treeFileName.c_str());
 	for (string line; getline(edgeListFile, line);) {
@@ -2968,14 +4807,90 @@ bool SEM::IsTreeInCanonicalForm() {
 	return (valueToReturn);
 }
 
+// int SEM::ConvertDNAToChar(char dna) {
+// 	string dna_upper = string(1,toupper(dna));
+// 	int dna_char = 4;
+// 	if (this->mapDNAtoInteger.find(dna_upper) != this->mapDNAtoInteger.end()) {
+// 		dna_char = this->mapDNAtoInteger[dna_upper];
+// 	} else {
+// 		if (isspace(dna)) {
+// 			cout << "DNA character is a whitespace" << endl;
+// 		}
+// 		cout << "DNA character " << dna_upper << " is not in dictionary keys" << endl;
+// 	}	
+// 	return (dna_char);
+// }
+
+// void SEM::SetDNASequencesFromFile(string fileName) {
+// 	this->sequenceFileName = fileName;
+// 	vector <int> recodedSequence;
+// 	recodedSequence.clear();
+// 	unsigned int site = 0;
+//     unsigned int seq_len = 0;
+// 	int dna_char;
+// 	int num_amb = 0;
+// 	int num_non_amb = 0;
+// 	ifstream inputFile(this->sequenceFileName.c_str());
+// 	string seqName;
+// 	string seq = "";
+// 	for(string line; getline(inputFile, line );) {
+// 		if (line[0]=='>') {
+// 			if (seq != "") {
+// 				for (char const dna: seq) {
+// 					if (!isspace(dna)) {
+// 						dna_char = this->ConvertDNAtoIndex(dna);
+// 						if (dna_char > 3) {
+// 							num_amb += 1;
+// 						} else {
+// 							num_non_amb += 1;
+// 						}
+// 						recodedSequence.push_back(dna_char);					
+// 						site += 1;							
+// 						}						
+// 				}
+// 				this->AddVertex(seqName,recodedSequence);				
+// 				recodedSequence.clear();
+// 			} 
+// 			seqName = line.substr(1,line.length());
+// 			seq = "";
+// 			site = 0;			
+// 		}
+// 		else {
+// 			seq += line ;
+// 		}		
+// 	}		
+// 	for (char const dna: seq) {
+// 		if (!isspace(dna)) {
+// 			dna_char = this->ConvertDNAToChar(dna);
+// 			if (dna_char > 3) { // FIX_AMB
+// 				num_amb += 1;
+// 			} else {
+// 				num_non_amb += 1;
+// 			}
+// 			recodedSequence.push_back(dna_char);
+// 			site += 1;
+// 		}
+// 	}
+// 	if (this->IsSequenceDuplicated(recodedSequence)) {
+// 		this->AddDuplicatedSequenceName(seqName,recodedSequence);
+// 	} else {
+// 		this->AddVertex(seqName,recodedSequence);
+// 	}
+//     seq_len = recodedSequence.size();
+// 	recodedSequence.clear();
+// 	inputFile.close();
+//     cout << "Number of sequences in fasta file is " << this->vertexMap->size() << endl;
+//     cout << "Sequence length is " << seq_len << endl;
+// }
+
 void SEM::AddAllSequences(string fileName) {
-	vector <unsigned char> recodedSequence;
+	vector <int> recodedSequence;
 	ifstream inputFile(fileName.c_str());
 	string v_name;
 	string seq = "";	
 	int v_id;
 	vector <string> vertexNames;	
-	vector <vector <unsigned char>> allSequences;	
+	vector <vector <int>> allSequences;	
 	for (string line; getline(inputFile, line );) {
 		if (line[0]=='>') {
 			if (seq != "") {				
@@ -2983,7 +4898,7 @@ void SEM::AddAllSequences(string fileName) {
 					recodedSequence.push_back(mapDNAtoInteger[string(1,toupper(dna))]);					
 				}				
 				v_id = this->GetVertexId(v_name);				
-				(*this->vertexMap)[v_id]->compressedSequence = recodedSequence;				
+				(*this->vertexMap)[v_id]->DNArecoded = recodedSequence;				
 				recodedSequence.clear();
 			}
 			v_name = line.substr(1,line.length());
@@ -2999,24 +4914,27 @@ void SEM::AddAllSequences(string fileName) {
 	}
 	
 	v_id = this->GetVertexId(v_name);
-	(*this->vertexMap)[v_id]->compressedSequence = recodedSequence;
+	(*this->vertexMap)[v_id]->DNArecoded = recodedSequence;
 	
 	int numberOfSites = recodedSequence.size();	
-	this->numberOfSitePatterns = numberOfSites;
+	this->num_dna_patterns = numberOfSites;
 	this->sequenceLength = numberOfSites;
 	recodedSequence.clear();
 	
-	this->sitePatternWeights.clear();
+	this->DNAPatternWeights.clear();
 	
 	for (int i = 0; i < numberOfSites; i++) {
-		this->sitePatternWeights.push_back(1);
+		this->DNAPatternWeights.push_back(1);
 	}	
 }
 
-void SEM::ClearAncestralSequences() {
+void SEM::ResetAncestralSequences() {	
+	vector<int> gappedSequence ;
+	for (int i = 0; i < this->num_dna_patterns; i++) gappedSequence.push_back(-1);
 	for (pair <int,SEM_vertex*> idPtrPair : *this->vertexMap) {
 		if (!idPtrPair.second->observed) {
-			idPtrPair.second->compressedSequence.clear();
+			// cout << " resetting for " << idPtrPair.second->name << endl;
+			idPtrPair.second->DNAcompressed = gappedSequence;
 		}
 	}
 }
@@ -3056,11 +4974,11 @@ double SEM::GetEdgeLength(SEM_vertex * u, SEM_vertex * v) {
 double SEM::ComputeEdgeLength(SEM_vertex * u, SEM_vertex * v) {
 	double t = 0;
 	int dna_u; int dna_v; 
-	for (int site = 0; site < this->numberOfSitePatterns; site++) {
-		dna_u = u->compressedSequence[site];
-		dna_v = v->compressedSequence[site];
+	for (int site = 0; site < this->num_dna_patterns; site++) {
+		dna_u = u->DNArecoded[site];
+		dna_v = v->DNArecoded[site];
 		if (dna_u != dna_v) {
-			t += this->sitePatternWeights[site];
+			t += this->DNAPatternWeights[site];
 		}
 	}
 	t /= this->sequenceLength;	
@@ -3087,7 +5005,7 @@ void SEM::StoreEdgeListAndSeqToAdd() {
 		tie (u, v) = vertexPair;		
 		if (u->parent != u) {
 			if (v == this->externalVertex and !this->finalIterationOfSEM) {
-				this->compressedSequenceToAddToMST = u->compressedSequence;
+				this->compressedSequenceToAddToMST = u->DNArecoded;
 				this->nameOfSequenceToAddToMST = u->name;				
 			} else {
 				t = this->ComputeEdgeLength(u,v);			
@@ -3105,13 +5023,13 @@ void SEM::StoreEdgeListAndSeqToAdd() {
 		this->weightedEdgeListString += u->name + "\t" + v->name + "\t" + to_string(t) + "\n";
 		this->weightedEdgesToAddToGlobalPhylogeneticTree.push_back(make_tuple(u->name,v->name,t));
 	} else if (u == this->externalVertex) {
-		this->compressedSequenceToAddToMST = v->compressedSequence;
+		this->compressedSequenceToAddToMST = v->DNArecoded;
 		this->nameOfSequenceToAddToMST = v->name;
 	} else {
 		if (v != this->externalVertex){
             throw mt_error("v should be equal to external vertex");
         }
-		this->compressedSequenceToAddToMST = u->compressedSequence;
+		this->compressedSequenceToAddToMST = u->DNArecoded;
 		this->nameOfSequenceToAddToMST = u->name;
 	}
 //	cout << "Name of external sequence is " << this->externalVertex->name << endl;
@@ -3122,9 +5040,9 @@ void SEM::StoreEdgeListAndSeqToAdd() {
 		u = idPtrPair.second;		
 		if (u->parent != u){
 			if (u != this->externalVertex) {
-				this->sequencesToAddToGlobalPhylogeneticTree[u->name] = u->compressedSequence;
+				this->sequencesToAddToGlobalPhylogeneticTree[u->name] = u->DNArecoded;
 			} else if (this->finalIterationOfSEM) {
-				this->sequencesToAddToGlobalPhylogeneticTree[u->name] = u->compressedSequence;
+				this->sequencesToAddToGlobalPhylogeneticTree[u->name] = u->DNArecoded;
 			}
 		}		
 	}	
@@ -3133,12 +5051,13 @@ void SEM::StoreEdgeListAndSeqToAdd() {
 emtr::Md SEM::ComputeTransitionMatrixUsingAncestralStates(SEM_vertex * p, SEM_vertex * c) {	
 	emtr::Md P = emtr::Md{};			
 	int dna_p; int dna_c;
-	for (int site = 0; site < this->numberOfSitePatterns; site ++) {
-		if (p->compressedSequence[site] < 4 && c->compressedSequence[site] < 4) { // FIX_AMB
-			dna_p = p->compressedSequence[site];
-			dna_c = c->compressedSequence[site];		
-			P[dna_p][dna_c] += this->sitePatternWeights[site];	
-		}		
+	// cout << p->name << "\t" << c->name << endl;
+	for (int site = 0; site < this->num_dna_patterns; site ++) {		
+		dna_p = p->DNAcompressed[site];
+		dna_c = c->DNAcompressed[site];
+		if (dna_p > -1 and dna_c > -1) {
+			P[dna_p][dna_c] += this->DNAPatternWeights[site];
+		}
 	}
 //	cout << "Sequence of parent: " << EncodeAsDNA(p->compressedSequence) << endl;
 //	cout << "Sequence of child: " << EncodeAsDNA(c->compressedSequence) << endl;
@@ -3156,44 +5075,11 @@ emtr::Md SEM::ComputeTransitionMatrixUsingAncestralStates(SEM_vertex * p, SEM_ve
 	return P;
 }
 
+// void SEM::OpenAncestralSequencesFile() {
+// }
 
-void SEM::FitAGMModelViaHardEM() {
-	this->ClearAncestralSequences();
-	this->ComputeMPEstimateOfAncestralSequences();
-	// Iterate till convergence of logLikelihood;
-	double currentLogLikelihood = this->logLikelihood;
-	int numberOfIterations = 0;
-	int maxNumberOfIters = 10;
-	bool continueEM = 1;
-	cout << this->logLikelihood << endl;
-//	cout << "Length of compressed root sequence is " << this->root->compressedSequence.size() << endl;
-	while (continueEM and numberOfIterations < maxNumberOfIters) {
-		numberOfIterations += 1;
-		this->ComputeMLEOfRootProbability();
-		this->ComputeMLEOfTransitionMatrices();
-		this->ClearAncestralSequences();
-		this->ComputeMAPEstimateOfAncestralSequences();
-//		cout << "Length of compressed root sequence is " << this->root->compressedSequence.size() << endl;
-		if (numberOfIterations < 2 or currentLogLikelihood < this->logLikelihood or abs(currentLogLikelihood - this->logLikelihood) > 0.001){
-			continueEM = 1;
-		} else {
-			continueEM = 0;
-		}
-		currentLogLikelihood = this->logLikelihood;
-//		cout << "current logLikelihood is " << currentLogLikelihood << endl;
-	}
-}
-
-void SEM::WriteTree() {
-	this->WriteRootedTreeAsEdgeList(this->sequenceFileName + ".edges");
-	this->WriteRootedTreeInNewickFormat(this->sequenceFileName + ".newick");
-}
-
-void SEM::OpenAncestralSequencesFile() {
-}
-
-void SEM::WriteAncestralSequences() {		
-}
+// void SEM::WriteAncestralSequences() {		
+// }
 
 void SEM::SetPrefixForOutputFiles(string prefix_for_output_files_to_set){
 	this->prefix_for_output_files = prefix_for_output_files_to_set;
@@ -3357,38 +5243,6 @@ void SEM::RootTreeAlongAnEdgePickedAtRandom() {
 	this->RootTreeAlongEdge(u,v);
 }
 
-void SEM::SelectEdgeIncidentToVertexViaMLUnderGMModel(SEM_vertex * v_opt) {
-	// Add a new vertex 
-	cout << "Current log likelihood is " << this->logLikelihood << endl;
-	vector <unsigned char> sequence;
-	SEM_vertex * r = new SEM_vertex(-1,sequence);
-	this->vertexMap->insert(make_pair(-1,r));
-	SEM_vertex * v = v_opt;
-	this->root = r;
-	vector <pair <SEM_vertex *, SEM_vertex *> > edgesForRooting;
-	for (SEM_vertex * n : v->neighbors) {
-		edgesForRooting.push_back(make_pair(n,v));
-	}
-	pair <SEM_vertex *, SEM_vertex *> selectedEdge;
-	double maxLogLikelihood = this->logLikelihood; 
-	int numberOfEdgesTried = 0;
-	for (pair <SEM_vertex *, SEM_vertex *> edge : edgesForRooting) {
-		this->RootTreeAlongEdge(edge.first, edge.second);
-		this->FitAGMModelViaHardEM();
-		numberOfEdgesTried += 1;
-		if (this->logLikelihood > maxLogLikelihood or numberOfEdgesTried == 1) {
-			selectedEdge = edge;
-			maxLogLikelihood = this->logLikelihood;
-			this->StoreTransitionMatrices();
-			this->StoreRootAndRootProbability();
-			this->StoreDirectedEdgeList();
-		}
-	}
-	this->RestoreTransitionMatrices();
-	this->RestoreRootAndRootProbability();
-	this->RestoreDirectedEdgeList();
-	this->logLikelihood = maxLogLikelihood;
-}
 
 void SEM::RootTreeAlongEdge(SEM_vertex * u, SEM_vertex * v) {
 	// Remove lengths of edges incident to root if necessary
@@ -3447,34 +5301,34 @@ void SEM::InitializeTransitionMatricesAndRootProbability() {
 	vector <SEM_vertex *> verticesToVisit;
 
 	SEM_vertex * p; int numberOfPossibleStates; int pos;
-	map <SEM_vertex *, vector <unsigned char>> VU;
-	map <SEM_vertex *, unsigned char> V;
-	for (int site = 0; site < this->numberOfSitePatterns; site++) {
+	map <SEM_vertex *, vector <int>> VU;
+	map <SEM_vertex *, int> V;
+	for (int site = 0; site < this->num_dna_patterns; site++) {
 		VU.clear(); V.clear();
 		// Set VU and V for leaves;
 		for (SEM_vertex * v : this->leaves) {
-			V[v] = v->compressedSequence[site];
-			VU[v].push_back(v->compressedSequence[site]);
+			V[v] = v->DNArecoded[site];
+			VU[v].push_back(v->DNArecoded[site]);
 		}
 		// Set VU for ancestors
 		for (int v_ind = preOrderVerticesWithoutLeaves.size()-1; v_ind > -1; v_ind--) {
 			p = this->preOrderVerticesWithoutLeaves[v_ind];
-			map <unsigned char, int> dnaCount;
-			for (unsigned char dna = 0; dna < 4; dna++) {
+			map <int, int> dnaCount;
+			for (int dna = 0; dna < 4; dna++) {
 				dnaCount[dna] = 0;
 			}
 			for (SEM_vertex * c : p->children) {
-				for (unsigned char dna: VU[c]) {
+				for (int dna: VU[c]) {
 					dnaCount[dna] += 1;
 				}
 			}
 			int maxCount = 0;
-			for (pair<unsigned char, int> dnaCountPair: dnaCount) {
+			for (pair<int, int> dnaCountPair: dnaCount) {
 				if (dnaCountPair.second > maxCount) {
 					maxCount = dnaCountPair.second;
 				}
 			}			
-			for (pair<unsigned char, int> dnaCountPair: dnaCount) {
+			for (pair<int, int> dnaCountPair: dnaCount) {
 				if (dnaCountPair.second == maxCount) {
 					VU[p].push_back(dnaCountPair.first);					
 				}
@@ -3504,20 +5358,15 @@ void SEM::InitializeTransitionMatricesAndRootProbability() {
 				}				
 			}
 			// Push states to compressedSequence
-			v->compressedSequence.push_back(V[v]);
+			v->DNArecoded.push_back(V[v]);
 		}
 	}
 }
 
-void SEM::TestSEM() {
-	this->debug = 0;	
-	cout << "Testing structural EM" << endl;	
-	this->OptimizeTopologyAndParametersOfGMM();
-}
 
 void SEM::AddToExpectedCountsForEachVariable() {
 	SEM_vertex * v;
-	double siteWeight = this->sitePatternWeights[this->cliqueT->site];	
+	double siteWeight = this->DNAPatternWeights[this->cliqueT->site];	
 	// Add to counts for each unobserved vertex (C->x) where C is a clique
 	array <double, 4> marginalizedProbability;
 	vector <SEM_vertex *> vertexList;
@@ -3539,7 +5388,7 @@ void SEM::AddToExpectedCountsForEachVariable() {
 
 void SEM::AddToExpectedCountsForEachVariablePair() {
 	SEM_vertex * u; SEM_vertex * v;
-	double siteWeight = this->sitePatternWeights[this->cliqueT->site];	
+	double siteWeight = this->DNAPatternWeights[this->cliqueT->site];	
 	pair <SEM_vertex *, SEM_vertex*> vertexPair;
 	emtr::Md countMatrixPerSite;
 	for (pair<int,SEM_vertex*> idPtrPair_1 : *this->vertexMap) {
@@ -3605,7 +5454,7 @@ emtr::Md SEM::GetPosteriorProbabilityForVariablePair(SEM_vertex * u, SEM_vertex 
 }
 
 void SEM::AddToExpectedCountsForEachEdge() {
-	double siteWeight = this->sitePatternWeights[this->cliqueT->site];
+	double siteWeight = this->DNAPatternWeights[this->cliqueT->site];
 	emtr::Md countMatrixPerSite;
 	pair <SEM_vertex *, SEM_vertex *> vertexPair;
 	SEM_vertex * u; SEM_vertex * v;
@@ -3627,7 +5476,7 @@ void SEM::AddToExpectedCountsForEachEdge() {
 
 void SEM::AddToExpectedCounts() {
 	SEM_vertex * u; SEM_vertex * v;
-	double siteWeight = this->sitePatternWeights[this->cliqueT->site];	
+	double siteWeight = this->DNAPatternWeights[this->cliqueT->site];	
 	// Add to counts for each unobserved vertex (C->x) where C is a clique
 	array <double, 4> marginalizedProbability;
 	vector <SEM_vertex *> vertexList;
@@ -3675,17 +5524,20 @@ emtr::Md SEM::GetObservedCounts(SEM_vertex * u, SEM_vertex * v) {
 	emtr::Md countMatrix = emtr::Md{};
 	int dna_u; int dna_v;
 	for (int i = 0; i < this->sequenceLength; i++) {
-		dna_u = u->compressedSequence[i];
-		dna_v = v->compressedSequence[i];
-		countMatrix[dna_u][dna_v] += this->sitePatternWeights[i];
+		dna_u = u->DNArecoded[i];
+		dna_v = v->DNArecoded[i];
+		countMatrix[dna_u][dna_v] += this->DNAPatternWeights[i];
 	}
 	return (countMatrix);
 }
 
-void SEM::ComputeExpectedCountsForRootSearch() {
+void SEM::ComputeExpectedCounts() {
 //	cout << "Initializing expected counts" << endl;
+	// cout << "11a" << endl;
 	this->InitializeExpectedCountsForEachVariable();
+	// cout << "11b" << endl;
 	this->InitializeExpectedCountsForEachEdge();
+	// cout << "11c" << endl;
 //	this->ResetExpectedCounts();
 //	SEM_vertex * x; SEM_vertex * y; 
 	emtr::Md P_XY;
@@ -3696,19 +5548,28 @@ void SEM::ComputeExpectedCountsForRootSearch() {
 	}
 // Iterate over sites
 	// parallelize here if needed
-	for (int site = 0; site < this->numberOfSitePatterns; site++) {
+	for (int site = 0; site < this->num_dna_patterns; site++) {
+		// cout << "12a" << endl;
+		// cout << "computing expected counts for site " << site << endl;
 		this->cliqueT->SetSite(site);		
-		this->cliqueT->InitializePotentialAndBeliefs();		
-		this->cliqueT->CalibrateTree();
-		this->cliqueT->ComputeMarginalProbabilitesForEachEdge();
+		// cout << "12b" << endl;
+		this->cliqueT->InitializePotentialAndBeliefs();	// gap check	
+		// cout << "12c" << endl;
+		this->cliqueT->CalibrateTree();	// gap check
+		// cout << "12d" << endl;
+		this->cliqueT->ComputeMarginalProbabilitesForEachEdge(); // gap check
+		// cout << "12e" << endl;
 		this->AddToExpectedCountsForEachVariable();
+		// cout << "12f" << endl;
 		this->AddToExpectedCountsForEachEdge();		
+		// cout << "12g" << endl;
 	}
+	// cout << "11d" << endl;
 }
 
 void SEM::ComputeMAPEstimateOfAncestralSequencesUsingCliques() {
 	this->logLikelihood = 0;
-	this->ClearAncestralSequences();
+	this->ResetAncestralSequences();
 	this->ConstructCliqueTree();
 	clique * rootClique = this->cliqueT->root;
 	SEM_vertex * v;
@@ -3716,11 +5577,11 @@ void SEM::ComputeMAPEstimateOfAncestralSequencesUsingCliques() {
 	array <double, 4> posteriorProbability;
 	int maxProbState;
 	double maxProb;
-	for (int site = 0; site < this->numberOfSitePatterns; site++) {		
+	for (int site = 0; site < this->num_dna_patterns; site++) {		
 		this->cliqueT->SetSite(site);		
 		this->cliqueT->InitializePotentialAndBeliefs();		
 		this->cliqueT->CalibrateTree();
-		this->logLikelihood += rootClique->logScalingFactorForClique * this->sitePatternWeights[site];
+		this->logLikelihood += rootClique->logScalingFactorForClique * this->DNAPatternWeights[site];
 //		logLikelihood_c0 + = C_1->logScalingFactorForClique * this->sitePatternWeights[site];
 //		for (int i = 0; i < 4; i ++) {
 //			for (int j = 0; j < 4; j ++) {
@@ -3742,92 +5603,13 @@ void SEM::ComputeMAPEstimateOfAncestralSequencesUsingCliques() {
 				if(maxProbState == -1) {
                     throw mt_error("Check prob assignment");
                 }
-				v->compressedSequence.push_back(maxProbState);
+				v->DNArecoded.push_back(maxProbState);
 				verticesVisitedMap.insert(make_pair(v,v->id));
 			}
 		}
 	}	
 }
 
-
-void SEM::ComputeExpectedCountsForFullStructureSearch() {
-	bool debug = 0;
-//void SEM::ComputeExpectedCounts() {
-	if (debug) {
-		cout << "Constructing sorted list of all clique pairs" << endl;	
-	}
-	this->cliqueT->ConstructSortedListOfAllCliquePairs();
-//	cout << "Initializing expected counts" << endl;
-	if (debug) {
-		cout << "Initializing expected counts for each variable" << endl;	
-	}
-	this->InitializeExpectedCountsForEachVariable();
-	if (debug) {
-		cout << "Initializing expected counts for each variable pair" << endl;	
-	}
-	this->InitializeExpectedCountsForEachVariablePair();
-//	this->ResetExpectedCounts();
-	SEM_vertex * x; SEM_vertex * y; 
-	emtr::Md P_XY;
-	int dna_x; int dna_y;	
-	if (debug) {
-		cout << "Debug computing expected counts" << endl;
-	}
-// Iterate over sites
-	for (int site = 0; site < this->numberOfSitePatterns; site++) {				
-		if (debug) {
-			cout << "Setting site" << endl;	
-		}
-		this->cliqueT->SetSite(site);		
-		if (debug) {
-			cout << "Initializing potential and beliefs" << endl;	
-		}
-		this->cliqueT->InitializePotentialAndBeliefs();		
-		if (debug) {
-			cout << "Calibrating tree" << endl;	
-		}
-		this->cliqueT->CalibrateTree();		
-		if (debug) {
-			cout << "Computing marginal probabilities for each variable pair" << endl;	
-		}
-		this->cliqueT->ComputeMarginalProbabilitesForEachVariablePair();
-		// if (debug) {
-		// 	cout << "Number of post prob is " << this->cliqueT->marginalizedProbabilitiesForVariablePair.size() << endl; 
-		// 	for (pair < pair <SEM_vertex *, SEM_vertex *>, Md> vertexPairToMatrix : this->cliqueT->marginalizedProbabilitiesForVariablePair) {
-		// 		tie (x, y) = vertexPairToMatrix.first;
-		// 		P_XY = vertexPairToMatrix.second;		
-		// 		cout << "P(X,Y) is " << endl;
-		// 		cout << P_XY << endl;			
-		// 		dna_x = x->compressedSequence[site];
-		// 		dna_y = y->compressedSequence[site];
-		// 		cout << "dna_x is " << dna_x;
-		// 		cout << " and " << "dna_y is " << dna_y << endl;			
-		// 		cout << "P(" << x->name << "," << y->name << ") for site " << site;  
-		// 		cout << " is " << P_XY[dna_x][dna_y] << endl;
-		// 	}			
-		// }
-		this->AddToExpectedCountsForEachVariable();
-		this->AddToExpectedCountsForEachVariablePair();
-		// if (debug) {
-		// 	break;
-		// }
-	}
-	// Compare observed counts with expected counts (done)
-	if (debug) {
-		emtr::Md observedCounts;
-		emtr::Md expectedCounts;
-		for (pair <pair<SEM_vertex *, SEM_vertex *>, emtr::Md> vertexPairToCountMatrix : this->expectedCountsForVertexPair) {
-			tie (x, y) = vertexPairToCountMatrix.first;
-			expectedCounts = vertexPairToCountMatrix.second;
-			observedCounts = this->GetObservedCounts(x,y);
-			// cout << "Observed count matrix is " << endl;
-			// cout << observedCounts << endl;
-			// cout << "Expected count matrix is " << endl;
-			// cout << expectedCounts << endl;
-			// cout << "======================" << endl;
-		}
-	}
-}
 
 void SEM::ComputePosteriorProbabilitiesUsingExpectedCounts() {	
 	SEM_vertex * v;
@@ -3980,11 +5762,11 @@ void SEM::InitializeExpectedCountsForEachVariablePair() {
 			if (u->id < v->id) {
 				countMatrix = emtr::Md{};			
 				if (u->observed and v->observed) {
-					for (int site = 0; site < this->numberOfSitePatterns; site++) {
-						dna_u = u->compressedSequence[site];
-						dna_v = v->compressedSequence[site];
+					for (int site = 0; site < this->num_dna_patterns; site++) {
+						dna_u = u->DNArecoded[site];
+						dna_v = v->DNArecoded[site];
 						if (dna_u < 4 && dna_v < 4) { // FIX_AMB
-							countMatrix[dna_u][dna_v] += this->sitePatternWeights[site];
+							countMatrix[dna_u][dna_v] += this->DNAPatternWeights[site];
 						}						
 					}
 				}
@@ -4041,10 +5823,10 @@ void SEM::InitializeExpectedCounts() {
 			if (u->id < v->id) {
 				countMatrix = emtr::Md{};			
 				if (u->observed and v->observed) {
-					for (int site = 0; site < this->numberOfSitePatterns; site++) {
-						dna_u = u->compressedSequence[site];
-						dna_v = v->compressedSequence[site];
-						countMatrix[dna_u][dna_v] += this->sitePatternWeights[site];
+					for (int site = 0; site < this->num_dna_patterns; site++) {
+						dna_u = u->DNArecoded[site];
+						dna_v = v->DNArecoded[site];
+						countMatrix[dna_u][dna_v] += this->DNAPatternWeights[site];
 					}
 				}
 				this->expectedCountsForVertexPair.insert(make_pair(pair <SEM_vertex *, SEM_vertex *>(u,v), countMatrix));
@@ -4271,7 +6053,7 @@ void SEM::ComputeLogLikelihood() {
 	SEM_vertex * p;
 	SEM_vertex * c;
 	emtr::Md P;
-	for (int site = 0; site < this->numberOfSitePatterns; site++) {
+	for (int site = 0; site < this->num_dna_patterns; site++) {
 		conditionalLikelihoodMap.clear();
 		this->ResetLogScalingFactors();
 		for (pair<SEM_vertex *,SEM_vertex *> edge : this->edgesForPostOrderTreeTraversal){
@@ -4280,44 +6062,41 @@ void SEM::ComputeLogLikelihood() {
 			p->logScalingFactors += c->logScalingFactors;
 			// Initialize conditional likelihood for leaves
 			if (c->outDegree==0) {
-				for (unsigned char dna_c = 0; dna_c < 4; dna_c ++) {
-					conditionalLikelihood[dna_c] = 0;
+				if (c->DNAcompressed[site] > -1) {					
+					for (int dna_c = 0; dna_c < 4; dna_c ++) conditionalLikelihood[dna_c] = 0;
+					conditionalLikelihood[c->DNAcompressed[site]] = 1;				
+				} else {
+					// cout << "gap case for " << c->name << endl;
+					for (int dna_c = 0; dna_c < 4; dna_c ++) conditionalLikelihood[dna_c] = 1;
 				}
-				conditionalLikelihood[c->compressedSequence[site]] = 1;
 				conditionalLikelihoodMap.insert(pair <SEM_vertex *,array<double,4>>(c,conditionalLikelihood));
 			}
 			// Initialize conditional likelihood for ancestors
 			if (conditionalLikelihoodMap.find(p) == conditionalLikelihoodMap.end()) {
 				// Case 1: Ancestor is not an observed vertex
 				if (p->id > this->numberOfObservedVertices -1) {
-					for (unsigned char dna_c = 0; dna_c < 4; dna_c++){
+					for (int dna_c = 0; dna_c < 4; dna_c++){
 						conditionalLikelihood[dna_c] = 1;
 					}
 				} else {
 				// Case 2: Ancestor is an observed vertex
-					for (unsigned char dna_c = 0; dna_c < 4; dna_c ++) {
+					for (int dna_c = 0; dna_c < 4; dna_c ++) {
 						conditionalLikelihood[dna_c] = 0;
 					}
-					conditionalLikelihood[p->compressedSequence[site]] = 1;
+					conditionalLikelihood[p->DNAcompressed[site]] = 1;
 				}								
 				conditionalLikelihoodMap.insert(pair <SEM_vertex *,array<double,4>>(p,conditionalLikelihood));					
 			}			
 			if (conditionalLikelihoodMap.find(p) == conditionalLikelihoodMap.end()) {
-				for (unsigned char dna_c = 0; dna_c < 4; dna_c++) {
+				for (int dna_c = 0; dna_c < 4; dna_c++) {
 				conditionalLikelihood[dna_c] = 1;
 				}
 				conditionalLikelihoodMap.insert(pair <SEM_vertex *,array<double,4>>(p,conditionalLikelihood));
 			}
 			largestConditionalLikelihood = 0;
-			for (unsigned char dna_p = 0; dna_p < 4; dna_p++) {
+			for (int dna_p = 0; dna_p < 4; dna_p++) {
 				partialLikelihood = 0;
-				for (unsigned char dna_c = 0; dna_c < 4; dna_c++) {
-//					if (P[dna_p][dna_c]*conditionalLikelihoodMap[c][dna_c] == 0 and P[dna_p][dna_c] > 0 and conditionalLikelihoodMap[c][dna_c] > 0) {
-//						cout << "Numerical underflow in computing partial likelihood" << endl;
-//						cout << "P(y|x) is " << P[dna_p][dna_c] << endl;
-//						cout << "L(y) is " << conditionalLikelihoodMap[c][dna_c] << endl;
-//						cout << "2^-256 is " << 1.0/pow(2,256) << endl;
-//					}
+				for (int dna_c = 0; dna_c < 4; dna_c++) {
 					partialLikelihood += P[dna_p][dna_c]*conditionalLikelihoodMap[c][dna_c];
 				}
 				conditionalLikelihoodMap[p][dna_p] *= partialLikelihood;
@@ -4326,11 +6105,19 @@ void SEM::ComputeLogLikelihood() {
 				}
 			}
 			if (largestConditionalLikelihood != 0){
-				for (unsigned char dna_p = 0; dna_p < 4; dna_p++) {
+				for (int dna_p = 0; dna_p < 4; dna_p++) {
 					conditionalLikelihoodMap[p][dna_p] /= largestConditionalLikelihood;
 				}
 				p->logScalingFactors += log(largestConditionalLikelihood);
 			} else {
+				cout << site;
+				cout << " parent name " << p->name << " ";
+				cout << " child name " << c->name << " ";
+				for (int i = 0; i < 4; i ++) {
+					for (int j = 0; j < 4; j++){
+						cout << c->transitionMatrix[i][j] << endl;
+					}
+				}				
 				cout << "Largest conditional likelihood value is zero" << endl;				
 				throw mt_error("Largest conditional likelihood value is zero");
 			}					
@@ -4340,187 +6127,33 @@ void SEM::ComputeLogLikelihood() {
 			currentProb = this->rootProbability[dna]*conditionalLikelihoodMap[this->root][dna];
 			siteLikelihood += currentProb;
 		}
-//		if (site == 0) {
-//			cout << "Root probability is" << endl;
-//			for (int i = 0; i < 4; i++) {
-//				cout << this->rootProbability[i] << "\t";
-//			}
-//			cout << endl;
-//		}
-//		if (site == 0) {
-//			cout << "LogLikelihood for site 0 is " ;
-//			cout << this->root->logScalingFactors + log(siteLikelihood) << endl;
-//		}
-		this->logLikelihood += (this->root->logScalingFactors + log(siteLikelihood)) * this->sitePatternWeights[site];				
+		this->logLikelihood += (this->root->logScalingFactors + log(siteLikelihood)) * this->DNAPatternWeights[site];				
 	}
 }
 
-void SEM::OptimizeTopologyAndParametersOfGMM() {
-	double logLikelihood_current;
-	int iter = 0;		
-	bool continueIterations = 1;	
-	this->ComputeNJTree();
-	// perform tree search under ME/BME 
-	this->RootTreeAlongAnEdgePickedAtRandom();
-	// check is number of hidden vertices equals number of observed vertices -1;
-	int nL = 0;
-	int nH = 0;
-	for (pair <int,SEM_vertex *> idPtrPair : *this->vertexMap) {
-		if (idPtrPair.second->observed){
-			nL += 1;
-		} else {
-			nH += 1;
-		}
-	}
-	if (nH != nL-1) {
-        throw mt_error("Graph is not a tree");
-    }
-//		cout << "Initial estimate of ancestral sequences via MP" << endl;
-	this->ComputeMPEstimateOfAncestralSequences();
-//		cout << "Initial estimate of model parameters for fully labeled tree" << endl;
-	this->ComputeInitialEstimateOfModelParameters();
-	this->ClearAncestralSequences();
-	this->ComputeLogLikelihood();
-	cout << "Log-likelihood computed with parameters initialized using parsimony is " << this->logLikelihood << endl;
-	logLikelihood_current = this->logLikelihood;
-	while (continueIterations) {
-		iter += 1;
-// 1. Construct clique tree				
-		
-		this->ConstructCliqueTree();
-// this->WriteCliqueTreeToFile(cliqueTreeFileName);
-		// 2. Compute expected counts		
-
-		this->ComputeExpectedCountsForFullStructureSearch();
-		// Compare expected counts with actual counts
-		// 3. Compute posterior probabilities using expected counts
-		
-		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
-		// 4. Compute Chow-Liu tree
-		
-		this->ComputeChowLiuTree();
-//			this->WriteUnrootedTreeAsEdgeList(chowLiuTreeFileName);
-		// 5. Transform to ML tree s.t. each the out degree of each vertex is either zero or two.
-		
-		this->ComputeMLRootedTreeForFullStructureSearch();
-//			this->WriteRootedTreeAsEdgeList(MLRootedTreeFileName);
-		// 6. Repeat steps 1 through 6 till convergence		
-		
-		// cout << "Loglikelihood before iteration " << iter << " of structural EM is " << logLikelihood_current + this->logLikelihoodConvergenceThreshold << endl;
-		// cout << "Loglikelihood after iteration " << iter << " of structural EM is " << this->logLikelihood << endl;	
-										
-		if ((this->logLikelihood > logLikelihood_current + this->logLikelihoodConvergenceThreshold) and (iter < this->maxIter)) {
-			logLikelihood_current = this->logLikelihood;
-		} else {
-			continueIterations = 0;
-		}	
-	}
-	// Swap root and "h_root" if they are not identical
-	//	this->ComputeLogLikelihood();
-	//	cout << "Marginal loglikelihood after SEM iterations is" << this->logLikelihood << endl;
-	this->SwapRoot();	
-	// Replace following step with clique tree calibration
-	// and marginalizing clique belief		
-	this->ComputeMAPEstimateOfAncestralSequencesUsingCliques();	
-	//	cout << "Log likelihood computed using clique tree is " << this->logLikelihood << endl;
-	this->ComputeLogLikelihood();
-	//	cout << "Log likelihood computed using tree pruning algorithm is " << this->logLikelihood << endl;
-	//	cout << "Finished computing MAP estimates using cliques" << endl;
-	this->SetNeighborsBasedOnParentChildRelationships();	
-	//	cout << "Computed MAP estimate of ancestral sequences" << endl;
-	if ((this->numberOfObservedVertices - this->numberOfVerticesInSubtree) == 1) {
-		this->StoreEdgeListAndSeqToAdd();
-	}	
-}
-
-void SEM::EM_root_search_at_each_internal_vertex_started_with_parsimony(int num_repetitions) {
-	// cout << "convergence threshold for EM is " << this->logLikelihoodConvergenceThreshold << endl;
-	// (* this->logFile) << "convergence threshold for EM is " << this->logLikelihoodConvergenceThreshold << endl;
-	// cout << "maximum number of EM iterations allowed is " << this->maxIter << endl;
-	// (* this->logFile) << "maximum number of EM iterations allowed is " << this->maxIter << endl;
-	int n = this->numberOfObservedVertices;
-	int num_vertices = this->vertexMap->size();	
-	SEM_vertex * v;
-	vector <double> loglikelihoodscoresForEachRepetition;
-	ofstream loglikelihood_node_rep_file;
-	loglikelihood_node_rep_file.open(this->prefix_for_output_files + ".rooting_initial_final_rep_loglik");
-	double max_log_likelihood = -1 * pow(10,5);
-	double logLikelihood_pars;
-	double loglikelihood_ecd_first;
-	double loglikelihood_ecd_final;
-	double logLikelihood_final;
-	int iter;	
-	tuple <int,double,double,double,double> iter_parsll_edllfirst_edllfinal_llfinal;
-	vector<int> vertex_indices_to_visit;
-	
-	for (int v_ind = n; v_ind < num_vertices; v_ind++) {
-		vertex_indices_to_visit.push_back(v_ind);
-	}
-	unsigned seed = chrono::system_clock::now().time_since_epoch().count();
-    mt19937 rng(seed);
-
-    // Shuffle the vector
-	cout << "randomizing the order in which nodes will be visited" << endl;
-    shuffle(vertex_indices_to_visit.begin(), vertex_indices_to_visit.end(), rng);
-
-	for (int v_ind : vertex_indices_to_visit) {
-		v = (*this->vertexMap)[v_ind];
-		// cout << v->name << endl;
-		if(v->degree != 3) {
-            throw mt_error("Check input topology. Expects internal nodes to have degree 3");
-        }
-		loglikelihoodscoresForEachRepetition.clear();
-		for (int rep = 0; rep < num_repetitions; rep++) {					
-			iter_parsll_edllfirst_edllfinal_llfinal = this->EM_root_search_with_parsimony_rooted_at(v);			
-			iter = get<0>(iter_parsll_edllfirst_edllfinal_llfinal);
-			logLikelihood_pars = get<1>(iter_parsll_edllfirst_edllfinal_llfinal);
-			loglikelihood_ecd_first = get<2>(iter_parsll_edllfirst_edllfinal_llfinal);
-			loglikelihood_ecd_final = get<3>(iter_parsll_edllfirst_edllfinal_llfinal);
-			logLikelihood_final = get<4>(iter_parsll_edllfirst_edllfinal_llfinal);
-			loglikelihood_node_rep_file << v->name << "\t"
-										<< this->root->name << "\t"
-										<< rep +1 << "\t"
-										<< iter << "\t"
-										<< setprecision(ll_precision) << logLikelihood_pars << "\t"
-										<< setprecision(ll_precision) << loglikelihood_ecd_first << "\t"
-										<< setprecision(ll_precision) << loglikelihood_ecd_final << "\t"
-										<< setprecision(ll_precision) << logLikelihood_final << endl;
-			if (max_log_likelihood < logLikelihood_final) {
-				this->WriteProbabilities(this->prefix_for_output_files + ".probability_max_ll_pars");
-				max_log_likelihood = logLikelihood_final;
-			}
-		}
-	}
-	
-	loglikelihood_node_rep_file.close();	
-}
-
-
-
-
-vector<unsigned char> SEM::DecompressSequence(vector<unsigned char>* compressedSequence, vector<vector<int>>* sitePatternRepeats){
+vector<int> SEM::DecompressSequence(vector<int> compressedSequence, vector<vector<int>> sitePatternRepeats){
 	int totalSequenceLength = 0;
-	for (vector<int> sitePatternRepeat: *sitePatternRepeats){
+	for (vector<int> sitePatternRepeat: sitePatternRepeats){
 		totalSequenceLength += int(sitePatternRepeat.size());
 	}
-	vector <unsigned char> decompressedSequence;
+	vector <int> decompressedSequence;
 	for (int v_ind = 0; v_ind < totalSequenceLength; v_ind++){
 		decompressedSequence.push_back(char(0));
 	}
-	unsigned char dnaToAdd;
-	for (int sitePatternIndex = 0; sitePatternIndex < int(compressedSequence->size()); sitePatternIndex++){
-		dnaToAdd = (*compressedSequence)[sitePatternIndex];
-		for (int pos: (*sitePatternRepeats)[sitePatternIndex]){
+	int dnaToAdd;
+	for (int sitePatternIndex = 0; sitePatternIndex < int(compressedSequence.size()); sitePatternIndex++){
+		dnaToAdd = (compressedSequence)[sitePatternIndex];
+		for (int pos: (sitePatternRepeats)[sitePatternIndex]){
 			decompressedSequence[pos] = dnaToAdd;
 		}
 	}
 	return (decompressedSequence);	
 }
 
-string SEM::EncodeAsDNA(vector<unsigned char> sequence){
+string SEM::EncodeAsDNA(vector<int> sequence){
 	string allDNA = "AGTC";
 	string dnaSequence = "";
-	for (unsigned char s : sequence){
+	for (int s : sequence){
 		dnaSequence += allDNA[s];
 	}
 	return dnaSequence;
@@ -4538,7 +6171,13 @@ void SEM::initialize_GMM(string init_criterion) {
 	}
 }
 
-void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(int num_repetitions) {
+void SEM::EM_AA_rooted_at_each_internal_vertex_started_with_Dayhoff_store_results(int num_repetitions) {
+
+
+
+}
+
+void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(int num_repetitions) {
 	int n = this->numberOfObservedVertices;
 	int num_vertices = this->vertexMap->size();	
 		
@@ -4570,7 +6209,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results
 			this->EM_current.rep = rep + 1;			
 			auto tup = this->EM_started_with_dirichlet_rooted_at(v);
 			EM_struct EM_diri{this->EM_current};
-			this->EM_runs_diri.push_back(EM_diri);
+			this->EM_DNA_runs_diri.push_back(EM_diri);
 			const int    iter                    = std::get<0>(tup);
             const double logLikelihood_diri      = std::get<1>(tup);
             const double loglikelihood_ecd_first = std::get<2>(tup);
@@ -4634,7 +6273,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repet
     // Shuffle the vector
 	cout << "randomizing the order in which nodes will be visited" << endl;
     shuffle(vertex_indices_to_visit.begin(), vertex_indices_to_visit.end(), rng);
-    int v_ind;
+    int v_ind;	
 	for (int v_i = 0; v_i < vertex_indices_to_visit.size(); v_i++){
         v_ind = vertex_indices_to_visit[v_i];
 		v = (*this->vertexMap)[v_ind];
@@ -4673,10 +6312,11 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repet
 	// cout << "max log likelihood, precision 24, obtained using Dirichlet parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;		
 }
 
-void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results(int num_repetitions) {
+void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results(int num_repetitions) {
 	int n = this->numberOfObservedVertices;
-	int num_vertices = this->vertexMap->size();	
-		
+	cout << n << endl;
+	int num_vertices = this->vertexMap->size();
+	cout << num_vertices << endl;
 	this->max_log_likelihood_pars = -1 * pow(10,5);
 	
 	vector<int> vertex_indices_to_visit;
@@ -4688,16 +6328,20 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results
     mt19937 rng(seed);
 
     // Shuffle the vector
-	cout << "randomizing the order in which nodes will be visited" << endl;
+	int num_vertices_to_visit = vertex_indices_to_visit.size();
+	cout << "randomizing the order in which " << num_vertices_to_visit << " nodes will be visited" << endl;
     shuffle(vertex_indices_to_visit.begin(), vertex_indices_to_visit.end(), rng);
-
-    int num_vertices_to_visit = vertex_indices_to_visit.size();
-	for (int v_i = 0; v_i < vertex_indices_to_visit.size(); v_i++){
+    
+	for (int v_i = 0; v_i < vertex_indices_to_visit.size(); v_i++) {
         const int v_ind = vertex_indices_to_visit[v_i];
 		SEM_vertex * v = (*this->vertexMap)[v_ind];
-		cout << "node " << v_i+1 << " of " << num_vertices_to_visit << ":" << v->name << endl;
+		// int v_fix = this->GetVertexId("h_1");
+		// v = this->GetVertex("h_1");
+		cout << "node " << v_ind + 1 << " of " << num_vertices_to_visit << " :" << v->name << endl;
+		// cout << "here1" << endl;
+		// cout << "degree is " << v->degree << endl;	
 		if(v->degree != 3) throw mt_error("Expect internal nodes to have degree three");
-		
+		// cout << "here1" << endl;
 		for (int rep = 0; rep < num_repetitions; rep++) {
 			this->EM_current = EM_struct{};
 			this->EM_current.method = "parsimony";
@@ -4705,12 +6349,14 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results
 			this->EM_current.rep = rep + 1;
 			auto tup = this->EM_started_with_parsimony_rooted_at(v);
 			EM_struct EM_pars = this->EM_current;
-			this->EM_runs_pars.push_back(EM_pars);			
+			this->EM_DNA_runs_pars.push_back(EM_pars);			
 			const int    iter                    = std::get<0>(tup);
             const double logLikelihood_pars      = std::get<1>(tup);
             const double loglikelihood_ecd_first = std::get<2>(tup);
             const double loglikelihood_ecd_final = std::get<3>(tup);
             const double logLikelihood_final     = std::get<4>(tup);
+			// cout << "initial " << logLikelihood_pars << "iter " << iter << endl;
+			// cout << "final " << logLikelihood_final << "iter " << iter << endl;
 
 			emtr::push_result(
                 this->EMTR_results,                 // vector<tuple<string,string,int,int,double,double,double,double>>
@@ -4811,7 +6457,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repet
 }
 
 
-void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int num_repetitions) {
+void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_SSH_store_results(int num_repetitions) {
 	int n = this->numberOfObservedVertices;
 	int num_vertices = this->vertexMap->size();	
 		
@@ -4843,7 +6489,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(int n
 			this->EM_current.rep = rep + 1;
 			auto tup = this->EM_started_with_SSH_parameters_rooted_at(v);
 			EM_struct EM_ssh{this->EM_current};
-			this->EM_runs_ssh.push_back(EM_ssh);
+			this->EM_DNA_runs_ssh.push_back(EM_ssh);
 			const int    iter                    = std::get<0>(tup);
             const double logLikelihood_ssh       = std::get<1>(tup);
             const double loglikelihood_ecd_first = std::get<2>(tup);
@@ -4947,72 +6593,6 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetit
 	// (*this->logFile) << "max log likelihood obtained using SSH parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;	
 }
 
-
-void SEM::RootTreeByFittingAGMMViaEM() {
-//	cout << "10a" << endl;
-	this->RootTreeAtAVertexPickedAtRandom();	
-//	cout << "10b" << endl;
-	this->ComputeMPEstimateOfAncestralSequences();	
-//	cout << "10c" << endl;
-	this->ComputeInitialEstimateOfModelParameters();
-//	cout << "10d" << endl;
-//	string cliqueTreeFileNamePrefix = "/home/pk/Projects/EMTRasedForests/data/trees/cliqueTree_test_numberOfLeaves_16_replicate_1";
-//	string cliqueTreeFileName;
-	this->ClearAncestralSequences();
-	double logLikelihood_current;
-	int iter = 0;
-	int maxIter = 100;	
-	bool continueIterations = 1;
-	this->debug = 0;
-	bool verbose = 0;	
-	logLikelihood_current = 0;
-//	this->ComputeLogLikelihood();
-	// cout << "Initial loglikelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;
-	// (*this->logFile) << "Initial loglikelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;	
-	while (continueIterations) {
-		// t_start_time = chrono::high_resolution_clock::now();
-		iter += 1;
-		// cout << "Iteration no. " << iter << endl;
-		// (*this->logFile) << "Iteration no. " << iter << endl;
-//		cliqueTreeFileName = cliqueTreeFileNamePrefix + "_iter_" +to_string(iter);
-//		chowLiuTreeFileName = chowLiuTreeFileNamePrefix + "_iter_" +to_string(iter);
-//		MLRootedTreeFileName = MLRootedTreeFileNamePrefix + "_iter_" +to_string(iter);						
-//		1. Construct clique tree		
-		// if (verbose) {
-		// 	cout << "Construct clique tree" << endl;
-		// 	(*this->logFile) << "Iteration no. " << iter << endl;
-			
-		// }		
-		this->ConstructCliqueTree();				
-//		this->WriteCliqueTreeToFile(cliqueTreeFileName);
-//		2. Compute expected counts
-		// if (verbose) {
-		// 	cout << "Compute expected counts" << endl;
-		// }	
-		this->ComputeExpectedCountsForRootSearch();
-		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
-//		this->WriteUnrootedTreeAsEdgeList(chowLiuTreeFileName);
-		
-//		3. Optimize model parameters
-		// if (verbose) {
-		// 	cout << "Optimize model parameters given expected counts" << endl;
-		// }	
-		this->ComputeMLRootedTreeForRootSearchUnderGMM();
-//		4. Repeat steps 1 through 3 till convergence	
-		// if (verbose) {
-		// cout << "Expected loglikelihood for iteration " << iter << " is " << this->logLikelihood << endl;
-		// (*this->logFile) << "Expected loglikelihood for iteration " << iter << " is " << this->logLikelihood << endl;
-		// }	
-		if ((this->logLikelihood > logLikelihood_current and (abs(this->logLikelihood - logLikelihood_current) > this->logLikelihoodConvergenceThreshold)) or (iter < 2 and iter < maxIter)) {
-		// if ((this->logLikelihood > logLikelihood_current and (abs(this->logLikelihood - logLikelihood_current) > this->logLikelihoodConvergenceThreshold)) or iter < 2) {
-			logLikelihood_current = this->logLikelihood;
-		} else {
-			continueIterations = 0;
-		}
-	}
-	this->ComputeLogLikelihood();
-}
-
 /*
 1. Number of iterations until EM converges
 2. Initial log-likelihood with parsimony based parameters
@@ -5033,7 +6613,7 @@ tuple <int,double,double,double,double> SEM::EM_root_search_with_parsimony_roote
 	this->ComputeLogLikelihood();
 	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "10d" << endl;
-	this->ClearAncestralSequences();
+	this->ResetAncestralSequences();
 	double logLikelihood_pars;
 	double logLikelihood_exp_data_previous;
 	double logLikelihood_exp_data_first;
@@ -5064,7 +6644,7 @@ tuple <int,double,double,double,double> SEM::EM_root_search_with_parsimony_roote
 		
 		this->ConstructCliqueTree();			
 		// 2. Compute expected counts
-		this->ComputeExpectedCountsForRootSearch();
+		this->ComputeExpectedCounts();
 
 		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
 
@@ -5122,7 +6702,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_SSH_parameters_root
 	this->ComputeLogLikelihood();
 	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;	
 	// cout << "10d" << endl;
-	this->ClearAncestralSequences();
+	this->ResetAncestralSequences();
 	double logLikelihood_ssh;
 	double logLikelihood_exp_data_previous;
 	double logLikelihood_exp_data_first;
@@ -5143,7 +6723,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_SSH_parameters_root
 		iter += 1;		
 		this->ConstructCliqueTree();			
 		// 2. Compute expected counts
-		this->ComputeExpectedCountsForRootSearch();
+		this->ComputeExpectedCounts();
 
 		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
 
@@ -5202,7 +6782,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 	this->ComputeLogLikelihood();
 	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "10d" << endl;
-	this->ClearAncestralSequences();
+	this->ResetAncestralSequences();
 	double logLikelihood_diri;
 	double logLikelihood_exp_data_current;
 	double logLikelihood_exp_data_first;
@@ -5223,7 +6803,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 		iter += 1;		
 		this->ConstructCliqueTree();			
 		// 2. Compute expected counts
-		this->ComputeExpectedCountsForRootSearch();
+		this->ComputeExpectedCounts();
 
 		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
 
@@ -5271,19 +6851,25 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 5. Final log-likelihood using EM based parameters
 */
 
-tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at(SEM_vertex *v) {
-	//	cout << "10a" << endl;
+tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at(SEM_vertex *v) {	
 	// iterate over each internal node	
 	this->RootTreeAtVertex(v);
+	// cout << "10a" << endl;
+	// select sites that don't have gap
+	this->ComputeMPEstimateOfAncestralSequences(); // iterate over all sites including gaps	
 	// cout << "10b" << endl;
-	this->ComputeMPEstimateOfAncestralSequences();	
+	this->ComputeInitialEstimateOfModelParameters(); // skip sites that have gaps
 	// cout << "10c" << endl;
-	this->ComputeInitialEstimateOfModelParameters();
 	this->StoreParamsInEMCurrent("init");
-	this->ComputeLogLikelihood();	
-	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "10d" << endl;
-	this->ClearAncestralSequences();
+	// cout << this->EM_current.root_prob_init[0] << "\t" << this->EM_current.root_prob_init[1] 
+	// << "\t" << this->EM_current.root_prob_init[2] 
+	// << "\t" << this->EM_current.root_prob_init[3] << endl;
+	this->ComputeLogLikelihood(); // set conditional likelihood to 1 for all char having a gap	
+	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;
+	// cout << "10e" << endl;
+	this->ResetAncestralSequences();
+	// cout << "10f" << endl;
 	double logLikelihood_pars;
 	double logLikelihood_exp_data_current;
 	double logLikelihood_exp_data_first;
@@ -5313,11 +6899,15 @@ tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at
 			
 		// }		
 		
-		this->ConstructCliqueTree();			
+		this->ConstructCliqueTree();
+		// cout << "10g" << endl;
+					
 		// 2. Compute expected counts
-		this->ComputeExpectedCountsForRootSearch();
+		this->ComputeExpectedCounts();
+		// cout << "10h" << endl;
 
 		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
+		// cout << "10i" << endl;
 
 		
 		// 3. Optimize model parameters
@@ -5326,78 +6916,41 @@ tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at
 		// }
 		
 		this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
+		// cout << "10j" << endl;
 		
 		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
+		// cout << "10k" << endl;
 		
 		// cout << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
 		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
 		this->EM_current.ecd_ll_per_iter[iter] = this->logLikelihood;
 		if (iter == 1){
+			// cout << "10l" << endl;
 			logLikelihood_exp_data_first = this->logLikelihood;
 			logLikelihood_exp_data_current = this->logLikelihood;			
 		} else if ((this->logLikelihood > logLikelihood_exp_data_current + this->logLikelihoodConvergenceThreshold) and (iter < this->maxIter)) {
 			logLikelihood_exp_data_current = this->logLikelihood;
+			// cout << "10m" << endl;
 		} else {
 			continueIterations = 0;
 			logLikelihood_exp_data_final = logLikelihood_exp_data_current;
+			// cout << "10n" << endl;
 		}
 	}
 	this->ComputeLogLikelihood();
+	// cout << "10o" << endl;
 	this->StoreParamsInEMCurrent("final");
+	// cout << "10p" << endl;
 	this->EM_current.num_iter = iter;
 	this->EM_current.ll_final = this->logLikelihood;	
 	// cout << "log-likelihood computed by marginalization using EM parameters " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
 	// (*this->logFile) << "log-likelihood computed by marginalization using EM parameters " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// (*this->logFile) << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
-	
+	// cout << "10q" << endl;
 	return tuple<int,double,double,double,double>(iter,logLikelihood_pars,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
 }
 
-void SEM::RootTreeBySumOfExpectedLogLikelihoods() {
-	SEM_vertex * v;
-	SEM_vertex * vertexForRooting = (*this->vertexMap)[0];
-	int verticesVisited = 0;
-//	cout << "Number of edge log likelihoods = " << this->edgeLogLikelihoodsMap.size() << endl;
-//	cout << "Number of edge lengths = " << this->edgeLengths.size() << endl;
-//	cout << "Number of vertices = " << this->vertexMap->size() << endl;
-	for (pair <int, SEM_vertex *> idPtrPair : * this->vertexMap) {
-		v = idPtrPair.second;
-		if (!v->observed) {
-			verticesVisited += 1;
-//			cout << v->name << endl;
-			this->RootTreeAtVertex(v);
-			this->ComputeSumOfExpectedLogLikelihoods();			
-//			cout << this->sumOfExpectedLogLikelihoods << endl;
-			if ((this->maxSumOfExpectedLogLikelihoods < this->sumOfExpectedLogLikelihoods) or (verticesVisited < 2)){
-				this->maxSumOfExpectedLogLikelihoods = this->sumOfExpectedLogLikelihoods;
-				vertexForRooting = v;
-//				cout << "max expected log likelihood is" << endl;
-//				cout << this->maxSumOfExpectedLogLikelihoods << endl;
-			}
-		}
-	}	
-	this->RootTreeAtVertex(vertexForRooting);	
-}
-
-void SEM::RootTreeUsingSpecifiedModel(string modelForRooting) {
-	this->modelForRooting = modelForRooting;
-	if (modelForRooting == "GMM") {
-		this->RootTreeByFittingAGMMViaEM();
-	} else if (modelForRooting == "UNREST") {
-		this->RootTreeByFittingUNREST();
-	}
-}
-
-void SEM::RootTreeByFittingUNREST() {
-	// Fit using expected counts
-	SEM_vertex * v;
-	// Fit for leaf-labeled tree
-	for (pair <int, SEM_vertex * > vertElem : *this->vertexMap) {
-		v = vertElem.second;
-		this->RootTreeAtVertex(v);		
-	}		
-} 
 
 void SEM::ComputeSumOfExpectedLogLikelihoods() {
 	this->sumOfExpectedLogLikelihoods = 0;
@@ -5864,13 +7417,17 @@ array <double, 4> SEM::GetBaseComposition(SEM_vertex * v) {
 	for (int dna = 0; dna < 4; dna ++) {
 		baseCompositionArray[dna] = 0;
 	}
-	unsigned char dna_v;
-	for (int site = 0; site < this->numberOfSitePatterns; site ++){
-		dna_v = v->compressedSequence[site];
-		baseCompositionArray[dna_v] += this->sitePatternWeights[site];
+	int dna_v;
+	for (int site = 0; site < this->num_dna_patterns; site ++) {
+		dna_v = v->DNAcompressed[site];
+		if (dna_v > -1) baseCompositionArray[dna_v] += this->DNAPatternWeights[site];
+	}
+	int non_gap_sites = 0;
+	for (int dna = 0; dna < 4; dna ++) {
+		non_gap_sites += baseCompositionArray[dna_v];
 	}
 	for (int dna = 0; dna < 4; dna ++) {
-		baseCompositionArray[dna] /= sequenceLength;
+		baseCompositionArray[dna] /= float(non_gap_sites);
 	}
 	return (baseCompositionArray);
 }
@@ -5880,9 +7437,9 @@ array <double, 4> SEM::GetObservedCountsForVariable(SEM_vertex * v) {
 	for (int i = 0; i < 4; i++) {
 		observedCounts[i] = 0;
  	}
-	for (int site = 0; site < this->numberOfSitePatterns; site ++) {
-		if (v->compressedSequence[site] < 4) { // FIX_AMB
-			observedCounts[v->compressedSequence[site]] += this->sitePatternWeights[site];
+	for (int site = 0; site < this->num_dna_patterns; site ++) {
+		if (v->DNArecoded[site] < 4) { // FIX_AMB
+			observedCounts[v->DNArecoded[site]] += this->DNAPatternWeights[site];
 		}		
 	}
 	return (observedCounts);
@@ -5984,7 +7541,7 @@ void SEM::SetInitialEstimateOfModelParametersUsingSSH() {
 	}
 }
 
-void SEM::ComputeInitialEstimateOfModelParameters() {	
+void SEM::ComputeInitialEstimateOfModelParameters() {
 	bool debug = 0;
 	this->rootProbability = GetBaseComposition(this->root);	
 	this->root->rootProbability = this->rootProbability;
@@ -6002,10 +7559,10 @@ void SEM::ComputeInitialEstimateOfModelParameters() {
 		p = c->parent;
 		if (p != c) {
 			c->transitionMatrix = this->ComputeTransitionMatrixUsingAncestralStates(p,c);		
-			// if (debug) {
-			// 	cout << "Transition matrix for " << p->name << " to " << c->name << " is " << endl;
-			// 	cout << c->transitionMatrix << endl;
-			// }			
+			if (debug) {
+				cout << "Transition matrix for " << p->name << " to " << c->name << " is " << endl;
+				cout << c->transitionMatrix[2][3] << endl;
+			}			
 		}
 	}
 	if (debug) {
@@ -6022,81 +7579,68 @@ void SEM::ResetLogScalingFactors() {
 
 void SEM::ComputeMPEstimateOfAncestralSequences() {
 	SEM_vertex * p;	
-	map <SEM_vertex * , unsigned char> V;
-	map <SEM_vertex * , vector<unsigned char>> VU;					
-	map <unsigned char, int> dnaCount;
-	unsigned char pos;
-	unsigned char maxCount; unsigned char numberOfPossibleStates;
-	if (this->root->compressedSequence.size() > 0){
-		this->ClearAncestralSequences();
-	}
+	map <SEM_vertex * , int> V;
+	map <SEM_vertex * , vector<int>> VU;					
+	map <int, int> dnaCount;
+	int pos;
+	int maxCount; int numberOfPossibleStates;
+	this->ResetAncestralSequences();
 	if (this->preOrderVerticesWithoutLeaves.size() == 0) {
 		this->SetVerticesForPreOrderTraversalWithoutLeaves();
-	}	
-	//	Initialize sequences for ancestors
-//	cout << "Length of compressed sequence for leaf 0 is ";
-//	cout << this->leaves[0]->compressedSequence.size() << endl;
-//	cout << "Number of site patterns is " << this->numberOfSitePatterns << endl;
-	for (int site = 0; site < this->numberOfSitePatterns; site++) {
+	}
+		
+	for (int site = 0; site < this->num_dna_patterns; site++) {		
 		V.clear();
-		VU.clear();
-	//	Compute V and VU for leaves
-		for (SEM_vertex * c : this->leaves) {
-//			cout << c->name << endl;
-			if (c->compressedSequence[site] >= 4) {
-                throw mt_error("Check dna in compressed sequence");
-            }
-			V.insert(make_pair(c,c->compressedSequence[site]));
-//			cout << "Insert 1 successful" << endl;
-			vector <unsigned char> vectorToAdd;
-			vectorToAdd.push_back(c->compressedSequence[site]);			
-			VU.insert(make_pair(c,vectorToAdd));
-//			cout << "Insert 2 successful" << endl;
-		}
+		VU.clear();		
+	//	Compute V and VU for leaves		
+		for (SEM_vertex * c : this->leaves) {			
+			V.insert(make_pair(c,c->DNAcompressed[site]));
+			vector <int> vectorToAdd;
+			vectorToAdd.push_back(c->DNAcompressed[site]);			
+			VU.insert(make_pair(c,vectorToAdd));			
+		}		
 	//	Set VU for ancestors
 		for (SEM_vertex* c : this->preOrderVerticesWithoutLeaves) {
-			vector <unsigned char> vectorToAdd;
+			vector <int> vectorToAdd;
 			VU.insert(make_pair(c,vectorToAdd));
-		}
+		}				
 		for (int p_ind = this->preOrderVerticesWithoutLeaves.size()-1; p_ind > -1; p_ind--) {
 			p = preOrderVerticesWithoutLeaves[p_ind];			
 			dnaCount.clear();
-			for (unsigned char dna = 0; dna < 4; dna++) {
+			for (int dna = -1; dna < 4; dna++) {
 				dnaCount[dna] = 0;
 			}
 			for (SEM_vertex * c : p->children) {
-				for (unsigned char dna: VU[c]) {
+				for (int dna: VU[c]) {
 					dnaCount[dna] += 1;
 				}
 			}
 			maxCount = 0;
-			for (pair <unsigned char, int> dnaCountPair: dnaCount) {
+			for (pair <int, int> dnaCountPair: dnaCount) {
 				if (dnaCountPair.second > maxCount) {
 					maxCount = dnaCountPair.second;
 				}
 			}			
-			for (pair <unsigned char, int> dnaCountPair: dnaCount) { 
+			for (pair <int, int> dnaCountPair: dnaCount) { 
 				if (dnaCountPair.second == maxCount) {
 					VU[p].push_back(dnaCountPair.first);					
 				}
 			}			
-		}
+		}			
+		
 	// Set V for ancestors
 		for (SEM_vertex * c : preOrderVerticesWithoutLeaves) {
 			if (c->parent == c) {			
 			// Set V for root
 				if (VU[c].size()==1) {
-//					cout << "Case 1a" << endl;
 					V.insert(make_pair(c,VU[c][0]));
 				} else {
-//					cout << "Case 1b" << endl;
 					numberOfPossibleStates = VU[c].size();
 					uniform_int_distribution <int> distribution(0,numberOfPossibleStates-1);
 					pos = distribution(generator);
 					V.insert(make_pair(c,VU[c][pos]));
 				}				
 			} else {
-//				cout << "Case 2" << endl;
 				p = c->parent;
 				if (find(VU[c].begin(),VU[c].end(),V[p])==VU[c].end()) {
 					numberOfPossibleStates = VU[c].size();
@@ -6106,17 +7650,16 @@ void SEM::ComputeMPEstimateOfAncestralSequences() {
 				} else {
 					V.insert(make_pair(c,V[p]));
 				}				
-			}
-			// push states to compressedSequence	
-			c->compressedSequence.push_back(V[c]);			
-		}
-	}		
+			}				
+			c->DNAcompressed[site] = V[c];
+		}				
+	}	
 }
 
 
 void SEM::ComputeMAPEstimateOfAncestralSequences() {
-	if (this->root->compressedSequence.size() > 0) {
-		this->ClearAncestralSequences();
+	if (this->root->DNArecoded.size() > 0) {
+		this->ResetAncestralSequences();
 	}	
 	this->logLikelihood = 0;
 	double currentProbability;
@@ -6128,12 +7671,12 @@ void SEM::ComputeMAPEstimateOfAncestralSequences() {
 	double siteLikelihood;
 	double largestConditionalLikelihood = 0;
 	double currentProb;
-	unsigned char dna_ind_p; unsigned char dna_ind_c;
+	int dna_ind_p; int dna_ind_c;
 	vector <SEM_vertex *> verticesToVisit;
 	SEM_vertex * p;
 	SEM_vertex * c;
 	emtr::Md P;
-	for (int site = 0 ; site < this->numberOfSitePatterns; site++){
+	for (int site = 0 ; site < this->num_dna_patterns; site++){
 		conditionalLikelihoodMap.clear();
 		this->ResetLogScalingFactors();
 		for (pair<SEM_vertex *,SEM_vertex *> edge : this->edgesForPostOrderTreeTraversal){
@@ -6142,29 +7685,23 @@ void SEM::ComputeMAPEstimateOfAncestralSequences() {
 			p->logScalingFactors += c->logScalingFactors;				
 			// Initialize conditional likelihood for leaves
 			if (c->observed) {
-				for (unsigned char dna_c = 0; dna_c < 4; dna_c ++){
+				for (int dna_c = 0; dna_c < 4; dna_c ++){
 					conditionalLikelihood[dna_c] = 0;
 				}
-				conditionalLikelihood[c->compressedSequence[site]] = 1;
+				conditionalLikelihood[c->DNArecoded[site]] = 1;
 				conditionalLikelihoodMap.insert(pair<SEM_vertex *,array<double,4>>(c,conditionalLikelihood));
 			}
 			// Initialize conditional likelihood for ancestors
 			if (conditionalLikelihoodMap.find(p) == conditionalLikelihoodMap.end()){
-				for (unsigned char dna_c = 0; dna_c < 4; dna_c++){
+				for (int dna_c = 0; dna_c < 4; dna_c++){
 				conditionalLikelihood[dna_c] = 1;
 				}
 				conditionalLikelihoodMap.insert(pair<SEM_vertex *,array<double,4>>(p,conditionalLikelihood));
 			}
 			largestConditionalLikelihood = 0;
-			for (unsigned char dna_p = 0; dna_p < 4; dna_p++) {
+			for (int dna_p = 0; dna_p < 4; dna_p++) {
 				partialLikelihood = 0;
-				for (unsigned char dna_c = 0; dna_c < 4; dna_c++) {
-//					if (P[dna_p][dna_c]*conditionalLikelihoodMap[c][dna_c] == 0 and P[dna_p][dna_c] > 0 and conditionalLikelihoodMap[c][dna_c] > 0) {
-//						cout << "Numerical underflow in computing partial likelihood" << endl;
-//						cout << "P(y|x) is " << P[dna_p][dna_c] << endl;
-//						cout << "L(y) is " << conditionalLikelihoodMap[c][dna_c] << endl;								
-//						cout << "2^-256 is " << 1.0/pow(2,256) << endl;
-//					}
+				for (int dna_c = 0; dna_c < 4; dna_c++) {
 					partialLikelihood += P[dna_p][dna_c]*conditionalLikelihoodMap[c][dna_c];
 				}
 				conditionalLikelihoodMap[p][dna_p] *= partialLikelihood;
@@ -6173,7 +7710,7 @@ void SEM::ComputeMAPEstimateOfAncestralSequences() {
 				}
 			}
 			if (largestConditionalLikelihood != 0){
-				for (unsigned char dna_p = 0; dna_p < 4; dna_p++) {
+				for (int dna_p = 0; dna_p < 4; dna_p++) {
 					conditionalLikelihoodMap[p][dna_p] /= largestConditionalLikelihood;
 				}
 				p->logScalingFactors += log(largestConditionalLikelihood);
@@ -6194,7 +7731,7 @@ void SEM::ComputeMAPEstimateOfAncestralSequences() {
 		if (stateWithMaxProbability > 3) {
 			cout << maxProbability << "\tError in computing maximum a posterior estimate for ancestor vertex\n";
 		} else {
-			this->root->compressedSequence.push_back(stateWithMaxProbability);
+			this->root->DNArecoded.push_back(stateWithMaxProbability);
 		}
 //		Compute MAP estimate for each ancestral sequence
 		for (pair <SEM_vertex *,SEM_vertex *> edge : this->edgesForPreOrderTreeTraversal) {			
@@ -6202,7 +7739,7 @@ void SEM::ComputeMAPEstimateOfAncestralSequences() {
 			P = c->transitionMatrix;
 			if (!c->observed) {
 				maxProbability = -1; stateWithMaxProbability = 10;
-				dna_ind_p = p->compressedSequence[site];
+				dna_ind_p = p->DNArecoded[site];
 				for (dna_ind_c = 0; dna_ind_c < 4; dna_ind_c ++){ 
 					currentProbability = P[dna_ind_p][dna_ind_c];
 					currentProbability *= conditionalLikelihoodMap[c][dna_ind_c];
@@ -6214,7 +7751,7 @@ void SEM::ComputeMAPEstimateOfAncestralSequences() {
 				if (stateWithMaxProbability > 3) {
 //					cout << "Error in computing maximum a posterior estimate for ancestor vertex";
 				} else {
-					c->compressedSequence.push_back(stateWithMaxProbability);
+					c->DNArecoded.push_back(stateWithMaxProbability);
 				}
 			}
 		}		
@@ -6223,175 +7760,8 @@ void SEM::ComputeMAPEstimateOfAncestralSequences() {
 			currentProb = this->rootProbability[dna]*conditionalLikelihoodMap[this->root][dna];
 			siteLikelihood += currentProb;					
 		}
-		this->logLikelihood += (this->root->logScalingFactors + log(siteLikelihood)) * this->sitePatternWeights[site];				
+		this->logLikelihood += (this->root->logScalingFactors + log(siteLikelihood)) * this->DNAPatternWeights[site];				
 	}
-}
-
-void SEM::ComputeMAPEstimateOfAncestralSequencesUsingHardEM() {
-	if (this->root->compressedSequence.size() != (unsigned int) this->numberOfSitePatterns) {
-		this->ComputeMPEstimateOfAncestralSequences();
-	}	
-	map <SEM_vertex*,emtr::Md> transitionMatrices;	
-	map <SEM_vertex*,std::array<double,4>> conditionalLikelihoodMap;
-	std::array <double,4> conditionalLikelihood;	
-	double partialLikelihood;
-	double siteLikelihood;
-	double currentLogLikelihood = 0;
-	double previousLogLikelihood = 0;
-	double largestCondionalLikelihood = 0;
-	int iter = 0;
-	int maxIter = 10;	
-	unsigned char dna_p; unsigned char dna_c;
-	char maxProbState;
-	double rowSum;
-	double currentProb;
-	double maxProb;	
-	bool continueEM = 1;
-	vector <SEM_vertex *> verticesToVisit;	
-	SEM_vertex * p;
-	SEM_vertex * c;
-	emtr::Md P;
-//	this->SetEdgesForPostOrderTreeTraversal();
-	// Iterate till convergence of log likelihood
-		while (continueEM and iter < maxIter) {
-			iter += 1;			
-			cout << "root sequence is " << endl;
-			cout << EncodeAsDNA(this->root->compressedSequence) << endl;
-			currentLogLikelihood = 0;
-			// Estimate root probablity
-			this->ComputeMLEOfRootProbability();		
-			// Estimate transition matrices	
-//			cout << "here 1" << endl;
-			for (pair<int,SEM_vertex *> idPtrPair : *this->vertexMap) {
-				c = idPtrPair.second;
-				if (c->parent != c) {
-					p = c->parent;
-					P = emtr::Md{};
-					for (int site = 0; site < this->numberOfSitePatterns; site++) {
-						dna_p = p->compressedSequence[site];
-						dna_c = c->compressedSequence[site];
-						P[dna_p][dna_c] += this->sitePatternWeights[site];
-					}
-					for (unsigned char dna_p = 0; dna_p < 4; dna_p++) {
-						rowSum = 0;
-						for (unsigned char dna_c = 0; dna_c < 4; dna_c++) {
-							rowSum += P[dna_p][dna_c];
-						}
-						for (unsigned char dna_c = 0; dna_c < 4; dna_c++) {
-							 P[dna_p][dna_c] /= rowSum;
-						}
-					}
-					c->transitionMatrix = P;
-//					transitionMatrices.insert(pair<SEM_vertex*,Md>(c,P));
-				}
-			}
-//			cout << "here 2" << endl;
-			// Estimate ancestral sequences
-			for (pair<int,SEM_vertex *> idPtrPair : (*this->vertexMap)) {
-				c = idPtrPair.second;
-				if (c->outDegree > 0) {
-					c->compressedSequence.clear();
-				}
-			}		
-			// Iterate over sites		
-			for (int site = 0 ; site < this->numberOfSitePatterns; site++) {
-				conditionalLikelihoodMap.clear();
-				this->ResetLogScalingFactors();
-//				cout << "site is " << site << endl;
-				for (pair <SEM_vertex *,SEM_vertex *> edge : this->edgesForPostOrderTreeTraversal) {
-					tie (p, c) = edge;					
-					P = c->transitionMatrix;	
-					p->logScalingFactors += c->logScalingFactors;				
-					// Initialize conditional likelihood for leaves
-					if (c->outDegree==0) {
-						for (unsigned char dna_c = 0; dna_c < 4; dna_c ++) {
-							conditionalLikelihood[dna_c] = 0;
-						}
-						conditionalLikelihood[c->compressedSequence[site]] = 1;
-						conditionalLikelihoodMap.insert(pair <SEM_vertex *, array<double,4>>(c,conditionalLikelihood));
-					}
-					// Initialize conditional likelihood for ancestors
-					if (conditionalLikelihoodMap.find(p) == conditionalLikelihoodMap.end()) {
-						for (unsigned char dna_c = 0; dna_c < 4; dna_c++) {
-						conditionalLikelihood[dna_c] = 1;
-						}				
-						conditionalLikelihoodMap.insert(pair <SEM_vertex *,array<double,4>>(p,conditionalLikelihood));					
-					}		
-					for (unsigned char dna_p = 0; dna_p < 4; dna_p++) {
-						partialLikelihood = 0;
-						for (unsigned char dna_c = 0; dna_c < 4; dna_c++) {
-							partialLikelihood += P[dna_p][dna_c]*conditionalLikelihoodMap[c][dna_c];
-						}
-						conditionalLikelihoodMap[p][dna_p] *= partialLikelihood;
-					}
-					largestCondionalLikelihood = 0;
-					for (unsigned char dna_p = 0; dna_p < 4; dna_p++) {
-						if (conditionalLikelihoodMap[p][dna_p] > largestCondionalLikelihood) {
-							largestCondionalLikelihood = conditionalLikelihoodMap[p][dna_p];
-						}
-					}
-					if (largestCondionalLikelihood != 0) {
-						for (unsigned char dna_p = 0; dna_p < 4; dna_p++) {
-							conditionalLikelihoodMap[p][dna_p] /= largestCondionalLikelihood;
-						}
-						p->logScalingFactors += log(largestCondionalLikelihood);
-					} else {
-						cout << "Largest conditional likelihood value is zero" << endl;
-						throw mt_error("Largest conditional likelihood value is zero");                        
-					}					
-				}
-				maxProbState = -1;
-				maxProb = 0;
-				siteLikelihood = 0;
-				for (int dna = 0; dna < 4; dna++) {
-					currentProb = this->rootProbability[dna]*conditionalLikelihoodMap[this->root][dna];
-					siteLikelihood += currentProb;
-					if (currentProb > maxProb) {
-						maxProb = currentProb;
-						maxProbState = dna;		
-					}
-				}				
-				currentLogLikelihood += (this->root->logScalingFactors + log(siteLikelihood)) * this->sitePatternWeights[site];
-				if (maxProbState == -1) {
-					cout << "check state estimation" << endl;					
-				}
-				this->root->compressedSequence.push_back(maxProbState);
-				verticesToVisit.clear();			
-				for (SEM_vertex * c: this->root->children) {
-					if (c->outDegree > 0) {
-						verticesToVisit.push_back(c);
-					}
-				}				
-				for (pair<SEM_vertex *, SEM_vertex*> edge : this->edgesForPreOrderTreeTraversal) {				
-					tie (p, c) = edge;
-					if (c->outDegree > 0) {
-						P = transitionMatrices[c];
-						dna_p = p->compressedSequence[site];
-						maxProbState = -1;
-						maxProb = 0;
-						for (int dna_c = 0; dna_c < 4; dna_c++) {
-							currentProb = P[dna_p][dna_c]*conditionalLikelihoodMap[c][dna_c];
-							if (currentProb > maxProb) {
-								maxProb = currentProb;
-								maxProbState = dna_c;
-							}
-						}
-						if (maxProbState == -1) {
-							cout << "check state estimation" << endl;
-						}
-						c->compressedSequence.push_back(maxProbState);					
-					}
-				}
-			}
-			if (iter < 2 or currentLogLikelihood > previousLogLikelihood or abs(currentLogLikelihood-previousLogLikelihood) > 0.001) {
-				continueEM = 1;
-				previousLogLikelihood = currentLogLikelihood;
-			} else {
-				continueEM = 0;
-			}
-		}
-		this->ResetLogScalingFactors();
-		this->logLikelihood = currentLogLikelihood;
 }
 
 void SEM::ComputePosteriorProbabilitiesUsingMAPEstimates() {
@@ -6400,7 +7770,7 @@ void SEM::ComputePosteriorProbabilitiesUsingMAPEstimates() {
 	SEM_vertex * u;
 	SEM_vertex * v;
 	double sum;
-	unsigned char dna_u; unsigned char dna_v;	
+	int dna_u; int dna_v;	
 	for (unsigned int u_id = 0; u_id < this->vertexMap->size()-1; u_id ++) {
 		u = (*this->vertexMap)[u_id];		
 		// Posterior probability for vertex u
@@ -6409,10 +7779,10 @@ void SEM::ComputePosteriorProbabilitiesUsingMAPEstimates() {
 		for (unsigned int v_id = u_id + 1 ; v_id < this->vertexMap->size()-1; v_id ++) {			
 			v = (*this->vertexMap)[v_id];
 			P = emtr::Md{};
-			for (int site = 0; site < this->numberOfSitePatterns; site++ ) {		
-				dna_u = u->compressedSequence[site];
-				dna_v = v->compressedSequence[site];
-				P[dna_u][dna_v] += this->sitePatternWeights[site];
+			for (int site = 0; site < this->num_dna_patterns; site++ ) {		
+				dna_u = u->DNArecoded[site];
+				dna_v = v->DNArecoded[site];
+				P[dna_u][dna_v] += this->DNAPatternWeights[site];
 			}
 			sum = 0;
 			for (dna_u = 0; dna_u < 4; dna_u ++) {				
@@ -6773,20 +8143,20 @@ void SEM::SetIdsOfExternalVertices() {
 
 void SEM::SetInfoForVerticesToAddToMST(){
 	this->idAndNameAndSeqTuple.clear();	
-	vector <unsigned char> fullSeq;
+	vector <int> fullSeq;
 	SEM_vertex * v;	
 	for (int i : this->indsOfVerticesOfInterest){
 		v = (*this->vertexMap)[i];
-		fullSeq = DecompressSequence(&(v->compressedSequence),&(this->sitePatternRepetitions));
+		fullSeq = DecompressSequence(v->DNArecoded,this->sitePatternRepetitions);
 		this->idAndNameAndSeqTuple.push_back(make_tuple(v->global_id,v->name,fullSeq));
 	}	
 }
 
 void SEM::AddSitePatternWeights(vector <int> sitePatternWeightsToAdd) {
-	this->sitePatternWeights = sitePatternWeightsToAdd;
-	this->numberOfSitePatterns = this->sitePatternWeights.size();
+	this->DNAPatternWeights = sitePatternWeightsToAdd;
+	this->num_dna_patterns = this->DNAPatternWeights.size();
 	this->sequenceLength = 0;
-	for (int sitePatternWeight : this->sitePatternWeights) {
+	for (int sitePatternWeight : this->DNAPatternWeights) {
 		this->sequenceLength += sitePatternWeight;
 	}
 }
@@ -6821,9 +8191,9 @@ void SEM::AddGlobalIds(vector <int> idsToAdd) {
 	}
 }
 
-void SEM::AddSequences(vector <vector <unsigned char>> sequencesToAdd) {
+void SEM::AddSequences(vector <vector <int>> sequencesToAdd) {
 	this->numberOfObservedVertices = sequencesToAdd.size();
-	this->h_ind = this->numberOfObservedVertices;
+	this->node_ind = this->numberOfObservedVertices;
 	for (int i = 0 ; i < this->numberOfObservedVertices; i++) {
 		SEM_vertex * v = new SEM_vertex(i,sequencesToAdd[i]);
 		v->observed = 1;
@@ -6833,7 +8203,7 @@ void SEM::AddSequences(vector <vector <unsigned char>> sequencesToAdd) {
 
 void SEM::AddRootVertex() {
 	int n = this->numberOfObservedVertices;
-	vector <unsigned char> emptySequence;	
+	vector <int> emptySequence;	
 	this->root = new SEM_vertex (-1,emptySequence);
 	this->root->name = "h_root";	
 	this->root->id = ( 2 * n ) - 2;
@@ -6841,13 +8211,13 @@ void SEM::AddRootVertex() {
 	this->nameToIdMap.insert(make_pair(this->root->name,this->root->id));
 }
 
-void SEM::SetEdgesFromTopologyFile(){
+void SEM::SetEdgesFromTopologyFile() {
 	SEM_vertex * u; SEM_vertex * v;
 	vector <string> splitLine;
 	string u_name; string v_name; double t;
 	t = 0.0;
 	int num_edges = 0;
-	vector <unsigned char> emptySequence;
+	vector <int> emptySequence;
 	ifstream inputFile(this->topologyFileName.c_str());
 	for(string line; getline(inputFile, line );) {
 		num_edges++;
@@ -6857,12 +8227,12 @@ void SEM::SetEdgesFromTopologyFile(){
 		if (this->ContainsVertex(u_name)) {
 			u = (*this->vertexMap)[this->nameToIdMap[u_name]];
 		} else {
-			u = new SEM_vertex(this->h_ind,emptySequence);
+			u = new SEM_vertex(this->node_ind,emptySequence);
 			u->name = u_name;
-			u->id = this->h_ind;
+			u->id = this->node_ind;
 			this->vertexMap->insert(pair<int,SEM_vertex*>(u->id,u));
 			this->nameToIdMap.insert(make_pair(u->name,u->id));			
-			this->h_ind += 1;
+			this->node_ind += 1;
 			if(!this->ContainsVertex(u_name)){
                 throw mt_error("check why u is not in vertex map");
             }
@@ -6871,12 +8241,12 @@ void SEM::SetEdgesFromTopologyFile(){
 		if (this->ContainsVertex(v_name)) {
 			v = (*this->vertexMap)[this->nameToIdMap[v_name]];
 		} else {			
-			v = new SEM_vertex(this->h_ind,emptySequence);
+			v = new SEM_vertex(this->node_ind,emptySequence);
 			v->name = v_name;
-			v->id = this->h_ind;
+			v->id = this->node_ind;
 			this->vertexMap->insert(pair<int,SEM_vertex*>(v->id,v));
 			this->nameToIdMap.insert(make_pair(v->name,v->id));
-			this->h_ind += 1;
+			this->node_ind += 1;
 			if(!this->ContainsVertex(v_name)){
                 throw mt_error("Check why v is not in vertex map");
             }
@@ -6893,60 +8263,262 @@ void SEM::SetEdgesFromTopologyFile(){
 	cout << "number of edges in topology file is " << num_edges << endl;
 }
 
-void SEM::AddWeightedEdges(vector < tuple <string,string,double> > weightedEdgesToAdd) {
+void SEM::CompressAASequences() {			
+	this->AAPatternWeights.clear();	
+	vector <vector<int>> uniquePatterns;
+	this->gapLessAAFlag.clear();	
+	map <vector<int>,vector<int>> uniquePatternsToSitesWherePatternRepeats;	
+	for (unsigned int i = 0; i < this->leaves.size(); i++) {
+		SEM_vertex * l_ptr = this->leaves[i];
+		l_ptr->AAcompressed.clear();		
+	}
+	int numberOfSites = this->leaves[0]->AArecoded.size();
+	vector<int> sitePattern;
+	for(int site = 0; site < numberOfSites; site++) {
+		sitePattern.clear();
+		for (SEM_vertex* l_ptr: this->leaves) {
+			sitePattern.push_back(l_ptr->AArecoded[site]);}
+		if (find(uniquePatterns.begin(),uniquePatterns.end(),sitePattern)!=uniquePatterns.end()) {
+			uniquePatternsToSitesWherePatternRepeats[sitePattern].push_back(site);
+			
+		} else {
+			uniquePatterns.push_back(sitePattern);	
+			vector<int> sitePatternRepeats;
+			sitePatternRepeats.push_back(site);
+			uniquePatternsToSitesWherePatternRepeats[sitePattern] = sitePatternRepeats;						
+			for (unsigned int i = 0; i < sitePattern.size(); i++) {				
+				SEM_vertex * l_ptr = this->leaves[i];
+				l_ptr->AAcompressed.push_back(sitePattern[i]);
+			}
+		}
+	}
+	for (vector <int> sitePattern : uniquePatterns) {
+		int sitePatternWeight = uniquePatternsToSitesWherePatternRepeats[sitePattern].size();
+		this->AAPatternWeights.push_back(sitePatternWeight);
+		bool gapLessPattern = 1;
+		for (int character: sitePattern) if (character < 0) gapLessPattern = 0;
+		this->gapLessAAFlag.push_back(gapLessPattern);			
+	}	
+	this->num_aa_patterns = this->AAPatternWeights.size();
+}
+
+void SEM::CompressDNASequences() {			
+	this->DNAPatternWeights.clear();	
+	vector <vector<int>> uniquePatterns;
+	this->gapLessDNAFlag.clear();
+	map <vector<int>,vector<int>> uniquePatternsToSitesWherePatternRepeats;	
+	for (unsigned int i = 0; i < this->leaves.size(); i++) {
+		SEM_vertex * l_ptr = this->leaves[i];
+		l_ptr->DNAcompressed.clear();		
+	}
+	int numberOfSites = this->leaves[0]->DNArecoded.size();
+	vector<int> sitePattern;
+	for(int site = 0; site < numberOfSites; site++) {
+		sitePattern.clear();
+		for (SEM_vertex* l_ptr: this->leaves) {
+			sitePattern.push_back(l_ptr->DNArecoded[site]);}
+		if (find(uniquePatterns.begin(),uniquePatterns.end(),sitePattern)!=uniquePatterns.end()) {
+			uniquePatternsToSitesWherePatternRepeats[sitePattern].push_back(site);
+			
+		} else {
+			uniquePatterns.push_back(sitePattern);	
+			vector<int> sitePatternRepeats;
+			sitePatternRepeats.push_back(site);
+			uniquePatternsToSitesWherePatternRepeats[sitePattern] = sitePatternRepeats;						
+			for (unsigned int i = 0; i < sitePattern.size(); i++) {				
+				SEM_vertex * l_ptr = this->leaves[i];
+				l_ptr->DNAcompressed.push_back(sitePattern[i]);
+			}
+		}
+	}
+	for (vector <int> sitePattern : uniquePatterns) {
+		int sitePatternWeight = uniquePatternsToSitesWherePatternRepeats[sitePattern].size();
+		this->DNAPatternWeights.push_back(sitePatternWeight);
+		bool gapLessPattern = 1;
+		for (int character: sitePattern) if (character < 0) gapLessPattern = 0;
+		this->gapLessDNAFlag.push_back(gapLessPattern);
+	}	
+	this->num_dna_patterns = this->DNAPatternWeights.size();	
+}
+
+void SEM::SetDNASequencesFromFile(string sequenceFileName) {
+	this->leaves.clear();
+	this->DNAsequenceFileName = sequenceFileName;
+	vector <int> recodedSequence;
+	recodedSequence.clear();
+	unsigned int site = 0;
+    unsigned int seq_len = 0;
+	int dna_index;	
+	ifstream inputFile(sequenceFileName.c_str());
+	string seqName;
+	string seq = "";
+	SEM_vertex * u;
+	this->numberOfInputSequences = 0;
+	this->numberOfObservedVertices = 0;
+	for(string line; getline(inputFile, line );) {
+		if (line[0]=='>') {
+			if (seq != "") {
+				for (char const dna: seq) {
+					if (!isspace(dna)) {
+						dna_index = this->ConvertDNAtoIndex(dna);						
+						recodedSequence.push_back(dna_index);					
+						site += 1;							
+						}						
+				}
+				this->AddVertex(seqName,recodedSequence);
+				u = this->GetVertex(seqName);
+				this->leaves.push_back(u);
+				u->observed = 1;
+				this->numberOfInputSequences++;
+				this->numberOfObservedVertices++;								
+				recodedSequence.clear();
+			} 
+			seqName = line.substr(1,line.length());
+			seq = "";
+			site = 0;			
+		}
+		else {
+			seq += line ;
+		}		
+	}		
+	for (char const dna: seq) {
+		if (!isspace(dna)) {
+			dna_index = this->ConvertDNAtoIndex(dna);			
+			recodedSequence.push_back(dna_index);
+			site += 1;
+		}
+	}
+	this->AddVertex(seqName,recodedSequence);
+	u = this->GetVertex(seqName);
+	this->leaves.push_back(u);
+	u->observed = 1;
+	this->numberOfInputSequences++;
+	this->numberOfObservedVertices++;								
+	recodedSequence.clear();
+    seq_len = recodedSequence.size();
+	recodedSequence.clear();
+	inputFile.close(); 
+	cout << this->numberOfObservedVertices << endl;   
+}
+
+void SEM::SetAASequencesFromFile(string sequenceFileName) {
+	this->AAsequenceFileName = sequenceFileName;
+	vector <int> recodedSequence;
+	recodedSequence.clear();
+	unsigned int site = 0;
+	int aa_index;
+	ifstream inputFile(sequenceFileName.c_str());
+	string seqName;
+	string seq = "";
+	// this->numberOfInputSequences = 0;
+	// this->numberOfObservedVertices = 0;
+	for(string line; getline(inputFile, line );) {
+		if (line[0]=='>') {
+			if (seq != "") {
+				for (char const aa: seq) {
+					if (!isspace(aa)) {
+						aa_index = this->ConvertAAtoIndex(aa);
+						recodedSequence.push_back(aa_index);
+						site += 1;
+						}
+				}
+				this->SetAASequenceForVertex(seqName,recodedSequence);
+				recodedSequence.clear();
+			}
+			seqName = line.substr(1,line.length());
+			seq = "";
+			site = 0;
+		}
+		else {
+			seq += line ;
+		}
+	}
+	for (char const aa: seq) {
+		if (!isspace(aa)) {
+			aa_index = this->ConvertAAtoIndex(aa);
+			recodedSequence.push_back(aa_index);
+			site += 1;
+		}
+	}
+	this->SetAASequenceForVertex(seqName,recodedSequence);
+	cout << "completed setting AA sequences" << endl;	
+}
+
+void SEM::AddWeightedEdges(vector <tuple <string,string,double> > weightedEdgesToAdd) {
 	SEM_vertex * u; SEM_vertex * v;
 	string u_name; string v_name; double t;
-	vector <unsigned char> emptySequence;
+	vector <int> emptySequence;
+	int edge_count_h1 = 0;
 	for (tuple <string, string, double> weightedEdge : weightedEdgesToAdd) {
-		tie (u_name, v_name, t) = weightedEdge;		
-		if (this->ContainsVertex(u_name)) {
-			u = (*this->vertexMap)[this->nameToIdMap[u_name]];
-		} else {
-			if (!this->ContainsVertex(v_name)) {
-				cout << "Adding edge " << u_name << "\t" << v_name << endl;
-			}
-			if(!this->ContainsVertex(v_name)){
-                throw mt_error("Check why v is not in vertex map");
-            }
-			u = new SEM_vertex(this->h_ind,emptySequence);
-			u->name = u_name;
-			u->id = this->h_ind;
-			this->vertexMap->insert(pair<int,SEM_vertex*>(u->id,u));
-			this->nameToIdMap.insert(make_pair(u->name,u->id));			
-			this->h_ind += 1;
-			if(!this->ContainsVertex(u_name)){
-                throw mt_error("Check why u is not in vertex map");
-            }
-		}
+		tie (u_name, v_name, t) = weightedEdge;
+		if (!this->ContainsVertex(u_name)) this->AddVertex(u_name, emptySequence);
+		if (!this->ContainsVertex(v_name)) this->AddVertex(v_name, emptySequence);
+		u = this->GetVertex(u_name); v = this->GetVertex(v_name);		
 		
-		if (this->ContainsVertex(v_name)) {
-			v = (*this->vertexMap)[this->nameToIdMap[v_name]];
-		} else {
-			if (!this->ContainsVertex(u_name)) {
-				cout << "Adding edge " << u_name << "\t" << v_name << endl;
-			}
-			if(!this->ContainsVertex(u_name)){
-                throw mt_error("Check why u is not in vertex map");
-            }
-			v = new SEM_vertex(this->h_ind,emptySequence);
-			v->name = v_name;
-			v->id = this->h_ind;
-			this->vertexMap->insert(pair<int,SEM_vertex*>(v->id,v));
-			this->nameToIdMap.insert(make_pair(v->name,v->id));
-			this->h_ind += 1;
-			if(!this->ContainsVertex(v_name)){
-                throw mt_error("Check why v is not in vertex map");
-            }
-		}
 		u->AddNeighbor(v);
-		v->AddNeighbor(u);		
+		v->AddNeighbor(u);
 		if (u->id < v->id) {
-			this->edgeLengths.insert(make_pair(make_pair(u,v),t));			
+			this->edgeLengths.insert(make_pair(make_pair(u,v),t));
 		} else {
 			this->edgeLengths.insert(make_pair(make_pair(v,u),t));
 		}
 	}
 }
+
+// void SEM::AddWeightedEdges(vector < tuple <string,string,double> > weightedEdgesToAdd) {
+// 	SEM_vertex * u; SEM_vertex * v;
+// 	string u_name; string v_name; double t;
+// 	vector <int> emptySequence;
+// 	for (tuple <string, string, double> weightedEdge : weightedEdgesToAdd) {
+// 		tie (u_name, v_name, t) = weightedEdge;		
+// 		if (this->ContainsVertex(u_name)) {
+// 			u = (*this->vertexMap)[this->nameToIdMap[u_name]];
+// 		} else {
+// 			if (!this->ContainsVertex(v_name)) {
+// 				cout << "Adding edge " << u_name << "\t" << v_name << endl;
+// 			}
+// 			if(!this->ContainsVertex(v_name)){
+//                 throw mt_error("Check why v is not in vertex map");
+//             }
+// 			u = new SEM_vertex(this->h_ind,emptySequence);
+// 			u->name = u_name;
+// 			u->id = this->h_ind;
+// 			this->vertexMap->insert(pair<int,SEM_vertex*>(u->id,u));
+// 			this->nameToIdMap.insert(make_pair(u->name,u->id));			
+// 			this->h_ind += 1;
+// 			if(!this->ContainsVertex(u_name)){
+//                 throw mt_error("Check why u is not in vertex map");
+//             }
+// 		}
+		
+// 		if (this->ContainsVertex(v_name)) {
+// 			v = (*this->vertexMap)[this->nameToIdMap[v_name]];
+// 		} else {
+// 			if (!this->ContainsVertex(u_name)) {
+// 				cout << "Adding edge " << u_name << "\t" << v_name << endl;
+// 			}
+// 			if(!this->ContainsVertex(u_name)){
+//                 throw mt_error("Check why u is not in vertex map");
+//             }
+// 			v = new SEM_vertex(this->h_ind,emptySequence);
+// 			v->name = v_name;
+// 			v->id = this->h_ind;
+// 			this->vertexMap->insert(pair<int,SEM_vertex*>(v->id,v));
+// 			this->nameToIdMap.insert(make_pair(v->name,v->id));
+// 			this->h_ind += 1;
+// 			if(!this->ContainsVertex(v_name)){
+//                 throw mt_error("Check why v is not in vertex map");
+//             }
+// 		}
+// 		u->AddNeighbor(v);
+// 		v->AddNeighbor(u);		
+// 		if (u->id < v->id) {
+// 			this->edgeLengths.insert(make_pair(make_pair(u,v),t));			
+// 		} else {
+// 			this->edgeLengths.insert(make_pair(make_pair(v,u),t));
+// 		}
+// 	}
+// }
 
 void SEM::AddEdgeLogLikelihoods(vector<tuple<string,string,double>> edgeLogLikelihoodsToAdd) {
 	SEM_vertex * u; SEM_vertex * v; double edgeLogLikelihood;
@@ -6978,13 +8550,27 @@ bool SEM::ContainsVertex(string v_name) {
 	}
 }
 
+void SEM::SetAASequenceForVertex(string v_name, vector<int> aaRecoded){
+	SEM_vertex * v = this->GetVertex(v_name);
+	v->AArecoded = aaRecoded;
+}
+
+void SEM::AddVertex(string u_name, vector <int> emptySequence) {	
+	SEM_vertex * u = new SEM_vertex(this->node_ind,emptySequence);
+	u->name = u_name;
+	u->id = this->node_ind;
+	this->node_ind++;
+	this->vertexMap->insert(pair<int,SEM_vertex*>(u->id,u));
+	this->nameToIdMap.insert(make_pair(u->name,u->id));	
+}
+
 double SEM::ComputeDistance(int v_i, int v_j) {
-	vector <unsigned char> seq_i; vector <unsigned char> seq_j;	
-	seq_i = (*this->vertexMap)[v_i]->compressedSequence;
-	seq_j = (*this->vertexMap)[v_j]->compressedSequence;
+	vector <int> seq_i; vector <int> seq_j;	
+	seq_i = (*this->vertexMap)[v_i]->DNArecoded;
+	seq_j = (*this->vertexMap)[v_j]->DNArecoded;
 	double sequence_length = 0;
-	for (int site = 0; site < numberOfSitePatterns; site++) {
-		sequence_length += double(this->sitePatternWeights[site]);
+	for (int site = 0; site < num_dna_patterns; site++) {
+		sequence_length += double(this->DNAPatternWeights[site]);
 	}
 	if(sequence_length <= 0){
         throw mt_error("Check pattern detection");
@@ -6993,9 +8579,9 @@ double SEM::ComputeDistance(int v_i, int v_j) {
 	double distance;	
 	if (flag_Hamming) {
 		distance = 0;
-		for (int site = 0; site < numberOfSitePatterns; site++) {
+		for (int site = 0; site < num_dna_patterns; site++) {
 			if (seq_i[site] != seq_j[site]) {
-			distance += double(this->sitePatternWeights[site])/sequence_length;
+			distance += double(this->DNAPatternWeights[site])/sequence_length;
 			}						
 		}				
 	} else {
@@ -7005,241 +8591,14 @@ double SEM::ComputeDistance(int v_i, int v_j) {
 }
 
 
-void SEM::ComputeNJTree() {	    
-    map<pair<int,int>, double> distanceMap;
-    map<int,double> R;
-    vector<int> vertexIndsForIterating;
-    vector<unsigned char> emptySequence;
-
-    unsigned int n0 = this->numberOfObservedVertices;
-    for (unsigned int i = 0; i < n0; ++i) {
-        R[int(i)] = 0.0f;
-        vertexIndsForIterating.push_back(int(i));
-        for (unsigned int j = i + 1; j < n0; ++j) {
-            double d = this->ComputeDistance(int(i), int(j));
-            if (this->verbose) {
-                	cout << "Distance measure for "
-                          << (*this->vertexMap)[int(i)]->name << "\t"
-                          << (*this->vertexMap)[int(j)]->name << "\t"
-                          << this->distance_measure_for_NJ << "\t" << d << std::endl;
-            }
-            distanceMap[ord_pair(int(i), int(j))] = d;
-            R[int(i)] += d;
-            R[int(j)] += d;
-        }
-    }
-
-    // NJ initialization
-    const unsigned int Ninit = n0;
-    if (Ninit < 3) return;
-
-    for (unsigned int i = 0; i < Ninit; ++i) {
-        R[int(i)] /= double(max<int>(int(Ninit) - 2, 1));
-    }
-
-    int next_internal = int(Ninit);
-
-    // --- Main loop ---
-    while (R.size() > 3) {
-        double neighborDist = numeric_limits<double>::infinity();
-        int i_selected = -1, j_selected = -1;
-
-        // FIX: iterate over current vector size, not a stale n
-        for (size_t ii = 0; ii < vertexIndsForIterating.size(); ++ii) {
-            for (size_t jj = ii + 1; jj < vertexIndsForIterating.size(); ++jj) {
-                int i = vertexIndsForIterating[ii];
-                int j = vertexIndsForIterating[jj];
-                auto it = distanceMap.find(ord_pair(i,j));
-                if (it == distanceMap.end()) continue;
-                double q = it->second - R[i] - R[j];
-                if (q < neighborDist) { neighborDist = q; i_selected = i; j_selected = j; }
-            }
-        }
-
-        if (i_selected < 0 || j_selected < 0) {
-            cerr << "NJ: no selectable pair found; aborting.\n";
-            throw mt_error("NJ: no selectable pair found; aborting.\n");
-        }
-
-        // Remove the chosen leaves and add new internal node
-        vertexIndsForIterating.erase(remove(vertexIndsForIterating.begin(),
-                                                vertexIndsForIterating.end(), i_selected),
-                                                vertexIndsForIterating.end());
-        vertexIndsForIterating.erase(remove(vertexIndsForIterating.begin(),
-                                                vertexIndsForIterating.end(), j_selected),
-                                                vertexIndsForIterating.end());
-        vertexIndsForIterating.push_back(next_internal);
-
-        // Create internal vertex
-        SEM_vertex* h_ptr = new SEM_vertex(next_internal, emptySequence);
-        h_ptr->name = "h_" + to_string(this->h_ind++);
-        this->vertexMap->insert(make_pair(next_internal, h_ptr));
-
-        // Connect
-        (*this->vertexMap)[i_selected]->AddNeighbor((*this->vertexMap)[next_internal]);
-        (*this->vertexMap)[j_selected]->AddNeighbor((*this->vertexMap)[next_internal]);
-        (*this->vertexMap)[next_internal]->AddNeighbor((*this->vertexMap)[i_selected]);
-        (*this->vertexMap)[next_internal]->AddNeighbor((*this->vertexMap)[j_selected]);
-
-        // Update R and distances
-        R.erase(i_selected);
-        R.erase(j_selected);
-        R[next_internal] = 0.0f;
-
-        // New active size after merging (one fewer)
-        const int n_active = int(vertexIndsForIterating.size());
-
-        for (int kk = 0; kk < n_active - 1; ++kk) { // all except the new node at the back
-            int k = vertexIndsForIterating[kk];
-            double dik = distanceMap[ord_pair(i_selected, k)];
-            double djk = distanceMap[ord_pair(j_selected, k)];
-            double dij = distanceMap[ord_pair(i_selected, j_selected)];
-            double newDist = 0.5f * (dik + djk - dij);
-
-            // Update R[k]; note: (n_active-1) leaves excluding the new one
-            R[k] = double(R[k] * (n_active - 1) - dik - djk + newDist) / double(std::max(1, n_active - 2));
-
-            // Clean stale entries and set new distances
-            distanceMap.erase(ord_pair(k, i_selected));
-            distanceMap.erase(ord_pair(k, j_selected));
-            distanceMap[ord_pair(k, next_internal)] = newDist;
-
-            R[next_internal] += newDist;
-        }
-
-        // Average R for new node
-        R[next_internal] /= double(std::max(1, n_active - 2));
-
-        // Remove i-j entry
-        distanceMap.erase(ord_pair(i_selected, j_selected));
-
-        ++next_internal;
-    }
-
-    // Final join
-    {
-        SEM_vertex* h_ptr = new SEM_vertex(next_internal, emptySequence);
-        h_ptr->name = "h_" + to_string(this->h_ind++);
-        this->vertexMap->insert(make_pair(next_internal, h_ptr));
-        for (int v : vertexIndsForIterating) {
-            (*this->vertexMap)[v]->AddNeighbor((*this->vertexMap)[next_internal]);
-            (*this->vertexMap)[next_internal]->AddNeighbor((*this->vertexMap)[v]);
-        }
-    }
-}
-
-void SEM::ComputeNJTree_may_contain_uninitialized_values() {
-	
-	map <pair <int,int>, double> distanceMap;
-	map <int,double> R;
-	vector <int> vertexIndsForIterating;
-	vector <unsigned char> emptySequence;
-	unsigned int n = this->numberOfObservedVertices;			
-	double distance;		
-	for (unsigned int i = 0; i < n; i++) {
-		R[i] = 0.0;
-		vertexIndsForIterating.push_back(i);			
-		for (unsigned int j = i+1; j < n; j++) {	
-			distance = this->ComputeDistance(i,j);
-			if (this->verbose) {
-				cout << "Distance measure for " << (*this->vertexMap)[i]->name << "\t" << (*this->vertexMap)[j]->name << "\t"<<this->distance_measure_for_NJ << "\t" << distance << endl;
-			}			
-			distanceMap[pair<int,int>(i,j)] = distance;
-			R[i] += distance;
-			R[j] += distance;
-		}
-	}
-
-	// NJ algorithm
-	for (unsigned int i = 0; i < n; i++){R[i] /= (n-2);}
-	double neighborDist;
-	double neighborDist_current;
-	double newDist;
-	int i; int j; int k;
-	int i_selected; int j_selected;
-	int h = n;
-	
-	while (R.size() > 3) {
-		neighborDist = numeric_limits<double>::infinity();
-		i_selected = j_selected = -1;
-
-        for (unsigned int i_ind = 0; i_ind < n; i_ind++) {
-			for (unsigned int j_ind = i_ind+1; j_ind < n; j_ind++) {
-				i = vertexIndsForIterating[i_ind];
-				j = vertexIndsForIterating[j_ind];				
-				neighborDist_current = distanceMap[pair<int,int>(i,j)]-R[i]-R[j];
-
-				if (neighborDist_current < neighborDist){
-					neighborDist = neighborDist_current;
-                    i_selected = i;
-                    j_selected = j;
-				}
-			}
-		}
 
 
-		vertexIndsForIterating.erase(remove(vertexIndsForIterating.begin(),vertexIndsForIterating.end(),i_selected),vertexIndsForIterating.end());
-		vertexIndsForIterating.erase(remove(vertexIndsForIterating.begin(),vertexIndsForIterating.end(),j_selected),vertexIndsForIterating.end());		
-		vertexIndsForIterating.push_back(h);
-		SEM_vertex* h_ptr = new SEM_vertex (h,emptySequence);
-		h_ptr->name = "h_" + to_string(this->h_ind);
-		this->h_ind += 1;
-		this->vertexMap->insert(pair<int,SEM_vertex*>(h,h_ptr));
-		(*this->vertexMap)[i_selected]->AddNeighbor((*this->vertexMap)[h]);
-		(*this->vertexMap)[j_selected]->AddNeighbor((*this->vertexMap)[h]);
-		(*this->vertexMap)[h]->AddNeighbor((*this->vertexMap)[i_selected]);
-		(*this->vertexMap)[h]->AddNeighbor((*this->vertexMap)[j_selected]);
-
-        R.erase(i_selected);
-        R.erase(j_selected);
-        R[h] = 0.0;
-		n -= 1;
-		for (unsigned int k_ind = 0; k_ind < n-1; k_ind++) {
-			k = vertexIndsForIterating[k_ind];
-			if (k < i_selected) {
-				newDist = distanceMap[pair<int,int>(k,i_selected)] + distanceMap[pair<int,int>(k,j_selected)];
-                newDist -= distanceMap[pair<int,int>(i_selected,j_selected)];
-                newDist *= 0.5;
-                R[k] = double(R[k]*(n-1)-distanceMap[pair<int,int>(k,i_selected)]-distanceMap[pair<int,int>(k,j_selected)] + newDist)/double(n-2);
-                distanceMap.erase(pair<int,int>(k,i_selected));
-				distanceMap.erase(pair<int,int>(k,j_selected));               
-			} else if (j_selected < k) {
-				newDist = distanceMap[pair<int,int>(i_selected,k)] + distanceMap[pair<int,int>(j_selected,k)];
-                newDist -= distanceMap[pair<int,int>(i_selected,j_selected)];
-                newDist *= 0.5;
-                R[k] = double(R[k]*(n-1)-distanceMap[pair<int,int>(i_selected,k)]-distanceMap[pair<int,int>(j_selected,k)] + newDist)/double(n-2);
-                distanceMap.erase(pair<int,int>(i_selected,k));
-                distanceMap.erase(pair<int,int>(j_selected,k));
-			} else {
-			    newDist = distanceMap[pair<int,int>(i_selected,k)] + distanceMap[pair<int,int>(k,j_selected)];
-                newDist -= distanceMap[pair<int,int>(i_selected,j_selected)];
-                newDist *= 0.5;
-                R[k] = double(R[k]*(n-1)-distanceMap[pair<int,int>(i_selected,k)]-distanceMap[pair<int,int>(k,j_selected)] + newDist)/double(n-2);
-                distanceMap.erase(pair<int,int>(i_selected,k));
-                distanceMap.erase(pair<int,int>(k,j_selected));
-			}            
-			distanceMap[pair<int,int>(k,h)] = newDist;
-            R[h] += newDist;
-		}
-        R[h] /= double(n-2);
-		h += 1;
-        distanceMap.erase(pair<int,int>(i_selected,j_selected));
-	}
-	SEM_vertex* h_ptr = new SEM_vertex (h,emptySequence);
-	h_ptr->name = "h_" + to_string(this->h_ind);
-	this->h_ind += 1;
-	this->vertexMap->insert(pair<int,SEM_vertex*>(h,h_ptr));
-	for (int v:vertexIndsForIterating) {
-		(*this->vertexMap)[v]->AddNeighbor((*this->vertexMap)[h]);
-		(*this->vertexMap)[h]->AddNeighbor((*this->vertexMap)[v]);
-	}
-}
 
 
 ///...///...///...///...///...///...///... Constructor and Destructor for EM manager ///...///...///...///...///...///...///...///...///
 
-EMManager::EMManager(string sequenceFileNameToSet,					 
-					 string topologyFileNameToSet,
+EMManager::EMManager(string DNAsequenceFileNameToSet,				 
+					 string AAsequenceFileNameToSet,
 					 int num_repetitions,
 					 int max_iter,
 					 double conv_threshold,
@@ -7251,71 +8610,123 @@ EMManager::EMManager(string sequenceFileNameToSet,
 					 double M_a_2,
 					 double M_a_3,
 					 double M_a_4) {
-									
-		this->prefix_for_output_files = "";		        
-		this->topologyFileName = topologyFileNameToSet;
-		this->supertree_method = "mstbackbone"; // Remove
+		this->prefix_for_output_files = "";		
+		this->supertree_method = "";
         this->num_repetitions = num_repetitions;
 		this->verbose = 0;
-		this->distance_measure_for_NJ = "Hamming";
+		this->distance_measure_for_NJ = "log-det";
 		this->flag_topology = 1;
 		this->conv_thresh = conv_threshold;
 		this->max_EM_iter = max_iter;		
 		this->numberOfLargeEdgesThreshold = 100;				
 		this->SetDNAMap();
 		this->ancestralSequencesString = "";		
-		this->M = new MST(); // Remove
-        this->M->ReadPhyx(sequenceFileNameToSet); // Transfer
-		this->M->ComputeMST(); // Remove		
-		int numberOfInputSequences = (int) this->M->vertexMap->size();
-		this->M->SetNumberOfLargeEdgesThreshold(this->numberOfLargeEdgesThreshold);		
-		this->P = new SEM(1,conv_threshold,max_iter,this->verbose);
-		// set dirichlet parameters
-		// this->P->ReadPhyx();
-		// this->P->ReadFasta();
+		this->P = new SEM(conv_threshold,max_iter,this->verbose);
+		this->setDayhoffMatrixPath("/data/Dayhoff.dat");
+		// cout << "Dayhoff rate matrix path is " << this->rate_matrix_path_ << endl;
+		this->P->dayhoff_rate_matrix_file_name = this->rate_matrix_path_;
+		// this->P->SetDayhoffRateMatrix();
+		// exit(-1);
+		this->F = new FamilyJoining(DNAsequenceFileNameToSet, 0.001);
+		vector <tuple <string, string, double>> edge_vector = this->F->GetEdgeVector();
+		cout << "num of edges in FJ tree is "<< edge_vector.size() << endl;
+		// string u_name;
+		// string v_name;
+		// double length;			
+		// transform to leaf-labeled tree because it makes life easier 
+		// when working with likelihood and parsimony algorithms	
+		// vector <tuple <string, string, double>> edge_vector = this->F->GetEdgeVector();				
+		
+		this->P->SetDNASequencesFromFile(DNAsequenceFileNameToSet);		
+		this->P->AddWeightedEdges(edge_vector);		
+		this->P->logLikelihoodConvergenceThreshold = conv_threshold;
+		this->P->maxIter = max_iter;
+		this->P->SetVertexVector();
+		// cout << "total sites " << this->P->leaves[0]->DNArecoded.size() << endl;		
+		this->P->CompressDNASequences();		
+		int total_dna_sites = 0;
+		int total_gapless_dna_sites = 0;
+		int total_gapped_dna_sites = 0;
+		for (int i = 0; i < this->P->num_dna_patterns; i++) {
+			total_dna_sites += this->P->DNAPatternWeights[i];
+			if (this->P->gapLessDNAFlag[i]) {
+				total_gapless_dna_sites += this->P->DNAPatternWeights[i];
+			} else {
+				total_gapped_dna_sites += this->P->DNAPatternWeights[i];				
+			}
+		}
+		cout << " number of dna sites is " << total_dna_sites << endl;
+		cout << " number of gapless DNA sites is " << total_gapless_dna_sites << endl;
+		cout << " number of gapped DNA sites is " << total_gapped_dna_sites << endl;
+		
+		this->P->SetAASequencesFromFile(AAsequenceFileNameToSet);
+		this->P->CompressAASequences();
+		
+		int total_aa_sites = 0;
+		int total_gapless_aa_sites = 0;
+		int total_gapped_aa_sites = 0;
+		for (int i = 0; i < this->P->num_aa_patterns; i++) {
+			total_aa_sites += this->P->AAPatternWeights[i];
+			if (this->P->gapLessDNAFlag[i]) {
+				total_gapless_aa_sites += this->P->AAPatternWeights[i];
+			} else {
+				total_gapped_aa_sites += this->P->AAPatternWeights[i];				
+			}
+		}
+
+		cout << " number of AA sites is " << total_aa_sites << endl;
+		cout << " number of gapless AA sites is " << total_gapless_aa_sites << endl;
+		cout << " number of gapped AA sites is " << total_gapped_aa_sites << endl;
+		
 		this->P->set_alpha_PI(pi_a_1, pi_a_2, pi_a_3, pi_a_4);
 		this->P->set_alpha_M_row(M_a_1, M_a_2, M_a_3, M_a_4);
-		
-		this->P->numberOfObservedVertices = numberOfInputSequences;
-		this->P->logLikelihoodConvergenceThreshold = conv_threshold;
-		this->P->maxIter = max_iter;		
-		this->EMgivenInputTopology();
-		this->P->SetVertexVector();
-        this->P->SetPrefixForOutputFiles(this->prefix_for_output_files);
-		cout << "number of repetitions is set to " << this->num_repetitions << endl;
     }
 
-EMManager::~EMManager(){
-		delete this->P;
-		delete this->M;	
+EMManager::~EMManager() {
+		delete this->F;	
+		delete this->P;		
 	}
 
-void EMManager::EM_main() {	
-	this->P->max_log_likelihood_best = -1 * pow(10,10);
-	cout << "Starting EM with initial parameters set using parsimony" << endl;	
-	this->P->EM_rooted_at_each_internal_vertex_started_with_parsimony_store_results(this->num_repetitions);
-	for (EM_struct EM_pars: this->P->EM_runs_pars) {
-		const string string_EM_pars = string("[EM_AllInfo]{\"parsimony\":") + this->P->em_to_json(EM_pars) + "}";
-		cout << string_EM_pars << endl;
-	}	
-	
-	cout << "Starting EM with initial parameters sampled from Dirichlet distribution" << endl;
-	this->P->EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(this->num_repetitions);
-	for (EM_struct EM_diri: this->P->EM_runs_diri) {
-		const string string_EM_diri = string("[EM_AllInfo]{\"dirichlet\":") + this->P->em_to_json(EM_diri) + "}";
-		cout << string_EM_diri << endl;
+void EMManager::EM_main() {
+	this->P->ComputeMLDistances();
+	// cout << "Starting EM AA with initial parameters sampled from Dirichlet distribution" << endl;
+	// for (EM_struct EM_diri_AA: this->P->EM_DNA_runs_diri) {
+	// 	const string string_EM_diri_AA = string("[EM_AllInfo]{\"dirichlet_AA\":") + this->P->em_to_json(EM_diri_AA) + "}";
+	// 	cout << string_EM_diri_AA << endl;
+	// }
+
+	if (false) {
+		this->P->max_log_likelihood_best = -1 * pow(10,10);
+		cout << "Starting EM DNA with initial parameters set using parsimony" << endl;	
+		this->P->EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results(this->num_repetitions);
+		for (EM_struct EM_pars: this->P->EM_DNA_runs_pars) {
+			const string string_EM_pars = string("[EM_AllInfo]{\"parsimony\":") + this->P->em_to_json(EM_pars) + "}";
+			cout << string_EM_pars << endl;
+		}
+		
+		cout << "Starting EM DNA with initial parameters sampled from Dirichlet distribution" << endl;
+		this->P->EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(this->num_repetitions);
+		for (EM_struct EM_diri: this->P->EM_DNA_runs_diri) {
+			const string string_EM_diri = string("[EM_AllInfo]{\"dirichlet\":") + this->P->em_to_json(EM_diri) + "}";
+			cout << string_EM_diri << endl;
+		}
+		
+		this->P->RestoreBestProbability();
+		this->P->ReparameterizeGMM();
+		cout << "Starting EM DNA with initial parameters set using SSH" << endl;
+		this->P->EM_DNA_rooted_at_each_internal_vertex_started_with_SSH_store_results(this->num_repetitions);
+		for (EM_struct EM_ssh: this->P->EM_DNA_runs_ssh) {
+			const string string_EM_ssh = string("[EM_AllInfo]{\"ssh\":") + this->P->em_to_json(EM_ssh) + "}";
+			cout << string_EM_ssh << endl;
+		}	
+		cout << "transmitting EMTR ll change results" << endl;
+		emtr::flush_rows_json(this->P->EMTR_results);
 	}
-	
-	this->P->RestoreBestProbability();
-	this->P->ReparameterizeGMM();
-	cout << "Starting EM with initial parameters set using SSH" << endl;
-	this->P->EM_rooted_at_each_internal_vertex_started_with_SSH_store_results(this->num_repetitions);
-	for (EM_struct EM_ssh: this->P->EM_runs_ssh) {
-		const string string_EM_ssh = string("[EM_AllInfo]{\"ssh\":") + this->P->em_to_json(EM_ssh) + "}";
-		cout << string_EM_ssh << endl;
-	}	
-	cout << "transmitting EMTR ll change results" << endl;
-	emtr::flush_rows_json(this->P->EMTR_results);
+}
+
+
+void EMManager::setDayhoffMatrixPath(const std::string& path) {
+  this->rate_matrix_path_ = path;  
 }
 
 void EMManager::EMparsimony() {
@@ -7360,674 +8771,31 @@ void EMManager::SetDNAMap() {
 	this->mapDNAtoInteger["T"] = 3;
 }
 
-void EMManager::EMTRackboneOnlyLocalPhylo() {
-	vector <string> names;
-	vector <vector <unsigned char> > sequences;
-	vector <int> sitePatternWeights;
-	vector <vector <int> > sitePatternRepetitions;	
-	vector <int> idsOfVerticesToRemove;
-	vector <int> idsOfVerticesToKeep;
-	vector <int> idsOfExternalVertices;
-	vector <int> idsOfVerticesForSEM;
-	vector <tuple <int, string, vector <unsigned char>>> idAndNameAndSeqTupleForVerticesToAdd;	
-	//----##############################################################---//
-	//	1.	Initialize the global phylogenetic tree P as the empty graph   //
-	//----##############################################################---//
-	// cout << "Starting MST-backbone" << endl;
-	// cout << "1.	Initialize the global phylogenetic tree P as the empty graph" << endl;
-	int numberOfInputSequences = (int) this->M->vertexMap->size();		
-	current_time = chrono::high_resolution_clock::now();
-	timeTakenToComputeEdgeAndVertexLogLikelihoods = chrono::duration<double>(current_time-current_time);	
+void EMManager::EMgivenInputTopology() {
+	// vector <string> names;
+	// vector <vector <int> > sequences;
+	// vector <int> sitePatternWeights;
+	// vector <vector <int> > sitePatternRepetitions;
+	// vector <int> idsOfVerticesForSEM;
 	
-	int largestIdOfVertexInMST = numberOfInputSequences;
-	
-	bool computeLocalPhylogeneticTree = 1;
-	bool numberOfNonSingletonComponentsIsGreaterThanZero = 0;	
-	
-	while (computeLocalPhylogeneticTree) {
-		// cout << "Number of vertices in MST is " << this->M->vertexMap->size() << endl;
-		// this->emt_logFile << "Number of vertices in MST is " << this->M->vertexMap->size() << endl;
-		// cout << "Max vertex degree in MST is " << this->M->maxDegree << endl;
-		//----####################################################################---//
-		//	2.	Compute the size of the smallest subtree ts = (Vs,Es) of M s.t.		 //
-		//		|Vs| > s. Check if |Vm\Vs| > s.								   		 //
-		// 		If yes then go to step 3 else go to step 9					   		 //
-		// 		Bootstrapped alignments may contain zero-weight edges		   		 //
-		//      If so then replace |Vs| with |{non-zero weighted edges in Es}| 		 //
-		//      Additionally replace |Vm\Vs| with |{non-zero weighted edges in Es}|  //
-		//----####################################################################---//				
-		computeLocalPhylogeneticTree = this->M->ShouldIComputeALocalPhylogeneticTree();
-		// cout << "2. Checking if local phylogenetic tree should be computed" << endl;
-		if (computeLocalPhylogeneticTree) {
-			//----####################################################################---//
-			//	3.	Extract vertices inducing subtree (Vs), and external vertices (Ve)	 //
-			//----####################################################################---//				
-			// cout << "3. Extract vertices inducing subtree (Vs), and external vertices (Ve)" << endl;
-			this->M->SetIdsOfExternalVertices();
-			idsOfExternalVertices = this->M->idsOfExternalVertices;
-			idsOfVerticesForSEM = this->M->subtree_v_ptr->idsOfVerticesInSubtree;
-			this->numberOfVerticesInSubtree = this->M->subtree_v_ptr->idsOfVerticesInSubtree.size();
-			for (int id: idsOfExternalVertices) {
-				idsOfVerticesForSEM.push_back(id);
-			}
-			tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);
-			//----########################################################---//
-			//	4.	Compute local phylogeny t over (Vs U Ve) via SEM      	 //
-			//----########################################################---//
-			// cout << "4.	Compute local phylogeny t over (Vs U Ve) via SEM" << endl;			
-			this->p = new SEM(largestIdOfVertexInMST,this->conv_thresh,this->max_EM_iter,this->verbose);
-			this->p->AddSequences(sequences);
-			this->p->SetNumberOfVerticesInSubtree(this->numberOfVerticesInSubtree);
-			this->p->SetNumberOfInputSequences(numberOfInputSequences);
-			this->p->AddRootVertex();
-			this->p->AddNames(names);
-			this->p->AddGlobalIds(idsOfVerticesForSEM);
-			this->p->AddSitePatternWeights(sitePatternWeights);
-			this->p->AddSitePatternRepeats(sitePatternRepetitions);			
-			this->p->OptimizeTopologyAndParametersOfGMM();			
-			// timeTakenToComputeUnrootedPhylogeny += chrono::duration_cast<chrono::seconds>(t_end_time - t_start_time);
-			//----##################################################################---//	
-			//  5.	Check if # of non-singleton components of forest f in p that       //
-			//		is induced by Vs is greater than zero.							   //
-			//		i.e., Does local phylogeny contain vertices/edges of interest?	   //
-			//----##################################################################---//
-			this->p->SelectIndsOfVerticesOfInterestAndEdgesOfInterest();
-			numberOfNonSingletonComponentsIsGreaterThanZero = this->p->IsNumberOfNonSingletonComponentsGreaterThanZero();			
-			// cout << "5. Checking if there are any vertices of interest" << endl;
-			if (!numberOfNonSingletonComponentsIsGreaterThanZero) {
-				//----####################################################---//	
-				//  6.	If no then double subtree size and go to step 2 	 //
-				//		else reset subtree size and go to to step 7		     //
-				//----####################################################---//		
-				this->M->doubleSubtreeSizeThreshold();
-				// cout << "6. Doubling subtree size" << endl;
-			} else {
-				this->M->ResetSubtreeSizeThreshold();		
-				//----################################---//
-				//  7.	Add vertices/edges in f to P     //
-				//----################################---//
-				// cout << "7. Adding vertices/edges in f to P" << endl;
-				this->p->RenameHiddenVerticesInEdgesOfInterestAndSetIdsOfVerticesOfInterest();
-				this->p->SetWeightedEdgesToAddToGlobalPhylogeneticTree();				
-				//this->P->AddWeightedEdges(this->p->weightedEdgesToAddToGlobalPhylogeneticTree);
-				this->p->SetAncestralSequencesString();
-				this->ancestralSequencesString += this->p->ancestralSequencesString;				
-				t_start_time = chrono::high_resolution_clock::now();
-				this->p->SetEdgeAndVertexLogLikelihoods();				
-				// this->P->AddVertexLogLikelihoods(this->p->vertexLogLikelihoodsMapToAddToGlobalPhylogeneticTree);
-				// this->P->AddEdgeLogLikelihoods(this->p->edgeLogLikelihoodsToAddToGlobalPhylogeneticTree);
-				t_end_time = chrono::high_resolution_clock::now();
-				timeTakenToComputeEdgeAndVertexLogLikelihoods += t_end_time - t_start_time;
-				// Add vertex logLikelihoods
-				// Add edge logLikelihoods
-				largestIdOfVertexInMST = this->p->largestIdOfVertexInMST;
-				//----##############################---//
-				//  8.	Update M and go to step 1	   //
-				//----##############################---//
-				// cout << "8. Updating MST" << endl;
-				this->p->SetInfoForVerticesToAddToMST();				
-				this->M->UpdateMSTWithMultipleExternalVertices(p->idsOfVerticesToKeepInMST, p->idsOfVerticesToRemove, p->idAndNameAndSeqTuple, idsOfExternalVertices);								
-				delete this->p;
-			}			
-			computeLocalPhylogeneticTree = this->M->ShouldIComputeALocalPhylogeneticTree();
-		}		
-		// cout << "CPU time used for computing local phylogeny is " << chrono::duration<double>(t_end_time-t_start_time).count() << " second(s)\n";
-		// this->emt_logFile << "CPU time used for computing local phylogeny is " << chrono::duration<double>(t_end_time-t_start_time).count() << " second(s)\n";			
-	}	
-	//----########################################################---//
-	//	9.	Compute phylogenetic tree p over vertices in M, and      //
-	//		add vertices/edges in p to P							 //
-	//----########################################################---//
-	cout << "Computing phylogenetic tree over all vertices in MST" << endl;
-	this->M->UpdateMaxDegree();
-	cout << "Max vertex degree in MST is " << this->M->maxDegree << endl;
-	idsOfVerticesForSEM.clear();
-	for (pair <int, MST_vertex *> idPtrPair: * this->M->vertexMap) {
-		idsOfVerticesForSEM.push_back(idPtrPair.first);
-	}
-	cout << "Number of vertices in MST is " << idsOfVerticesForSEM.size() << endl;
-	cout << "Number of edges in MST is " << this->M->edgeWeightsMap.size() << endl;
-	tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);
-	this->numberOfVerticesInSubtree = sequences.size();
-	this->p = new SEM(largestIdOfVertexInMST,this->conv_thresh,this->max_EM_iter,this->verbose);
-	this->p->SetFlagForFinalIterationOfSEM();
-	this->p->AddSequences(sequences);
-	this->p->SetNumberOfVerticesInSubtree(this->numberOfVerticesInSubtree);
-	this->p->SetNumberOfInputSequences(numberOfInputSequences);
-	this->p->AddRootVertex();
-	this->p->AddNames(names);
-	this->p->AddGlobalIds(idsOfVerticesForSEM);
-	this->p->AddSitePatternWeights(sitePatternWeights);
-	this->p->AddSitePatternRepeats(sitePatternRepetitions);	
-	this->p->OptimizeTopologyAndParametersOfGMM();			
-	this->p->SelectIndsOfVerticesOfInterestAndEdgesOfInterest();
-	this->p->RenameHiddenVerticesInEdgesOfInterestAndSetIdsOfVerticesOfInterest();
-	this->p->SetWeightedEdgesToAddToGlobalPhylogeneticTree();
-	this->p->SetAncestralSequencesString();
-	this->ancestralSequencesString += this->p->ancestralSequencesString;
-	this->p->WriteAncestralSequences();	
-	t_start_time = chrono::high_resolution_clock::now();
-	this->p->SetEdgeAndVertexLogLikelihoods();
-	t_end_time = chrono::high_resolution_clock::now();
-	timeTakenToComputeEdgeAndVertexLogLikelihoods += t_end_time - t_start_time;
-	delete this->p;
-	// this->emt_logFile << "CPU time used for computing local phylogeny is " << chrono::duration<double>(t_end_time-t_start_time).count() << " second(s)\n";
-}
-
-
-void EMManager::EMTRackbone_k2020_preprint() {
-	vector <string> names;
-	vector <vector <unsigned char> > sequences;
-	vector <int> sitePatternWeights;
-	vector <vector <int> > sitePatternRepetitions;	
-	vector <int> idsOfVerticesToRemove;
-	vector <int> idsOfVerticesToKeep;
-	vector <int> idsOfExternalVertices;
-	vector <int> idsOfVerticesForSEM;
-	vector <tuple <int, string, vector <unsigned char>>> idAndNameAndSeqTupleForVerticesToAdd;	
-	//----##############################################################---//
-	//	1.	Initialize the global phylogenetic tree P as the empty graph   //
-	//----##############################################################---//
-	// cout << "Starting MST-backbone" << endl;
-	// cout << "1.	Initialize the global phylogenetic tree P as the empty graph" << endl;
-	int numberOfInputSequences = (int) this->M->vertexMap->size();		
-	current_time = chrono::high_resolution_clock::now();
-	// timeTakenToComputeEdgeAndVertexLogLikelihoods = chrono::duration_cast<chrono::seconds>(current_time-current_time);
-	
-	// Initialize supertree
-	idsOfVerticesForSEM.clear();
-	for (pair <int, MST_vertex *> vIdAndPtr : * this->M->vertexMap) {
-		idsOfVerticesForSEM.push_back(vIdAndPtr.first);
-	}
-	tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);	
-	this->P->sequenceFileName = this->fastaFileName;
-	this->P->AddSequences(sequences);
-	this->P->AddNames(names);
-	this->P->AddSitePatternWeights(sitePatternWeights);
-	this->P->SetNumberOfInputSequences(numberOfInputSequences);	
-	this->P->numberOfObservedVertices = numberOfInputSequences;
-	// add duplicated sequences here
-	
-	int largestIdOfVertexInMST = numberOfInputSequences;
-	
-	bool computeLocalPhylogeneticTree = 1;
-	bool numberOfNonSingletonComponentsIsGreaterThanZero = 0;	
-	
-	while (computeLocalPhylogeneticTree) {
-		// current_time = chrono::high_resolution_clock::now();
-		// cout << "Number of vertices in MST is " << this->M->vertexMap->size() << endl;				
-		// this->emt_logFile << "Number of vertices in MST is " << this->M->vertexMap->size() << endl;
-		// cout << "Max vertex degree in MST is " << this->M->maxDegree << endl;
-		//----####################################################################---//
-		//	2.	Compute the size of the smallest subtree ts = (Vs,Es) of M s.t.		 //
-		//		|Vs| > s. Check if |Vm\Vs| > s.								   		 //
-		// 		If yes then go to step 3 else go to step 9					   		 //
-		// 		Bootstrapped alignments may contain zero-weight edges		   		 //
-		//      If so then replace |Vs| with |{non-zero weighted edges in Es}| 		 //
-		//      Additionally replace |Vm\Vs| with |{non-zero weighted edges in Es}|  //
-		//----####################################################################---//				
-		computeLocalPhylogeneticTree = this->M->ShouldIComputeALocalPhylogeneticTree();
-		// cout << "2. Checking if local phylogenetic tree should be computed" << endl;
-		if (computeLocalPhylogeneticTree) {
-			//----####################################################################---//
-			//	3.	Extract vertices inducing subtree (Vs), and external vertices (Ve)	 //
-			//----####################################################################---//				
-			// cout << "3. Extract vertices inducing subtree (Vs), and external vertices (Ve)" << endl;
-			this->M->SetIdsOfExternalVertices();
-			idsOfExternalVertices = this->M->idsOfExternalVertices;
-			idsOfVerticesForSEM = this->M->subtree_v_ptr->idsOfVerticesInSubtree;
-			this->numberOfVerticesInSubtree = this->M->subtree_v_ptr->idsOfVerticesInSubtree.size();
-			for (int id: idsOfExternalVertices) {
-				idsOfVerticesForSEM.push_back(id);
-			}
-			tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);
-			//----########################################################---//
-			//	4.	Compute local phylogeny p over (Vs U Ve) via SEM      	 //
-			//----########################################################---//
-			// cout << "4.	Compute local phylogeny p over (Vs U Ve) via SEM" << endl;			
-			this->p = new SEM(largestIdOfVertexInMST,this->conv_thresh,this->max_EM_iter,this->verbose);
-			this->p->AddSequences(sequences);
-			this->p->SetNumberOfVerticesInSubtree(this->numberOfVerticesInSubtree);
-			this->p->SetNumberOfInputSequences(numberOfInputSequences);
-			this->p->AddRootVertex();
-			this->p->AddNames(names);
-			this->p->AddGlobalIds(idsOfVerticesForSEM);
-			this->p->AddSitePatternWeights(sitePatternWeights);
-			this->p->AddSitePatternRepeats(sitePatternRepetitions);			
-			t_start_time = chrono::high_resolution_clock::now();
-			this->p->OptimizeTopologyAndParametersOfGMM();
-			t_end_time = chrono::high_resolution_clock::now();
-			timeTakenToComputeSubtree = t_end_time - t_start_time;
-			// cout << "CPU time used for computing subtree with " << this->p->numberOfObservedVertices << " leaves is " << timeTakenToComputeSubtree.count() << " seconds\n";
-			// this->emt_logFile << "CPU time used for computing subtree with " << this->p->numberOfObservedVertices << " leaves is " << timeTakenToComputeSubtree.count() << " seconds\n";
-			//----##################################################################---//	
-			//  5.	Check if # of non-singleton components of forest f in p that       //
-			//		is induced by Vs is greater than zero.							   //
-			//		i.e., Does local phylogeny contain vertices/edges of interest?	   //
-			//----##################################################################---//
-			this->p->SelectIndsOfVerticesOfInterestAndEdgesOfInterest();
-			numberOfNonSingletonComponentsIsGreaterThanZero = this->p->IsNumberOfNonSingletonComponentsGreaterThanZero();			
-			// cout << "5. Checking if there are any vertices of interest" << endl;
-			if (!numberOfNonSingletonComponentsIsGreaterThanZero) {
-				//----####################################################---//	
-				//  6.	If no then double subtree size and go to step 2 	 //
-				//		else reset subtree size and go to to step 7		     //
-				//----####################################################---//		
-				this->M->doubleSubtreeSizeThreshold();
-				// cout << "6. Doubling subtree size" << endl;
-			} else {
-				this->M->ResetSubtreeSizeThreshold();		
-				//----################################---//
-				//  7.	Add vertices/edges in f to P     //
-				//----################################---//
-				// cout << "7. Adding vertices/edges in f to P" << endl;
-				this->p->RenameHiddenVerticesInEdgesOfInterestAndSetIdsOfVerticesOfInterest();
-				this->p->SetWeightedEdgesToAddToGlobalPhylogeneticTree();				
-				this->P->AddWeightedEdges(this->p->weightedEdgesToAddToGlobalPhylogeneticTree);
-				this->p->SetAncestralSequencesString();
-				this->ancestralSequencesString += this->p->ancestralSequencesString;				
-				largestIdOfVertexInMST = this->p->largestIdOfVertexInMST;
-				//----##############################---//
-				//  8.	Update M and go to step 1	   //
-				//----##############################---//
-				// cout << "8. Updating MST" << endl;
-				this->p->SetInfoForVerticesToAddToMST();				
-				this->M->UpdateMSTWithMultipleExternalVertices(p->idsOfVerticesToKeepInMST, p->idsOfVerticesToRemove, p->idAndNameAndSeqTuple, idsOfExternalVertices);								
-				delete this->p;
-			}			
-			computeLocalPhylogeneticTree = this->M->ShouldIComputeALocalPhylogeneticTree();
-		}		
-	}	
-	//----########################################################---//
-	//	9.	Compute phylogenetic tree t over vertices in M, and      //
-	//		add vertices/edges in t to T							 //
-	//----########################################################---//
-	cout << "Computing phylogenetic tree over all vertices in MST" << endl;
-	idsOfVerticesForSEM.clear();
-	for (pair <int, MST_vertex *> idPtrPair: * this->M->vertexMap) {
-		idsOfVerticesForSEM.push_back(idPtrPair.first);
-	}
-	tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);
-	this->numberOfVerticesInSubtree = sequences.size();
-	this->p = new SEM(largestIdOfVertexInMST,this->conv_thresh,this->max_EM_iter,this->verbose);
-	this->p->SetFlagForFinalIterationOfSEM();
-	this->p->AddSequences(sequences);
-	this->p->SetNumberOfVerticesInSubtree(this->numberOfVerticesInSubtree);
-	this->p->SetNumberOfInputSequences(numberOfInputSequences);
-	this->p->AddRootVertex();
-	this->p->AddNames(names);
-	this->p->AddGlobalIds(idsOfVerticesForSEM);
-	this->p->AddSitePatternWeights(sitePatternWeights);
-	this->p->AddSitePatternRepeats(sitePatternRepetitions);	
-	t_start_time = chrono::high_resolution_clock::now();
-	this->p->OptimizeTopologyAndParametersOfGMM();
-	t_end_time = chrono::high_resolution_clock::now();	
-	timeTakenToComputeSubtree = t_end_time - t_start_time;
-	// cout << "CPU time used for computing subtree with " << this->p->numberOfObservedVertices << " leaves is " << timeTakenToComputeSubtree.count() << " seconds\n";
-	// this->emt_logFile << "CPU time used for computing subtree with " << this->p->numberOfObservedVertices << " leaves is " << timeTakenToComputeSubtree.count() << " seconds\n";
-	this->p->SelectIndsOfVerticesOfInterestAndEdgesOfInterest();
-	this->p->RenameHiddenVerticesInEdgesOfInterestAndSetIdsOfVerticesOfInterest();
-	this->p->SetWeightedEdgesToAddToGlobalPhylogeneticTree();
-	this->p->SetAncestralSequencesString();
-	this->ancestralSequencesString += this->p->ancestralSequencesString;
-	this->p->WriteAncestralSequences();	
-	this->P->AddWeightedEdges(this->p->weightedEdgesToAddToGlobalPhylogeneticTree);		
-	delete this->p;
-	// cout << "Adding duplicated sequences to tree" << endl;
-	// this->emt_logFile << "Adding duplicated sequences to tree" << endl;
-	this->P->AddDuplicatedSequencesToUnrootedTree(this->M);
-	this->P->WriteUnrootedTreeAsEdgeList(this->prefix_for_output_files + ".unrooted_edgeList");
-	this->P->RootTreeAtAVertexPickedAtRandom();
-	this->P->WriteRootedTreeInNewickFormat(this->prefix_for_output_files + ".unrooted_newick");	
-}
-
-void EMManager::EMTRackboneWithRootSEMAndMultipleExternalVertices() {
-	vector <string> names;
-	vector <vector <unsigned char> > sequences;
-	vector <int> sitePatternWeights;
-	vector <vector <int> > sitePatternRepetitions;	
-	vector <int> idsOfVerticesToRemove;
-	vector <int> idsOfVerticesToKeep;
-	vector <int> idsOfExternalVertices;
-	vector <int> idsOfVerticesForSEM;
-	vector <tuple <int, string, vector <unsigned char>>> idAndNameAndSeqTupleForVerticesToAdd;	
-	//----##############################################################---//
-	//	1.	Initialize the global phylogenetic tree T as the empty graph   //
-	//----##############################################################---//
-	// cout << "Starting MST-backbone" << endl;
-	// cout << "1.	Initialize the global phylogenetic tree T as the empty graph" << endl;
-	int numberOfInputSequences = (int) this->M->vertexMap->size();
-	this->P = new SEM(1,this->conv_thresh,this->max_EM_iter,this->verbose);
-	// Initialize global phylogeny
-	idsOfVerticesForSEM.clear();
-	for (pair <int, MST_vertex *> vIdAndPtr : * this->M->vertexMap) {
-		idsOfVerticesForSEM.push_back(vIdAndPtr.first);
-	}
-	tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);	
-	this->P->sequenceFileName = this->fastaFileName;
-	this->P->AddSequences(sequences);
-	this->P->OpenAncestralSequencesFile();
-	this->P->AddNames(names);
-	this->P->AddSitePatternWeights(sitePatternWeights);
-	this->P->SetNumberOfInputSequences(numberOfInputSequences);	
-	this->P->numberOfObservedVertices = numberOfInputSequences;
-	
-	int largestIdOfVertexInMST = numberOfInputSequences;
-	
-	bool computeLocalPhylogeneticTree = 1;
-	bool numberOfNonSingletonComponentsIsGreaterThanZero = 0;	
-	
-	while (computeLocalPhylogeneticTree) {
-		// cout << "Number of vertices in MST is " << this->M->vertexMap->size() << endl;
-		// this->emt_logFile << "Number of vertices in MST is " << this->M->vertexMap->size() << endl;
-		//----####################################################################---//
-		//	2.	Compute the size of the smallest subtree ts = (Vs,Es) of M s.t.		 //
-		//		|Vs| > s. Check if |Vm\Vs| > s.								   		 //
-		// 		If yes then go to step 3 else go to step 9					   		 //
-		// 		Bootstrapped alignments may contain zero-weight edges		   		 //
-		//      If so then replace |Vs| with |{non-zero weighted edges in Es}| 		 //
-		//      Additionally replace |Vm\Vs| with |{non-zero weighted edges in Es}|  //
-		//----####################################################################---//				
-		computeLocalPhylogeneticTree = this->M->ShouldIComputeALocalPhylogeneticTree();
-		// cout << "2. Checking if local phylogenetic tree should be computed" << endl;
-		if (computeLocalPhylogeneticTree) {
-			//----####################################################################---//
-			//	3.	Extract vertices inducing subtree (Vs), and external vertices (Ve)	 //
-			//----####################################################################---//				
-			// cout << "3. Extract vertices inducing subtree (Vs), and external vertices (Ve)" << endl;
-			this->M->SetIdsOfExternalVertices();
-			idsOfExternalVertices = this->M->idsOfExternalVertices;
-			idsOfVerticesForSEM = this->M->subtree_v_ptr->idsOfVerticesInSubtree;
-			this->numberOfVerticesInSubtree = this->M->subtree_v_ptr->idsOfVerticesInSubtree.size();
-			for (int id: idsOfExternalVertices) {
-				idsOfVerticesForSEM.push_back(id);
-			}
-			tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);
-			//----########################################################---//
-			//	4.	Compute local phylogeny t over (Vs U Ve) via SEM      	 //
-			//----########################################################---//
-			// cout << "4.	Compute local phylogeny t over (Vs U Ve) via SEM" << endl;
-			this->p = new SEM(largestIdOfVertexInMST,this->conv_thresh,this->max_EM_iter,this->verbose);						
-			this->p->sequenceFileName = this->fastaFileName;
-			this->p->AddSequences(sequences);			
-			this->p->SetNumberOfVerticesInSubtree(this->numberOfVerticesInSubtree);			
-			this->p->SetNumberOfInputSequences(numberOfInputSequences);			
-			this->p->AddNames(names);
-			this->p->numberOfObservedVertices = sequences.size();			
-			this->p->AddGlobalIds(idsOfVerticesForSEM);			
-			this->p->AddSitePatternWeights(sitePatternWeights);			
-			this->p->AddSitePatternRepeats(sitePatternRepetitions);			
-			this->p->ComputeNJTree();
-			t_start_time = chrono::high_resolution_clock::now();
-			this->p->RootTreeByFittingAGMMViaEM();
-			t_end_time = chrono::high_resolution_clock::now();
-			this->p->ComputeMAPEstimateOfAncestralSequencesUsingCliques();
-			// this->t->OptimizeTopologyAndParametersOfGMM();		
-			//----##################################################################---//	
-			//  5.	Check if # of non-singleton components of forest f in t that       //
-			//		is induced by Vs is greater than zero.							   //
-			//		i.e., Does local phylogeny contain vertices/edges of interest?	   //
-			//----##################################################################---//
-			this->p->SelectIndsOfVerticesOfInterestAndEdgesOfInterest();
-			numberOfNonSingletonComponentsIsGreaterThanZero = this->p->IsNumberOfNonSingletonComponentsGreaterThanZero();			
-			// cout << "5. Checking if there are any vertices of interest" << endl;
-			if (!numberOfNonSingletonComponentsIsGreaterThanZero) {
-				//----####################################################---//	
-				//  6.	If no then double subtree size and go to step 2 	 //
-				//		else reset subtree size and go to to step 7		     //
-				//----####################################################---//		
-				this->M->doubleSubtreeSizeThreshold();
-				// cout << "6. Doubling subtree size" << endl;
-			} else {
-				this->M->ResetSubtreeSizeThreshold();		
-				//----################################---//
-				//  7.	Add vertices/edges in f to T     //
-				//----################################---//
-				// cout << "7. Adding vertices/edges in f to T" << endl;
-				this->p->RenameHiddenVerticesInEdgesOfInterestAndSetIdsOfVerticesOfInterest();
-				this->p->SetWeightedEdgesToAddToGlobalPhylogeneticTree();
-				this->p->SetAncestralSequencesString();
-				this->p->WriteAncestralSequences();
-				this->P->AddWeightedEdges(this->p->weightedEdgesToAddToGlobalPhylogeneticTree);
-				this->p->SetEdgeAndVertexLogLikelihoods();
-				this->P->AddVertexLogLikelihoods(this->p->vertexLogLikelihoodsMapToAddToGlobalPhylogeneticTree);
-				this->P->AddEdgeLogLikelihoods(this->p->edgeLogLikelihoodsToAddToGlobalPhylogeneticTree);
-				largestIdOfVertexInMST = this->p->largestIdOfVertexInMST;
-				//----##############################---//
-				//  8.	Update M and go to step 1	   //
-				//----##############################---//
-				// cout << "8. Updating MST" << endl;
-				this->p->SetInfoForVerticesToAddToMST();
-				this->M->UpdateMSTWithMultipleExternalVertices(p->idsOfVerticesToKeepInMST, p->idsOfVerticesToRemove, p->idAndNameAndSeqTuple, idsOfExternalVertices);				
-			}			
-			computeLocalPhylogeneticTree = this->M->ShouldIComputeALocalPhylogeneticTree();
-			// cout << "CPU time used for computing local phylogeny is " << chrono::duration<double>(t_end_time-t_start_time).count() << " second(s)\n";
-			// this->emt_logFile << "CPU time used for computing local phylogeny is " << chrono::duration<double>(t_end_time-t_start_time).count() << " second(s)\n";			
-		}
-	}	
-	//----########################################################---//
-	//	9.	Compute phylogenetic tree t over vertices in M, and      //
-	//		add vertices/edges in t to T							 //
-	//----########################################################---//
-	cout << "Computing phylogenetic tree over remaining vertices" << endl;	
-	idsOfVerticesForSEM.clear();
-	for (pair <int, MST_vertex *> idPtrPair: * this->M->vertexMap) {
-		idsOfVerticesForSEM.push_back(idPtrPair.first);
-	}
-	// cout << "Number of vertices in MST is " << idsOfVerticesForSEM.size() << endl;
-	// this->emt_logFile << "Number of vertices in MST is " << this->M->vertexMap->size() << endl;
-	tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);
-	this->numberOfVerticesInSubtree = sequences.size();
-	this->p = new SEM(largestIdOfVertexInMST,this->conv_thresh,this->max_EM_iter,this->verbose);
-	this->p->SetFlagForFinalIterationOfSEM();
-	this->p->sequenceFileName = this->fastaFileName;
-	this->p->AddSequences(sequences);
-	this->p->SetNumberOfVerticesInSubtree(this->numberOfVerticesInSubtree);
-	this->p->SetNumberOfInputSequences(numberOfInputSequences);
-	this->p->numberOfObservedVertices = sequences.size();
-	this->p->AddNames(names);
-	this->p->AddGlobalIds(idsOfVerticesForSEM);
-	this->p->AddSitePatternWeights(sitePatternWeights);
-	this->p->AddSitePatternRepeats(sitePatternRepetitions);
-	this->p->ComputeNJTree();
-	t_start_time = chrono::high_resolution_clock::now();
-	this->p->RootTreeByFittingAGMMViaEM();
-	t_end_time = chrono::high_resolution_clock::now();
-	this->p->ComputeMAPEstimateOfAncestralSequencesUsingCliques();
-	this->p->SelectIndsOfVerticesOfInterestAndEdgesOfInterest();
-	this->p->RenameHiddenVerticesInEdgesOfInterestAndSetIdsOfVerticesOfInterest();
-	this->p->SetWeightedEdgesToAddToGlobalPhylogeneticTree();
-	this->p->SetAncestralSequencesString();
-	this->p->WriteAncestralSequences();
-	this->P->AddWeightedEdges(this->p->weightedEdgesToAddToGlobalPhylogeneticTree);	
-	this->p->SetEdgeAndVertexLogLikelihoods();
-	this->P->AddVertexLogLikelihoods(this->p->vertexLogLikelihoodsMapToAddToGlobalPhylogeneticTree);
-	this->P->AddEdgeLogLikelihoods(this->p->edgeLogLikelihoodsToAddToGlobalPhylogeneticTree);
-	// cout << "CPU time used for computing local phylogeny is " << chrono::duration<double>(t_end_time-t_start_time).count() << " second(s)\n";
-	// this->emt_logFile << "CPU time used for computing local phylogeny is " << chrono::duration<double>(t_end_time-t_start_time).count() << " second(s)\n";			
-	
-	if(this->P->vertexMap->size() != this->P->edgeLengths.size() + 1){
-        throw mt_error("P is not a tree");
-    }
-	//----##############---//		
-	//	10.	Root T via EM  //
-	//----##############---//
-	// current_time = chrono::high_resolution_clock::now();
-	// cout << "CPU time used for computing unrooted topology is " << chrono::duration<double>(current_time-start_time).count() << " second(s)\n";
-	// this->emt_logFile << "CPU time used for computing unrooted topology is " << chrono::duration<double>(current_time-start_time).count() << " second(s)\n";
-	// cout << "Rooting T by maximizing expected log likelihood" << endl;
-	this->P->RootTreeBySumOfExpectedLogLikelihoods();
-}
-
-
-void EMManager::EMTRackboneWithOneExternalVertex() {
-	this->P = new SEM(1,this->conv_thresh,this->max_EM_iter,this->verbose);
-	cout << "Starting MST-backbone" << endl;
-	bool subtreeExtractionPossible = 1;		
-	vector <string> names;
-	vector <vector <unsigned char> > sequences;
-	vector <int> sitePatternWeights;
-	vector <vector <int> > sitePatternRepetitions;
-	vector <int> idsOfVerticesForSEM;
-	vector <int> idsOfVerticesToRemove;
-	vector <int> idsOfVerticesToKeep;
-	vector <int> idsOfExternalVertices;
-	vector <tuple <int, string, vector <unsigned char>>> idAndNameAndSeqTupleForVerticesToAdd;
-
-	int h_ind = 1;
-	
-	// Initialize global phylogeny
-	idsOfVerticesForSEM.clear();
-	for (pair <int, MST_vertex *> vIdAndPtr : * this->M->vertexMap) {
-		idsOfVerticesForSEM.push_back(vIdAndPtr.first);
-	}
-	tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);	
-	this->P->sequenceFileName = this->fastaFileName;
-	this->P->AddSequences(sequences);
-	this->P->AddNames(names);
-	this->P->AddSitePatternWeights(sitePatternWeights);
-	cout << "Number of leaves is " << this->P->vertexMap->size() << endl;
-	
-	int numberOfRemainingVertices;
-	int numberOfVerticesInSubtree;
-	vector <string> weightedEdges;	
-	string u_name; string v_name;
-	vector <unsigned char> sequenceToAdd;
-	string nameOfSequenceToAdd;
-	vector <unsigned char> seq_u; vector <unsigned char> seq_v;
-	vector <unsigned char> compressed_seq_u; vector <unsigned char> compressed_seq_v;
-	map <int, int> EMVertexIndToPhyloVertexIdMap;	
-	int subtreeSizeThreshold = this->M->numberOfLargeEdgesThreshold;
-	cout << "Subtree size threshold is " << subtreeSizeThreshold << endl;
-	// Iterate to completion
-	MST_vertex * v_mst;
-	tie (subtreeExtractionPossible, v_mst) = this->M->GetPtrToVertexSubtendingSubtree();
-	numberOfRemainingVertices = this->M->vertexMap->size() - v_mst->idsOfVerticesInSubtree.size();
-	cout << "numberOfRemainingVertices is " << numberOfRemainingVertices << endl;
-	if (v_mst->idOfExternalVertex == -1 or numberOfRemainingVertices < 3) {
-		subtreeExtractionPossible = 0;
-	}
-	cout << "Sequence length is " << this->P->sequenceLength << endl;
-	while (subtreeExtractionPossible) {
-		cout << "Number of vertices in MST is " << this->M->vertexMap->size() << endl;
-		this->p = new SEM(h_ind,this->conv_thresh,this->max_EM_iter,this->verbose);	
-		// ids of vertices in subtree
-		idsOfVerticesForSEM = v_mst->idsOfVerticesInSubtree;
-		numberOfVerticesInSubtree = v_mst->idsOfVerticesInSubtree.size();
-		// ids of external vertices
-		idsOfVerticesForSEM.push_back(v_mst->idOfExternalVertex);
-		tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);
-		h_ind += sequences.size() -2;
-		// Perform SEM
-		this->p->SetNumberOfVerticesInSubtree(numberOfVerticesInSubtree);
-		this->p->AddSequences(sequences);
-		this->p->AddRootVertex();
-		this->p->AddNames(names);
-		this->p->AddSitePatternWeights(sitePatternWeights);		
-		this->p->OptimizeTopologyAndParametersOfGMM();		
-		// Get edges to add
-		
-		this->P->AddWeightedEdges(this->p->weightedEdgesToAddToGlobalPhylogeneticTree);						
-		sequenceToAdd = DecompressSequence(&this->p->compressedSequenceToAddToMST, &sitePatternRepetitions);			
-		// edgeListFile << this->t->weightedEdgeListString;
-		// Update MST
-		
-		this->M->UpdateMSTWithOneExternalVertex(v_mst->idsOfVerticesInSubtree, this->p->nameOfSequenceToAddToMST, sequenceToAdd);
-		tie (subtreeExtractionPossible, v_mst) = this->M->GetPtrToVertexSubtendingSubtree();
-		numberOfRemainingVertices = this->M->vertexMap->size() - v_mst->idsOfVerticesInSubtree.size();
-		if (v_mst->idOfExternalVertex == -1 or numberOfRemainingVertices < 3) {
-			subtreeExtractionPossible = 0;
-		}
-		delete this->p;	
-	}		
-	cout << "Number of remaining vertices in MST is " << this->M->vertexMap->size() << endl;		
-	idsOfVerticesForSEM.clear();
-	for (pair <int, MST_vertex *> vIdAndPtr : * this->M->vertexMap) {
-		idsOfVerticesForSEM.push_back(vIdAndPtr.first);
-	}	
-	this->p = new SEM(h_ind,this->conv_thresh,this->max_EM_iter,this->verbose);
-	tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);
-	// cout << "Number of distinct site patterns is " << sitePatternWeights.size() << endl;
-	this->p->SetFlagForFinalIterationOfSEM();
-	this->p->numberOfExternalVertices = 1;
-	this->p->AddSequences(sequences);
-	this->p->AddRootVertex();
-	this->p->AddNames(names);
-	this->p->AddSitePatternWeights(sitePatternWeights);
-	t_start_time = chrono::high_resolution_clock::now();
-	this->p->OptimizeTopologyAndParametersOfGMM();
-	t_end_time = chrono::high_resolution_clock::now();
-	this->P->AddWeightedEdges(this->p->weightedEdgesToAddToGlobalPhylogeneticTree);
-	delete this->p;	
-}
-
-void EMManager::EMgivenInputTopology(){
-	vector <string> names;
-	vector <vector <unsigned char> > sequences;
-	vector <int> sitePatternWeights;
-	vector <vector <int> > sitePatternRepetitions;		
-	vector <int> idsOfVerticesForSEM;
-	
-	int numberOfInputSequences = (int) this->M->vertexMap->size();		
-	idsOfVerticesForSEM.clear();
-	for (pair <int, MST_vertex *> vIdAndPtr : * this->M->vertexMap) {
-		idsOfVerticesForSEM.push_back(vIdAndPtr.first);
-	}
+	// int numberOfInputSequences = (int) this->M->vertexMap->size();
+	// idsOfVerticesForSEM.clear();
+	// for (pair <int, MST_vertex *> vIdAndPtr : * this->M->vertexMap) {
+		// idsOfVerticesForSEM.push_back(vIdAndPtr.first);
+	// }
 	 // Transfer following feature to SEM
-	tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);		
-	cout << "setting sequence file name, topology file name, site pattern weights, number of input sequences" << endl;
-    cout << "number of site patterns is " << sitePatternWeights.size() << endl;	
-	this->P->sequenceFileName = this->fastaFileName;
-	this->P->topologyFileName = this->topologyFileName;
-	this->P->AddSequences(sequences);
-	this->P->AddNames(names);
-	this->P->AddSitePatternWeights(sitePatternWeights);
-	this->P->SetNumberOfInputSequences(numberOfInputSequences);	
-	this->P->numberOfObservedVertices = numberOfInputSequences;
-	cout << "setting edges from topology file" << endl;		
-	// replace the following and setting edges from input topology	
-	this->P->SetEdgesFromTopologyFile();
-}
-
-vector<unsigned char> EMManager::DecompressSequence(vector<unsigned char>* compressedSequence, vector<vector<int>>* sitePatternRepeats){
-	int totalSequenceLength = 0;
-	for (vector<int> sitePatternRepeat: *sitePatternRepeats){
-		totalSequenceLength += int(sitePatternRepeat.size());
-	}
-	vector <unsigned char> decompressedSequence;
-	for (int v_ind = 0; v_ind < totalSequenceLength; v_ind++){
-		decompressedSequence.push_back(char(0));
-	}
-	unsigned char dnaToAdd;
-	for (int sitePatternIndex = 0; sitePatternIndex < int(compressedSequence->size()); sitePatternIndex++){
-		dnaToAdd = (*compressedSequence)[sitePatternIndex];
-		for (int pos: (*sitePatternRepeats)[sitePatternIndex]){
-			decompressedSequence[pos] = dnaToAdd;
-		}
-	}
-	return (decompressedSequence);	
-}
-
-string EMManager::EncodeAsDNA(vector<unsigned char> sequence){
-	string allDNA = "AGTC";
-	string dnaSequence = "";
-	for (unsigned char s : sequence){
-		dnaSequence += allDNA[s];
-	}
-	return dnaSequence;
-}
-
-string EMManager::GetSequenceListToWriteToFile(map <string, vector <unsigned char>> compressedSeqMap, vector <vector <int> > sitePatternRepetitions) {	
-	vector <unsigned char> decompressedSequence;
-	string dnaSequence;
-	string u_name;
-	string listOfVertexNamesAndDNAsequencesToWriteToFile;	
-	for (pair <string,vector<unsigned char>> nameSeqPair : compressedSeqMap) {		
-		decompressedSequence = this->DecompressSequence(&(nameSeqPair.second),&sitePatternRepetitions);
-		dnaSequence = this->EncodeAsDNA(decompressedSequence);
-		listOfVertexNamesAndDNAsequencesToWriteToFile += nameSeqPair.first + "\t" + dnaSequence + "\n"; 		
-	}	
-	return (listOfVertexNamesAndDNAsequencesToWriteToFile);
+	// tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);
+	// cout << "setting sequence file name, topology file name, site pattern weights, number of input sequences" << endl;
+    // cout << "number of site patterns is " << sitePatternWeights.size() << endl;	
+	// this->P->sequenceFileName = this->fastaFileName;
+	// this->P->topologyFileName = this->topologyFileName;
+	// this->P->AddSequences(sequences);
+	// this->P->AddNames(names);
+	// this->P->AddSitePatternWeights(sitePatternWeights);
+	// this->P->SetNumberOfInputSequences(numberOfInputSequences);
+	// this->P->numberOfObservedVertices = numberOfInputSequences;
+	// cout << "setting edges from topology file" << endl;	
+	// this->P->SetEdgesFromTopologyFile();
 }
 
 int EMManager::GetEdgeIndex (int vertexIndex1, int vertexIndex2, int numberOfVertices){
@@ -8045,16 +8813,5 @@ int EMManager::ComputeHammingDistance(string seq1, string seq2) {
 			hammingDistance+=1;
 		}		
 	}
-	return (hammingDistance);
-};
-
-int EMManager::ComputeHammingDistance(vector<unsigned char> recodedSeq1, vector<unsigned char> recodedSeq2) {
-	int hammingDistance = 0;
-	double ungappedSequenceLength = 0;
-	for (unsigned int i=0;i<recodedSeq1.size();i++) {
-		if (recodedSeq1[i] != recodedSeq2[i]) {
-			hammingDistance+=1;
-		}		
-	}	
 	return (hammingDistance);
 };

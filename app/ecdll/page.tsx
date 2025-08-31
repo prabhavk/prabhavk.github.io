@@ -253,9 +253,9 @@ export default function EcdllPage() {
       setSshSum(s.status === "fulfilled" ? s.value.sum : null);
 
       const errs: string[] = [];
-      if (d.status === "rejected") errs.push(d.reason?.message || "Dirichlet fetch failed");
-      if (p.status === "rejected") errs.push(p.reason?.message || "Parsimony fetch failed");
-      if (s.status === "rejected") errs.push(s.reason?.message || "SSH fetch failed");
+      if (d.status === "rejected") errs.push((d as PromiseRejectedResult).reason?.message || "Dirichlet fetch failed");
+      if (p.status === "rejected") errs.push((p as PromiseRejectedResult).reason?.message || "Parsimony fetch failed");
+      if (s.status === "rejected") errs.push((s as PromiseRejectedResult).reason?.message || "SSH fetch failed");
       if (errs.length) setErr(errs.join(" | "));
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to load ECD-LL data");
@@ -366,64 +366,64 @@ export default function EcdllPage() {
 
   type PlotKey = "boxcox" | "composite" | "dir" | "par" | "ssh";
 
-interface PlotlyLike {
-  downloadImage: (
-    gd: HTMLElement,
-    opts: {
-      format?: "png" | "jpeg" | "svg" | "webp";
-      width?: number;
-      height?: number;
-      filename?: string;
-    }
-  ) => Promise<string>;
-}
+  interface PlotlyLike {
+    downloadImage: (
+      gd: HTMLElement,
+      opts: {
+        format?: "png" | "jpeg" | "svg" | "webp";
+        width?: number;
+        height?: number;
+        filename?: string;
+      }
+    ) => Promise<string>;
+  }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
+  function isRecord(v: unknown): v is Record<string, unknown> {
+    return typeof v === "object" && v !== null;
+  }
 
-function isPlotlyLike(v: unknown): v is PlotlyLike {
-  return isRecord(v) && typeof v["downloadImage"] === "function";
-}
+  function isPlotlyLike(v: unknown): v is PlotlyLike {
+    return isRecord(v) && typeof v["downloadImage"] === "function";
+  }
 
-async function resolvePlotlyFrom(gd: HTMLDivElement): Promise<PlotlyLike> {
-  // 1) Plotly already on window (UMD path)
-  const win = (gd.ownerDocument?.defaultView ?? null) as (Window & { Plotly?: unknown }) | null;
-  if (win?.Plotly && isPlotlyLike(win.Plotly)) return win.Plotly;
+  const resolvePlotlyFrom = useCallback(async (gd: HTMLDivElement): Promise<PlotlyLike> => {
+    // 1) Plotly already on window (UMD path)
+    const win = (gd.ownerDocument?.defaultView ?? null) as (Window & { Plotly?: unknown }) | null;
+    if (win?.Plotly && isPlotlyLike(win.Plotly)) return win.Plotly;
 
-  // 2) Bundled dist (avoids Node polyfills)
-  const mod = (await import("plotly.js-dist")) as unknown;
-  const candidate =
-    isRecord(mod) && "default" in mod ? ((mod as { default: unknown }).default as unknown) : mod;
-  if (isPlotlyLike(candidate)) return candidate;
+    // 2) Bundled dist (avoids Node polyfills)
+    const mod = (await import("plotly.js-dist")) as unknown;
+    const candidate =
+      isRecord(mod) && "default" in mod ? ((mod as { default: unknown }).default as unknown) : mod;
+    if (isPlotlyLike(candidate)) return candidate;
 
-  throw new Error("Plotly not found. Install 'plotly.js-dist' or expose window.Plotly.");
-}
+    throw new Error("Plotly not found. Install 'plotly.js-dist' or expose window.Plotly.");
+  }, []);
 
-const downloadFigure = React.useCallback(
-  async (key: PlotKey, filename: string, w = 1600, h = 900) => {
-    const gd = graphRefs.current[key];
-    if (!gd) return;
-    const Plotly = await resolvePlotlyFrom(gd);
-    await Plotly.downloadImage(gd, { format: "png", width: w, height: h, filename });
-  },
-  []
-);
+  const downloadFigure = useCallback(
+    async (key: PlotKey, filename: string, w = 1600, h = 900) => {
+      const gd = graphRefs.current[key];
+      if (!gd) return;
+      const Plotly = await resolvePlotlyFrom(gd);
+      await Plotly.downloadImage(gd, { format: "png", width: w, height: h, filename });
+    },
+    [resolvePlotlyFrom]
+  );
 
-const downloadAll = React.useCallback(async () => {
-  const tasks: Array<Promise<void>> = [];
-  const base = `ecdll_job-${job || "unknown"}_rep-${rep ?? "na"}`;
+  const downloadAll = useCallback(async () => {
+    const tasks: Array<Promise<void>> = [];
+    const base = `ecdll_job-${job || "unknown"}_rep-${rep ?? "na"}`;
 
-  if (graphRefs.current.boxcox)
-    tasks.push(downloadFigure("boxcox", `${base}_boxcox_lambda-${lambda.toFixed(2)}`));
-  if (graphRefs.current.composite)
-    tasks.push(downloadFigure("composite", `${base}_composite_alpha-${alpha.toFixed(2)}`));
-  if (graphRefs.current.dir) tasks.push(downloadFigure("dir", `${base}_dirichlet`));
-  if (graphRefs.current.par) tasks.push(downloadFigure("par", `${base}_parsimony`));
-  if (graphRefs.current.ssh) tasks.push(downloadFigure("ssh", `${base}_ssh`));
+    if (graphRefs.current.boxcox)
+      tasks.push(downloadFigure("boxcox", `${base}_boxcox_lambda-${lambda.toFixed(2)}`));
+    if (graphRefs.current.composite)
+      tasks.push(downloadFigure("composite", `${base}_composite_alpha-${alpha.toFixed(2)}`));
+    if (graphRefs.current.dir) tasks.push(downloadFigure("dir", `${base}_dirichlet`));
+    if (graphRefs.current.par) tasks.push(downloadFigure("par", `${base}_parsimony`));
+    if (graphRefs.current.ssh) tasks.push(downloadFigure("ssh", `${base}_ssh`));
 
-  // run sequentially to avoid overwhelming the browser
-  for (const t of tasks) await t;
+    // run sequentially to avoid overwhelming the browser
+    for (const t of tasks) await t;
   }, [alpha, lambda, job, rep, downloadFigure]);
 
   /* ---------------- Render ---------------- */
@@ -536,7 +536,7 @@ const downloadAll = React.useCallback(async () => {
       <section className="border rounded p-3">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-lg font-semibold">Composite (Gap^α transform)</h2>
-          <button
+        <button
             type="button"
             onClick={() =>
               downloadFigure(

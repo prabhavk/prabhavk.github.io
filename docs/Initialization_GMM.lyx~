@@ -93,7 +93,7 @@
 \begin_body
 
 \begin_layout Title
-Visual Hypothesis Testing For Phylogenetic Models
+Impact of Initial Parameters On Optimizing the Barry-Hartigan Model using EM
 \end_layout
 
 \begin_layout Author
@@ -407,7 +407,7 @@ literal "false"
 
 .
  One-sided Wilcoxon-Mann-Whitney (1-WMW) tests are performed to compare log likelihood scores.
- Change in log likelihood scores obtained by applying emtree is visualized using Rhodonea curves that generate flower-like plots.
+ Change in log likelihood scores obtained by applying emtree is visualized using Dosa plots that are spiral shaped plots.
  A web application is made available at 
 \begin_inset CommandInset href
 LatexCommand href
@@ -418,7 +418,7 @@ literal "false"
 \end_inset
 
  to reproduce results presented here.
- The results presented here correspond to the emtree job wasm-1756128043437.
+ 
 \end_layout
 
 \begin_layout Section
@@ -547,10 +547,10 @@ literal "false"
 
 .
  The initial and final log likelihood values obtained with parameters initialized with Dirichlet,
- parsimony and SSH are visualized using Rhodonea curves shown in Figure 
+ parsimony and SSH are visualized using Dosa plots shown in Figure 
 \begin_inset CommandInset ref
 LatexCommand ref
-reference "rhodonea_ll"
+reference "dosa"
 plural "false"
 caps "false"
 noprefix "false"
@@ -574,7 +574,7 @@ status open
 \begin_layout Plain Layout
 \align center
 \begin_inset Graphics
-	filename /home/pk/projects/prabhavk.github.io/public/emtree_results/wasm-1756128043437__Dirichlet__ll_init__t2025-08-26_0312.png
+	filename /home/pk/Downloads/wasm-1756116823074__Dirichlet__ll_init__t2025-08-31_1554.png
 	lyxscale 40
 	scale 15
 
@@ -582,27 +582,7 @@ status open
 
 
 \begin_inset Graphics
-	filename /home/pk/projects/prabhavk.github.io/public/emtree_results/wasm-1756128043437__Dirichlet__ll_final__t2025-08-26_0312.png
-	lyxscale 40
-	scale 15
-
-\end_inset
-
-
-\end_layout
-
-\begin_layout Plain Layout
-\align center
-\begin_inset Graphics
-	filename /home/pk/projects/prabhavk.github.io/public/emtree_results/wasm-1756128043437__Parsimony__ll_init__t2025-08-26_0313.png
-	lyxscale 40
-	scale 15
-
-\end_inset
-
-
-\begin_inset Graphics
-	filename /home/pk/projects/prabhavk.github.io/public/emtree_results/wasm-1756128043437__Parsimony__ll_final__t2025-08-26_0313.png
+	filename /home/pk/Downloads/wasm-1756116823074__Dirichlet__ll_final__t2025-08-31_1554.png
 	lyxscale 40
 	scale 15
 
@@ -614,7 +594,7 @@ status open
 \begin_layout Plain Layout
 \align center
 \begin_inset Graphics
-	filename /home/pk/projects/prabhavk.github.io/public/emtree_results/wasm-1756128043437__SSH__ll_init__t2025-08-26_0313.png
+	filename /home/pk/Downloads/wasm-1756116823074__Parsimony__ll_init__t2025-08-31_1557.png
 	lyxscale 40
 	scale 15
 
@@ -622,7 +602,27 @@ status open
 
 
 \begin_inset Graphics
-	filename /home/pk/projects/prabhavk.github.io/public/emtree_results/wasm-1756128043437__SSH__ll_final__t2025-08-26_0313.png
+	filename /home/pk/Downloads/wasm-1756116823074__Parsimony__ll_final__t2025-08-31_1557.png
+	lyxscale 40
+	scale 15
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Plain Layout
+\align center
+\begin_inset Graphics
+	filename /home/pk/Downloads/wasm-1756116823074__SSH__ll_init__t2025-08-31_1557.png
+	lyxscale 40
+	scale 15
+
+\end_inset
+
+
+\begin_inset Graphics
+	filename /home/pk/Downloads/wasm-1756116823074__SSH__ll_final__t2025-08-31_1557.png
 	lyxscale 40
 	scale 15
 
@@ -635,16 +635,15 @@ status open
 \begin_inset Caption Standard
 
 \begin_layout Plain Layout
-Rhodonea curves displaying initial and final log likelihood scores obtained by emtree initialized with Dirichlet,
+Dosa plots displaying initial and final log likelihood scores obtained by emtree on DNA sequences from Randall experimental phylogeny initialized with Dirichlet,
  parsimony and SSH.
- Each of the 17 petals represent a node selected as the root.
- Five replicates colored according to log likelihood score are shown for each petal.
- The petal is coloured with the average log likelihood score of the replicates.
+ Each of the 17 spirals represent a node selected as the root.
+ Five replicates colored according to log likelihood score are shown for each spiral.
  The plots shown were generated at 
 \begin_inset CommandInset href
 LatexCommand href
-name "emtree.vercel.app/rhodonea"
-target "https://emtree.vercel.app/rhodonea"
+name "qrep.vercel.app/dosa"
+target "https://qrep.vercel.app/dosa"
 literal "false"
 
 \end_inset
@@ -653,7 +652,7 @@ literal "false"
  
 \begin_inset CommandInset label
 LatexCommand label
-name "rhodonea_ll"
+name "dosa"
 
 \end_inset
 
@@ -24208,6 +24207,156 @@ name "fig:Recall-values-obtained"
 \end_layout
 
 \begin_layout Section
+Anomalous rooting results on influenza data
+\end_layout
+
+\begin_layout Standard
+With parameters initialized using parsimony,
+ it appears possible to obtain realistically rooted influenza trees (see Fig 
+\begin_inset CommandInset ref
+LatexCommand ref
+reference "fig:An-H3N2-tree_2018"
+plural "false"
+caps "false"
+noprefix "false"
+nolink "false"
+
+\end_inset
+
+ amd 
+\begin_inset CommandInset ref
+LatexCommand ref
+reference "fig:H3N2_rooting_2025"
+plural "false"
+caps "false"
+noprefix "false"
+nolink "false"
+
+\end_inset
+
+) by maximizing expected complete data log likelihood score.
+ The result obtained in 2018 influenced my way of thinking as I wrote the preprint 
+\begin_inset CommandInset citation
+LatexCommand cite
+key "Kalaghatgi2020"
+literal "false"
+
+\end_inset
+
+.
+ At the time I was not that aware of the reparameterization property of the general Markov model,
+ and the recall values (although these are not significant) combined with the visual confirmation from the influenza tree (not published so far) led me to being convinced that there must be cases where it is possible to obtain rooted trees using GMM.
+ I was wrong in this conclusion.
+ The reparameterization property of GMM alone is sufficiently convincing that it is not possible to obtain rooted trees using GMM.
+ 
+\end_layout
+
+\begin_layout Subsection
+Apparently realistic rooted H3N2 HA tree obtained in 2018 
+\end_layout
+
+\begin_layout Standard
+\begin_inset Float figure
+placement document
+alignment document
+wide false
+sideways false
+status open
+
+\begin_layout Plain Layout
+\align center
+\begin_inset Graphics
+	filename /home/pk/Downloads/H3N2_anomaly.pdf
+	lyxscale 40
+	scale 40
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Plain Layout
+\begin_inset Caption Standard
+
+\begin_layout Plain Layout
+An H3N2 tree comprising 11,239 HA gene sequences.
+ Initial parameters were computed using parsimony and root was placed by maximizing expected complete-data log likelihood.
+ 
+\begin_inset CommandInset label
+LatexCommand label
+name "fig:An-H3N2-tree_2018"
+
+\end_inset
+
+
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Plain Layout
+
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Subsection
+Recent attempts to reproduce anomalous rooting in 2025
+\end_layout
+
+\begin_layout Standard
+\begin_inset Float figure
+placement document
+alignment document
+wide false
+sideways false
+status open
+
+\begin_layout Plain Layout
+\align center
+\begin_inset Graphics
+	filename /home/pk/Downloads/H3N2_6_reproductions.pdf
+	lyxscale 40
+	scale 40
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Plain Layout
+\begin_inset Caption Standard
+
+\begin_layout Plain Layout
+Six attempts that were made to reproduce the rooting obtained for H3N2 tree.
+ Although realistic rooting is obtained in the four attempts with the largest log likelihood score,
+ the results obtained on the Randall dataset using Dirichlet based parameters,
+ in addition to the reparameterization property of GMM strongly suggests that optimizing location of root using ecdll based on parsimony initialized parameters can result in realistically rooted trees for influenza but this should not be interpreted as a sign that it is possible to obtain rooted trees by maximizing log likelihood using GMM.
+\begin_inset CommandInset label
+LatexCommand label
+name "fig:H3N2_rooting_2025"
+
+\end_inset
+
+
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Section
 Materials and Methods
 \end_layout
 
@@ -24216,25 +24365,7 @@ Data
 \end_layout
 
 \begin_layout Standard
-The topology and DNA sequences associated with leaves were obtained by correspondence with Eric Gaucher in 2017 when I was a PhD student at the MPI for Informatics at Saarbr
-\begin_inset ERT
-status open
-
-\begin_layout Plain Layout
-
-
-\backslash
-
-\begin_inset Quotes erd
-\end_inset
-
-{u}
-\end_layout
-
-\end_inset
-
-cken.
- They have been made available on the github page https://github.com/prabhavk/prabhavk.github.io/tree/main/analysis to enable reproducibility of the analysis performed here.
+The topology and DNA sequences associated with leaves have been made available on the github page https://github.com/prabhavk/prabhavk.github.io/tree/main/analysis to enable reproducibility of the analysis performed here.
 \end_layout
 
 \begin_layout Subsection
@@ -24260,6 +24391,60 @@ literal "false"
 \end_layout
 
 \begin_layout Subsection
+Work in progress
+\end_layout
+
+\begin_layout Subsection
+FamilyJoining
+\end_layout
+
+\begin_layout Standard
+The results shown here are based on trees generated as part of the experimental phylogeny dataset.
+ I have recently integrated family-joining using log-det distances into qrep and have tested it on data obtained from RAxML-NG test data set.
+ I am in the process of estimating the hyper-parameters epsilon for 5-fold cross-validation and this should be ready to use within two weeks.
+ 
+\end_layout
+
+\begin_layout Subsection
+Analysis of Amino Acid sequences
+\end_layout
+
+\begin_layout Standard
+Only results obtained on DNA sequences have been presented so far.
+ This week I began adding functionality for optimizing branch-length based models making use of the Dayhoff rate matrix 
+\begin_inset Formula $Q_{D}$
+\end_inset
+
+.
+ This is work in progress.
+ Briefly,
+ the algorithm for amino acid sequences is as follows.
+ (i) Given the Dayhoff rate matrix compute maximum likelihood evolutionary distances for each sequence pair using Newton-Raphson.
+ The initial evolutionary distance is obtained using Jukes-Cantor estimate.
+ (ii) Using the topology obtained using FamilyJoining on DNA sequences,
+ branch lengths for amino acid labeled trees will be obtained by applying the OLS based branch length estimate that is implemented in FamilyJoining .
+ (iii) 
+\family roman
+\series medium
+\shape up
+\size normal
+\emph off
+\nospellcheck off
+\bar no
+\strikeout off
+\xout off
+\uuline off
+\uwave off
+\noun off
+\color none
+
+\begin_inset Formula $Q_{D}$
+\end_inset
+
+ and branch lengths will be optimized in an expectation maximization framework.
+\end_layout
+
+\begin_layout Subsection
 Input and output file format
 \end_layout
 
@@ -24280,7 +24465,7 @@ In order to enable the reproducibility of results shown in this paper,
  we built a web application with Next.js and React using TypeScript throughout for type safety and linting.
  Interactive figures (ECD-LL curves,
  histograms,
- and Rhodonea curves) are rendered client-side with Plotly.
+ and Dosa plots) are rendered client-side with Plotly.
  Styling is done with Tailwind CSS.
  Statistical comparisons (e.g.,
  Wilcoxon–Mann–Whitney) are computed in Next.js API routes running on Node.js,
@@ -24372,6 +24557,8 @@ literal "false"
  is not statisticaly significant,
  obtaining a p-value of 0.5 using a non-parametric test,
  suggesting that all the recall values reported in the preprint should be discarded until tested for statistical significance.
+ It appears that parsimony based parameters yield realistically rooted trees for influenza A H3N2,
+ which is misleading and makes it all the more important to use alternative methods such as the Dirichlet distribution to initialize parameters.
 \end_layout
 
 \begin_layout Standard
@@ -24384,7 +24571,7 @@ In conclusion,
 \begin_inset CommandInset bibtex
 LatexCommand bibtex
 btprint "btPrintCited"
-bibfiles "woodman"
+bibfiles "qrep"
 options "apalike"
 encoding "default"
 

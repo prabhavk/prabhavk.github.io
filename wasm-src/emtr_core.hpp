@@ -17,8 +17,10 @@
 #include <string>
 #include <tuple>
 #include <vector>
+#include <unordered_set>
+#include "third_party/eigen3/Eigen/Dense"
 
-
+class FamilyJoining;
 class MST_vertex;
 class MST;
 class SEM_vertex;
@@ -36,6 +38,9 @@ struct mt_error : runtime_error {
 class EMManager
 {
 private:
+	// bool LoadRateMatrixFromFile(const std::string& path);
+	std::string rate_matrix_path_;
+	Eigen::Matrix<double,20,20> Q_D;
 	default_random_engine generator;
 	vector <string> sequenceNames;
 	map <string,unsigned char> mapDNAtoInteger;		
@@ -78,8 +83,11 @@ private:
 	int ComputeHammingDistance(string seq1, string seq2);
 	int ComputeHammingDistance(vector<unsigned char> recodedSeq1, vector<unsigned char> recodedSeq2);
 	int GetEdgeIndex (int vertexIndex1, int vertexIndex2, int numberOfVertices);
+	FamilyJoining * F;
 	MST * M;
 	SEM * P;
+	// SEM * P_AA;
+	// SEM * P;
 	SEM * p;
 	void WriteOutputFiles();
 	bool debug;
@@ -87,7 +95,7 @@ private:
 	bool localPhyloOnly;	
 	bool useChowLiu;
 	bool modelSelection; 	
-    int max_iter;		
+    int max_iter;			
 	string supertree_method;
 	int numberOfVerticesInSubtree;
 	string GetSequenceListToWriteToFile(map <string, vector <unsigned char>> compressedSeqMap, vector <vector <int> > sitePatternRepetitions);
@@ -97,11 +105,11 @@ private:
 	int max_EM_iter;
 	double conv_thresh;
     public:
-    EMManager(string sequenceFileNameToSet,              
-              string topologyFileNameToSet,
+	void setDayhoffMatrixPath(const std::string& path);
+    EMManager(string sequenceFileNameToSet,            
+			  string topologyFileNameToSet,
               int num_repetitions,
               int max_iter,
-			//   int ssh_rounds,
               double conv_threshold,
 			  double pi_a_1,
 			  double pi_a_2,

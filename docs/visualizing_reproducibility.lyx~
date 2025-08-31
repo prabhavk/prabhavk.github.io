@@ -94,7 +94,7 @@
 \begin_body
 
 \begin_layout Title
-Testing the reproducibility of phylogenetic parameter estimation
+Quantifying reproducibility of phylogenetic parameter estimation
 \end_layout
 
 \begin_layout Author
@@ -150,7 +150,7 @@ literal "false"
 
 \end_inset
 
- regarding the ability of the general markov model to identify the location of the root.
+ regarding the ability of the general Markov model to identify the location of the root.
 \end_layout
 
 \begin_layout Section
@@ -214,74 +214,6 @@ Database hosted at planetscale
 Reproducibility
 \end_layout
 
-\begin_layout Subsection
-Phylogenetic Models Tested
-\end_layout
-
-\begin_layout Enumerate
-Substitution models
-\end_layout
-
-\begin_deeper
-\begin_layout Enumerate
-GMMD:
- EM optimized GMM for Nucleic Acid sequences
-\end_layout
-
-\begin_layout Enumerate
-GMMA:
- EM optimized GMM for Amino Acid sequences
-\end_layout
-
-\end_deeper
-\begin_layout Enumerate
-Types of Reproducibility implemented
-\end_layout
-
-\begin_deeper
-\begin_layout Enumerate
-Maximum log likelihood 
-\end_layout
-
-\begin_layout Enumerate
-Maximum likelihood estimate of parameters
-\end_layout
-
-\end_deeper
-\begin_layout Enumerate
-Visualizing Reproducibility
-\end_layout
-
-\begin_layout Enumerate
-Statistical tests to evaluate reproducibility
-\end_layout
-
-\begin_deeper
-\begin_layout Enumerate
-Log likelihood score
-\end_layout
-
-\begin_deeper
-\begin_layout Itemize
-one-sided Wilcoxon-Mann-Whitney test
-\end_layout
-
-\end_deeper
-\begin_layout Enumerate
-Model parameters
-\end_layout
-
-\begin_deeper
-\begin_layout Itemize
-1-D Wasserstein distance for root probability
-\end_layout
-
-\begin_layout Itemize
-Averaged 1-D Wasserstein distance for each transition matrix
-\end_layout
-
-\end_deeper
-\end_deeper
 \begin_layout Section
 Visualizing Results
 \end_layout
@@ -303,19 +235,7 @@ Compatibility with External Software
 \end_layout
 
 \begin_layout Subsection
-RAxML-NG
-\end_layout
-
-\begin_layout Section
-Data
-\end_layout
-
-\begin_layout Subsection
-Randall dataset
-\end_layout
-
-\begin_layout Subsection
-Test data from RAxML-NG
+Test data obtained from RAxML-NG
 \end_layout
 
 \begin_layout Section

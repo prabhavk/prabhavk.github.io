@@ -6,24 +6,23 @@ const AUTH = "";                      // optional: "Bearer <token)"
 
 // Allow overriding endpoint paths without rebuilding the worker
 const ENDPOINTS = {
-  rows: (jobId) => `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/rows`,
+  rows:    (jobId) => `${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/rows`,
   allinfo: () => `${API_BASE}${self.ALL_INFO_PATH || "/api/allinfo"}`,
+  trees:   () => `${API_BASE}/api/trees`,
 };
 
 // ---------- TOGGLES ----------
-// Console-only DB traces (default: off). Toggle at runtime via setDbLogging.
 let DB_LOGS = typeof self.DB_LOGS === "boolean" ? self.DB_LOGS : false;
-// UI upsert attempt/success logs (default: off). Toggle via setUpsertUiLogging.
 let UPSERT_UI_LOGS = typeof self.UPSERT_UI_LOGS === "boolean" ? self.UPSERT_UI_LOGS : false;
+let UPLOAD_TREES = typeof self.UPLOAD_TREES === "boolean" ? self.UPLOAD_TREES : true;
 
 // Helpers for logging
 function dbLog(line) {
   if (!DB_LOGS) return;
   try {
     const ts = new Date().toISOString();
-    // Console only (does not spam UI)
     console.debug(`[DB][${ts}][${jobIdForThisRun || "-"}] ${line}`);
-  } catch { /* ignore */ }
+  } catch {}
 }
 const upLog = (line) => { if (UPSERT_UI_LOGS) postMessage({ type: "log", line }); };
 
@@ -63,33 +62,22 @@ const BEST_UPLOAD_DEBOUNCE_MS = 500;
 
 // Keep a pending bundle for the *current* rep only
 let pendingRep = null;
-const pendingBest = {
-  parsimony: null,
-  dirichlet: null,
-  ssh: null,
-};
+const pendingBest = { parsimony: null, dirichlet: null, ssh: null };
 
-// ---------- helpers ----------
-function approxBytesOfRow(r) {
-  return 8 + JSON.stringify(r).length + 1;
-}
-function approxBytesOfJson(obj) {
-  return JSON.stringify(obj).length;
-}
-function canUseBeacon() {
-  try { return typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function"; }
-  catch { return false; }
-}
-function tryBeacon(url, obj) {
-  try {
-    const blob = new Blob([JSON.stringify(obj)], { type: "application/json" });
-    return navigator.sendBeacon(url, blob);
-  } catch { return false; }
-}
+// ---------------- Trees state ----------------
+let treesUploadedCount = 0;   // mark first as current
+let epsilonParam = null;      // captured from params if provided
+const seenTreeHashesByJob = new Map(); // jobId -> Set(hash) for per-job dedupe
+const pendingTreeUploads = new Set();  // in-flight tree uploads to await at end
+
+// ---------- generic helpers ----------
+function approxBytesOfRow(r) { return 8 + JSON.stringify(r).length + 1; }
+function approxBytesOfJson(obj) { return JSON.stringify(obj).length; }
+function canUseBeacon() { try { return typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function"; } catch { return false; } }
+function tryBeacon(url, obj) { try { const blob = new Blob([JSON.stringify(obj)], { type: "application/json" }); return navigator.sendBeacon(url, blob); } catch { return false; } }
 async function postJSON(url, obj, { preferBeacon = false, keepalive = false } = {}) {
   if (preferBeacon && canUseBeacon() && approxBytesOfJson(obj) <= BEACON_MAX_BYTES) {
-    const ok = tryBeacon(url, obj);
-    if (ok) return { ok: true, via: "beacon" };
+    const ok = tryBeacon(url, obj); if (ok) return { ok: true, via: "beacon" };
   }
   const res = await fetch(url, {
     method: "POST",
@@ -101,9 +89,7 @@ async function postJSON(url, obj, { preferBeacon = false, keepalive = false } = 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     const err = new Error(`HTTP ${res.status} ${res.statusText} :: ${text.slice(0, 400)}`);
-    err.status = res.status;
-    err.bodyText = text || "";
-    err.permanent = res.status === 404 || res.status === 410;
+    err.status = res.status; err.bodyText = text || ""; err.permanent = res.status === 404 || res.status === 410;
     throw err;
   }
   return { ok: true, via: "fetch" };
@@ -114,28 +100,22 @@ function classifyPermanentRowsError(err) {
   const msg = (err.bodyText || err.message || "").toLowerCase();
   if (status === 404 || status === 410) return { permanent: true, reason: `endpoint returned ${status}` };
   const tableMissing =
-    msg.includes("doesn't exist") ||
-    msg.includes("does not exist") ||
-    msg.includes("no such table") ||
-    msg.includes("unknown table") ||
+    msg.includes("doesn't exist") || msg.includes("does not exist") ||
+    msg.includes("no such table") || msg.includes("unknown table") ||
     (msg.includes("table") && msg.includes("not found"));
   if (status === 500 && tableMissing) return { permanent: true, reason: "target table is missing on the server" };
   return { permanent: false, reason: "" };
 }
+function stripAnsi(s) { return String(s).replace(/\x1b\[[0-9;]*m/g, ""); }
+function ensureSemicolon(nwk) { const s = String(nwk).trim(); return /;\s*$/.test(s) ? s : s + ";"; }
+function safeNumber(x) { const n = Number(x); return Number.isFinite(n) ? n : null; }
+function hashString(str) { let h = 5381, i = str.length; while (i) h = (h * 33) ^ str.charCodeAt(--i); return (h >>> 0).toString(36); }
+function sanitize(name) { if (!name) return null; const c = String(name).replace(/[^A-Za-z0-9._-]/g, "_"); return c.length ? c : null; }
 
 // ---------- Job metadata upsert ----------
 async function upsertJobMetadata(jobId, cfg) {
-  const payload = {
-    job_id: jobId,
-    thr: cfg.thr,
-    reps: cfg.reps,
-    max_iter: cfg.maxIter,
-    D_pi: cfg.D_pi,
-    D_M: cfg.D_M,
-    status: "started",
-  };
+  const payload = { job_id: jobId, thr: cfg.thr, reps: cfg.reps, max_iter: cfg.maxIter, D_pi: cfg.D_pi, D_M: cfg.D_M, status: "started" };
   const size = approxBytesOfJson(payload);
-
   try {
     upLog(`↗ upsert /api/jobs (job=${jobId}, ~${size}B)`);
     const result = await postJSON(`${API_BASE}/api/jobs`, payload, { keepalive: true });
@@ -269,6 +249,124 @@ function emitRowsAsArtifact(rows, reason) {
   }
 }
 
+/* ---------------- Trees uploading helpers ---------------- */
+
+function estimateCountsFromNewick(nw) {
+  const n_edges = (nw.match(/:/g) || []).length || null;
+  const leafLike = nw.match(/([^(),:]+)(?=:[^(),;]*)/g) || [];
+  const n_leaves = leafLike.length || null;
+  return { n_leaves, n_edges };
+}
+
+// Robustly parse [FJ_TREE] {json or raw} / [TREE] ... / NEWICK:
+function maybeParseTreeLine(lineStr, jobId) {
+  let line = stripAnsi(String(lineStr)).trim();
+  if (!line) return null;
+
+  const iFJ = line.indexOf("[FJ_TREE]");
+  const iT  = iFJ === -1 ? line.indexOf("[TREE]") : -1;
+  const tagAt = iFJ !== -1 ? iFJ : iT;
+  if (tagAt === -1) {
+    if (line.startsWith("NEWICK:")) {
+      const nwk = line.slice("NEWICK:".length).trim();
+      if (nwk) {
+        const meta = {}; const jid = String(jobId ?? "").trim();
+        if (jid) meta.job_id = jid;
+        return { newick: ensureSemicolon(nwk), meta };
+      }
+    }
+    return null;
+  }
+
+  line = line.slice(tagAt);
+  const m = line.match(/^\[(?:FJ_)?TREE\]\s*(.+)$/);
+  if (!m) return null;
+  const payload = m[1].trim();
+  if (!payload) return null;
+
+  if (payload[0] === "{") {
+    try {
+      const obj = JSON.parse(payload);
+      const newick =
+        obj.newick != null ? String(obj.newick) :
+        obj.tree   != null ? String(obj.tree)   :
+        obj.nwk    != null ? String(obj.nwk)    : "";
+      if (!newick) return null;
+
+      const meta = {};
+      const jid = String(obj.job_id ?? "").trim() || String(jobId ?? "").trim();
+      if (jid) meta.job_id = jid;
+
+      if (obj.label != null)     meta.label = String(obj.label);
+      if (obj.method != null)    meta.method = String(obj.method);
+      if (obj.root_name != null) meta.root_name = String(obj.root_name);
+
+      const rep  = Number(obj.rep);                if (Number.isFinite(rep))  meta.rep  = rep;
+      const iter = Number(obj.iter);               if (Number.isFinite(iter)) meta.iter = iter;
+      const eps  = Number(obj.epsilon ?? obj.eps); if (Number.isFinite(eps))  meta.epsilon = eps;
+
+      return { newick: ensureSemicolon(newick), meta };
+    } catch {}
+  }
+
+  const meta = {}; const jid2 = String(jobId ?? "").trim();
+  if (jid2) meta.job_id = jid2;
+  return { newick: ensureSemicolon(payload), meta };
+}
+
+async function postTree(jobId, newick, meta = {}) {
+  if (!UPLOAD_TREES) return false;
+  if (!jobId) { postMessage({ type: "log", line: "⚠️ postTree: missing jobId" }); return false; }
+  if (!newick || typeof newick !== "string") return false;
+
+  const nwk = ensureSemicolon(stripAnsi(newick));
+  const jobSeen = seenTreeHashesByJob.get(jobId) || new Set();
+  const dedupeKey = `${nwk}|${meta.label ?? ""}|${meta.rep ?? ""}|${meta.iter ?? ""}`;
+  const h = hashString(dedupeKey);
+  if (jobSeen.has(h)) { dbLog(`postTree: dedupe skip (hash=${h})`); return false; }
+
+  let n_leaves = null, n_edges = null;
+  try { const est = estimateCountsFromNewick(nwk); n_leaves = est.n_leaves ?? null; n_edges = est.n_edges ?? null; } catch {}
+
+  const payload = {
+    job_id: jobId,
+    source: meta.source ?? "familyjoining",
+    method: meta.method ?? "na",
+    label:  meta.label  ?? "final",
+    format: "newick",
+    tree:   nwk,
+    rep:    safeNumber(meta.rep),
+    iter:   safeNumber(meta.iter),
+    epsilon: safeNumber(meta.epsilon ?? (typeof epsilonParam === "number" ? epsilonParam : null)),
+    n_leaves,
+    n_edges,
+    root_name: meta.root_name ?? null,
+    is_current: meta.is_current ?? (treesUploadedCount === 0 ? 1 : 0),
+  };
+
+  try {
+    upLog(`↗ upsert /api/trees (len=${nwk.length})`);
+    const res = await postJSON(ENDPOINTS.trees(), payload, { keepalive: true });
+    treesUploadedCount++;
+    jobSeen.add(h);
+    seenTreeHashesByJob.set(jobId, jobSeen);
+    dbLog(`tree saved via ${res.via ?? "db"} (current=${payload.is_current})`);
+    upLog(`✔ upsert /api/trees ok ${res.via ? `(via ${res.via})` : ""}`);
+    return true;
+  } catch (e) {
+    postMessage({ type: "log", line: `⚠️ tree upload failed: ${String(e)}` });
+    return false;
+  }
+}
+async function awaitTreeUploads() {
+  try {
+    const all = Array.from(pendingTreeUploads);
+    if (all.length) await Promise.allSettled(all);
+  } catch {}
+}
+
+/* ---------------- rows flush ---------------- */
+
 async function flushNow(jobId, { final }) {
   if (inflight) return false;
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
@@ -295,11 +393,7 @@ async function flushNow(jobId, { final }) {
   inflight = true;
   const t0 = (typeof performance !== "undefined" ? performance.now() : Date.now());
   try {
-    const result = await postJSON(
-      ENDPOINTS.rows(jobId),
-      { rows: batch },
-      { preferBeacon: !!final, keepalive: !!final }
-    );
+    const result = await postJSON(ENDPOINTS.rows(jobId), { rows: batch }, { preferBeacon: !!final, keepalive: !!final });
     const t1 = (typeof performance !== "undefined" ? performance.now() : Date.now());
     const ms = Math.round(t1 - t0);
     retryDelay = RETRY_BASE_MS;
@@ -309,12 +403,9 @@ async function flushNow(jobId, { final }) {
     if (permanent) {
       rowsEndpointDisabled = true;
       rowsEndpointErrorReason = reason || "permanent server error";
-      postMessage({
-        type: "log",
-        line:
+      postMessage({ type: "log", line:
 `🛑 rows endpoint permanently failing (${rowsEndpointErrorReason}); dumping current + future rows as artifacts.
-   Check API_BASE="${API_BASE}" and ensure the backend exposes ${ENDPOINTS.rows("<jobId>")} and the required table exists.`,
-      });
+   Check API_BASE="${API_BASE}" and ensure the backend exposes ${ENDPOINTS.rows("<jobId>")} and the required table exists.` });
       rowBuffer.unshift(...batch);
       const dump = rowBuffer.splice(0, Math.min(rowBuffer.length, MAX_BATCH));
       emitRowsAsArtifact(dump, rowsEndpointErrorReason);
@@ -324,9 +415,7 @@ async function flushNow(jobId, { final }) {
       setTimeout(() => void flushNow(jobId, { final }), retryDelay);
       retryDelay = Math.min(Math.floor(retryDelay * 1.8), RETRY_MAX_MS);
     }
-  } finally {
-    inflight = false;
-  }
+  } finally { inflight = false; }
 
   if (rowBuffer.length) setTimeout(() => void flushNow(jobId, { final }), 0);
   return true;
@@ -346,7 +435,6 @@ async function drainAll(jobId) {
 
 /* ---------------- [EM_AllInfo] handling ---------------- */
 
-// Normalize to shape {parsimony?, dirichlet?, ssh?}
 function normalizeBestObject(raw) {
   if (!raw || typeof raw !== "object") return null;
   const out = {};
@@ -371,9 +459,7 @@ function emitBestAsArtifact(bundle, reason) {
     const bytes = new TextEncoder().encode(JSON.stringify({ reason, job_id: jobIdForThisRun, bundle }));
     postMessage({ type: "log", line: `📦 Best-params saved as artifact "${name}" (${bytes.length}B) due to: ${reason}` });
     postMessage({ type: "artifact", name, bytes }, [bytes.buffer]);
-  } catch (e) {
-    postMessage({ type: "log", line: `⚠️ failed to emit best-params artifact: ${String(e)}` });
-  }
+  } catch (e) { postMessage({ type: "log", line: `⚠️ failed to emit best-params artifact: ${String(e)}` }); }
 }
 
 async function uploadBestMethods(jobId, shaped, { preferBeacon = false } = {}) {
@@ -381,8 +467,7 @@ async function uploadBestMethods(jobId, shaped, { preferBeacon = false } = {}) {
   const methods = ["parsimony", "dirichlet", "ssh"].filter(k => shaped[k]);
   if (!methods.length) return { okAny: false, okAll: false };
 
-  let okAny = false;
-  let okAll = true;
+  let okAny = false, okAll = true;
 
   for (const k of methods) {
     const payload = { job_id: jobId, [k]: shaped[k] };
@@ -411,14 +496,12 @@ async function uploadBestMethods(jobId, shaped, { preferBeacon = false } = {}) {
   return { okAny, okAll };
 }
 
-// Ensure best-object has rep; fallback to lastRepSeen if missing
 function attachRepIfMissing(obj) {
   if (!obj) return;
   const r = Number(obj.rep);
   if (!Number.isFinite(r) && Number.isFinite(lastRepSeen)) obj.rep = lastRepSeen;
 }
 
-// Flush the currently pending rep's bundle immediately
 async function flushPendingBestNow(reason = "manual flush") {
   if (pendingRep === null) return { okAny: false, okAll: false };
   const bundle = {};
@@ -436,14 +519,12 @@ async function flushPendingBestNow(reason = "manual flush") {
     emitBestAsArtifact({ rep: pendingRep, ...bundle }, `upload failed during ${reason}`);
   }
 
-  // clear current rep bundle
   pendingBest.parsimony = pendingBest.dirichlet = pendingBest.ssh = null;
   pendingRep = null;
 
   return result;
 }
 
-// Debounce uploads slightly to gather 3 methods for the same rep
 function scheduleBestUpload() {
   if (bestFlushTimer) return;
   bestFlushTimer = setTimeout(() => {
@@ -452,18 +533,15 @@ function scheduleBestUpload() {
   }, BEST_UPLOAD_DEBOUNCE_MS);
 }
 
-// Handle an [EM_AllInfo] line from the WASM code
 function handleBestLine(jsonText) {
   try {
     const shaped = normalizeBestObject(JSON.parse(jsonText));
     if (!shaped) return;
 
-    // Ensure rep is present on each method struct
     attachRepIfMissing(shaped.parsimony);
     attachRepIfMissing(shaped.dirichlet);
     attachRepIfMissing(shaped.ssh);
 
-    // Extract the rep for this best-bundle
     const repNow = Number(
       (shaped.parsimony && shaped.parsimony.rep) ??
       (shaped.dirichlet && shaped.dirichlet.rep) ??
@@ -474,13 +552,11 @@ function handleBestLine(jsonText) {
       return;
     }
 
-    // If a new rep arrives, flush the previous one immediately
     if (pendingRep !== null && repNow !== pendingRep) {
       void flushPendingBestNow("rep changed");
     }
     pendingRep = repNow;
 
-    // Merge into the current pending bundle for this rep
     if (shaped.parsimony) pendingBest.parsimony = shaped.parsimony;
     if (shaped.dirichlet) pendingBest.dirichlet = shaped.dirichlet;
     if (shaped.ssh)       pendingBest.ssh       = shaped.ssh;
@@ -500,63 +576,56 @@ function handlePrint(txt) {
   if (jobIdForThisRun && line.startsWith("[ROW")) {
     const brace = line.indexOf("{");
     if (brace !== -1) {
-      try {
-        const obj = JSON.parse(line.slice(brace));
-        queueRow(jobIdForThisRun, obj);
-        return;
-      } catch (e) {
-        postMessage({ type: "log", line: `row-parse-error: ${String(e)} :: ${line.slice(0,200)}` });
-        return;
-      }
+      try { const obj = JSON.parse(line.slice(brace)); queueRow(jobIdForThisRun, obj); return; }
+      catch (e) { postMessage({ type: "log", line: `row-parse-error: ${String(e)} :: ${line.slice(0,200)}` }); return; }
     }
   }
 
   if (jobIdForThisRun && line.startsWith("[EM_AllInfo]")) {
     const brace = line.indexOf("{");
-    if (brace !== -1) {
-      handleBestLine(line.slice(brace));
-      return;
-    }
+    if (brace !== -1) { handleBestLine(line.slice(brace)); return; }
   }
 
-  // Everything else is regular UI log
-  postMessage({ type: "log", line });
+  if (jobIdForThisRun) {
+    const parsed = maybeParseTreeLine(line, jobIdForThisRun);
+    if (parsed && parsed.newick) {
+      const p = postTree(jobIdForThisRun, parsed.newick, parsed.meta || {});
+      pendingTreeUploads.add(p);
+      p.finally(() => pendingTreeUploads.delete(p));
+    }
+  }
+  postMessage ({ type: "log", line: line});
 }
 
 /* ---------------- worker entry + runtime toggle handler ---------------- */
 
 self.onmessage = async (e) => {
-  // RUNTIME TOGGLE for console DB logs
-  if (e?.data && e.data.__cmd === "setDbLogging") {
-    DB_LOGS = !!e.data.enabled;
-    try { console.debug(`[DB] logging ${DB_LOGS ? "ENABLED" : "DISABLED"}`); } catch {}
-    return;
-  }
-  // RUNTIME TOGGLE for upsert UI logs
-  if (e?.data && e.data.__cmd === "setUpsertUiLogging") {
-    UPSERT_UI_LOGS = !!e.data.enabled;
-    postMessage({ type: "log", line: `ℹ︎ Upsert UI logs ${UPSERT_UI_LOGS ? "ENABLED" : "DISABLED"}` });
-    return;
-  }
+  if (e?.data && e.data.__cmd === "setDbLogging") { DB_LOGS = !!e.data.enabled; try { console.debug(`[DB] logging ${DB_LOGS ? "ENABLED" : "DISABLED"}`); } catch {} return; }
+  if (e?.data && e.data.__cmd === "setUpsertUiLogging") { UPSERT_UI_LOGS = !!e.data.enabled; postMessage({ type: "log", line: `ℹ︎ Upsert UI logs ${UPSERT_UI_LOGS ? "ENABLED" : "DISABLED"}` }); return; }
+  if (e?.data && e.data.__cmd === "setTreeUploading") { UPLOAD_TREES = !!e.data.enabled; postMessage({ type: "log", line: `🌳 Tree upload ${UPLOAD_TREES ? "ENABLED" : "DISABLED"}` }); return; }
 
-  const { params, seqBytes, topoBytes, jobId } = e.data;
+  // NEW: inputs match your InputPage now
+  const { params, dnaSeqBytes, aaSeqBytes, jobId, fileNames } = e.data;
+
   startedAtMs = Date.now();
   jobIdForThisRun = jobId || `job-${Date.now()}`;
   rowsEndpointDisabled = false;
   rowsEndpointErrorReason = "";
+  treesUploadedCount = 0;
+  epsilonParam = Number.isFinite(Number(params?.epsilon)) ? Number(params.epsilon) : null;
 
   // reset row + best state
   lastRepSeen = null;
-
   lastBestObj = null;
   bestUploaded = false;
   bestEndpointMissing = false;
-
   pendingRep = null;
-  pendingBest.parsimony = null;
-  pendingBest.dirichlet = null;
-  pendingBest.ssh = null;
+  pendingBest.parsimony = pendingBest.dirichlet = pendingBest.ssh = null;
   if (bestFlushTimer) { clearTimeout(bestFlushTimer); bestFlushTimer = null; }
+
+  // reset tree dedupe & pending trackers for this job
+  seenTreeHashesByJob.set(jobIdForThisRun, new Set());
+  pendingTreeUploads.clear();
 
   const v = (self.NEXT_PUBLIC_COMMIT_SHA || Date.now());
   const createEmtr = (await import(`/wasm/emtr.js?v=${v}`)).default;
@@ -564,10 +633,10 @@ self.onmessage = async (e) => {
   const Module = await createEmtr({
     locateFile: (p) => `/wasm/${p}?v=${v}`,
     print: handlePrint,
-    printErr: (txt) => postMessage({ type: "log", line: `ERR: ${txt}` }),
+    printErr: (txt) => { try { handlePrint(txt); } catch {} postMessage({ type: "log", line: `ERR: ${txt}` }); },
   });
 
-  function shipArtifacts() {
+  async function shipArtifactsAndUploadTrees() {
     try {
       const outDir = "/work/out";
       const FS = Module.FS;
@@ -578,9 +647,19 @@ self.onmessage = async (e) => {
         if ((st.mode & 0o170000) === 0o100000) {
           const bytes = FS.readFile(path, { encoding: "binary" });
           postMessage({ type: "artifact", name, bytes }, [bytes.buffer]);
+
+          if (/\.(newick|nwk|tree)$/i.test(name)) {
+            try {
+              const text = FS.readFile(path, { encoding: "utf8" });
+              if (text && typeof text === "string" && text.includes("(") && text.includes(")")) {
+                const p = postTree(jobIdForThisRun, text.trim(), { label: name });
+                pendingTreeUploads.add(p); p.finally(() => pendingTreeUploads.delete(p));
+              }
+            } catch {}
+          }
         }
       }
-    } catch { /* ignore */ }
+    } catch {}
   }
 
   try {
@@ -588,16 +667,33 @@ self.onmessage = async (e) => {
     try { FS.mkdir("/work"); } catch {}
     try { FS.mkdir("/work/out"); } catch {}
 
-    FS.writeFile("/work/sequence.phyx", new Uint8Array(seqBytes));
-    FS.writeFile("/work/topology.csv", new Uint8Array(topoBytes));
+    // Stage inputs using ORIGINAL names (sanitized); pass empty strings if absent
+    const dnaBase = sanitize(fileNames?.dna) || (dnaSeqBytes ? "dna_input.fa" : null);
+    const aaBase  = sanitize(fileNames?.aa)  || (aaSeqBytes  ? "aa_input.faa" : null);
 
+    let dnaPath = "", aaPath = "";
+    if (dnaSeqBytes) {
+      dnaPath = `/work/${dnaBase}`;
+      FS.writeFile(dnaPath, new Uint8Array(dnaSeqBytes));
+      postMessage({ type: "log", line: `DNA → ${dnaPath} (${(dnaSeqBytes.byteLength/1024).toFixed(1)} KiB)` });
+    }
+    if (aaSeqBytes) {
+      aaPath = `/work/${aaBase}`;
+      FS.writeFile(aaPath, new Uint8Array(aaSeqBytes));
+      postMessage({ type: "log", line: `AA  → ${aaPath} (${(aaSeqBytes.byteLength/1024).toFixed(1)} KiB)` });
+    }
+
+    // Set line buffering (C or C++ bridge)
     if (typeof Module.set_line_buffered === "function") {
       Module.set_line_buffered();
     } else {
-      const setLineBufferedC = Module.cwrap("set_line_buffered_c", "void", []);
-      if (setLineBufferedC) setLineBufferedC();
+      try {
+        const setLineBufferedC = Module.cwrap("set_line_buffered_c", "void", []);
+        if (setLineBufferedC) setLineBufferedC();
+      } catch {}
     }
 
+    // Params
     const thr = Number(params.thr);
     const reps = params.reps | 0;
     const maxIter = params.maxIter | 0;
@@ -610,10 +706,12 @@ self.onmessage = async (e) => {
 
     // Run EM and stream rows
     let rc = 0;
+
+    // Prefer embind class if present
     if (typeof Module.EMManager === "function") {
       const mgr = new Module.EMManager(
-        "/work/sequence.phyx",
-        "/work/topology.csv",
+        dnaPath || "",        // dna path or empty
+        aaPath  || "",        // aa path or empty
         reps,
         maxIter,
         thr,
@@ -622,6 +720,7 @@ self.onmessage = async (e) => {
       );
       mgr.EM_main();
     } else {
+      // C entrypoint fallback
       const EM_main_entry_c = Module.cwrap(
         "EM_main_entry_c",
         "number",
@@ -631,8 +730,9 @@ self.onmessage = async (e) => {
       );
       if (!EM_main_entry_c) throw new Error("EM_main_entry_c not exported");
       rc = EM_main_entry_c(
-        "/work/sequence.phyx", "/work/topology.csv",
-        thr, reps, maxIter,
+        dnaPath || "",
+        aaPath  || "",
+        reps, maxIter, thr,
         D_pi[0], D_pi[1], D_pi[2], D_pi[3],
         D_M[0],  D_M[1],  D_M[2],  D_M[3]
       );
@@ -640,12 +740,14 @@ self.onmessage = async (e) => {
 
     // Finish sending row-stream
     await drainAll(jobIdForThisRun);
-    shipArtifacts();
+
+    // Ship artifacts and attempt Newick uploads from files
+    await shipArtifactsAndUploadTrees();
 
     // Flush any remaining best-bundle for the last rep
     await flushPendingBestNow("end-of-run");
 
-    // As an extra safety net, retry the last bundle (if any) with Beacon
+    // Retry last bundle using Beacon if needed
     if (lastBestObj && !bestUploaded && !bestEndpointMissing) {
       dbLog("↻ [EM_AllInfo] retrying at end-of-run…");
       const { okAny, okAll } = await uploadBestMethods(jobIdForThisRun, lastBestObj, { preferBeacon: true });
@@ -653,16 +755,21 @@ self.onmessage = async (e) => {
       bestUploaded = okAll;
     }
 
+    // Wait for in-flight tree uploads
+    await awaitTreeUploads();
+
     const elapsedMs = Date.now() - startedAtMs;
     const minutes = (elapsedMs / 60000).toFixed(2);
-    postMessage({ type: "log", line: `⏱ finished in ${minutes}m` });
-    postMessage({ type: "done", rc });
+
     await setJobStatus(jobIdForThisRun, {
       status: rowsEndpointDisabled ? "blocked" : "completed",
       finished_at: new Date().toISOString(),
       dur_minutes: minutes,
       blocked_reason: rowsEndpointDisabled ? rowsEndpointErrorReason : undefined,
     });
+
+    postMessage({ type: "log", line: `⏱ finished in ${minutes}m` });
+    postMessage({ type: "done", rc });
   } catch (err) {
     // Finish sending row-stream even on failure
     await drainAll(jobIdForThisRun);
@@ -670,23 +777,28 @@ self.onmessage = async (e) => {
     // Flush whatever best bundle we have for the last rep
     await flushPendingBestNow("run failure");
 
-    // Retry the last best bundle once more using Beacon
+    // Retry best bundle with Beacon once more
     if (lastBestObj && !bestUploaded && !bestEndpointMissing) {
       dbLog("↻ [EM_AllInfo] retrying after failure…");
       const { okAny } = await uploadBestMethods(jobIdForThisRun, lastBestObj, { preferBeacon: true });
       if (!okAny) emitBestAsArtifact(lastBestObj, "network error while posting EM_AllInfo (after failure)");
     }
 
+    // Wait for trees even on failure
+    await awaitTreeUploads();
+
     const elapsedMs = Date.now() - startedAtMs;
     const minutes = (elapsedMs / 60000).toFixed(2);
     postMessage({ type: "log", line: `⏱ aborted after ${minutes}m` });
     postMessage({ type: "log", line: `❌ ${String(err)}` });
-    postMessage({ type: "done", rc: 1 });
+
     await setJobStatus(jobIdForThisRun, {
       status: rowsEndpointDisabled ? "blocked" : "failed",
       finished_at: new Date().toISOString(),
       dur_minutes: minutes,
       blocked_reason: rowsEndpointDisabled ? rowsEndpointErrorReason : undefined,
     });
+
+    postMessage({ type: "done", rc: 1 });
   }
 };

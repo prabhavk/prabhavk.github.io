@@ -16,6 +16,6 @@ export default function InputLayout({ children }: { children: React.ReactNode })
           </aside>
         </div>
       </div>
-    </ProgressProvider>
+    </ProgressProvider> 
   );
 }

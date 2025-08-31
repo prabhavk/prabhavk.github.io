@@ -327,7 +327,7 @@ export default function MLEinDPage() {
     <div className="p-6 max-w-[1400px] mx-auto space-y-4" ref={plotsRef}>
       {/* Header row */}
       <div className="flex flex-wrap items-end gap-3">
-        <h1 className="text-2xl font-bold">
+        <h1 className="text-2xl text-black font-bold">
           Maximum likelihood estimate of GMM and density plot of Dirichlet parameters
         </h1>
 
@@ -336,7 +336,7 @@ export default function MLEinDPage() {
         </div>
 
         {/* Repetition selector */}
-        <label className="ml-4 text-sm flex items-center gap-2">
+        <label className="ml-4 text-sm text-black flex items-center gap-2">
           <span>Repetition</span>
           <select
             className="border rounded px-2 py-1 text-sm"
@@ -355,12 +355,12 @@ export default function MLEinDPage() {
           </select>
         </label>
 
-        {rep ? <div className="text-xs text-gray-600">Using rep: <code>{rep}</code></div> : null}
+        {rep ? <div className="text-xs text-black text-gray-600">Using rep: <code>{rep}</code></div> : null}
 
         <button
           type="button"
           onClick={() => void load()}
-          className="ml-auto px-4 py-2 rounded bg-black text-white disabled:opacity-50"
+          className="ml-auto px-4 py-2 rounded bg-white text-black disabled:opacity-50"
           disabled={!job || loading}
           title="Reload"
         >

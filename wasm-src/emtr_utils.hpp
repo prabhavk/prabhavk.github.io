@@ -17,11 +17,6 @@
 
 
 namespace emtr {
-
-    
-    
-    
-    
     // Escape a string for JSON (handles quotes, backslashes, control chars)
     inline std::string json_escape(const std::string& s) {
     std::string out;

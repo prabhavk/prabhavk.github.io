@@ -4,8 +4,8 @@ import type { Metadata } from "next";
 import Nav from "@/components/Nav"; 
 
 export const metadata: Metadata = {
-  title: "emtree UI",
-  description: "Run emtree and view results",
+  title: "qrep",
+  description: "analyze reproducibility using qrep",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

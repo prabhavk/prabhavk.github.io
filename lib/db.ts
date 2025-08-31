@@ -7,6 +7,7 @@ type Row = Record<string, unknown>;
 /** Tell TypeScript about our global pool slot (no eslint-disable needed). */
 declare global {
   // This is a declaration merge on the global scope; it does not emit JS.
+  // eslint-disable-next-line no-var
   var __MYSQL_POOL__: mysql.Pool | undefined;
 }
 
@@ -28,7 +29,7 @@ function createPool(): mysql.Pool {
     user,
     password,
     database,
-    ssl: { rejectUnauthorized: true },
+    ssl: { rejectUnauthorized: true }, // PlanetScale/Vitess-friendly
     waitForConnections: true,
     connectionLimit: 10,
   });
@@ -42,8 +43,8 @@ function getPool(): mysql.Pool {
   return globalThis.__MYSQL_POOL__;
 }
 
-/** Run a parameterized query and return rows typed as T. */
-export async function query<T extends Row = Row>(
+/** Run a parameterized SELECT and return typed rows. */
+export async function q<T extends Row = Row>(
   sql: string,
   params: ReadonlyArray<SQLParam> = [],
 ): Promise<T[]> {
@@ -53,3 +54,30 @@ export async function query<T extends Row = Row>(
   );
   return rows as unknown as T[];
 }
+
+/** Like q(), but returns the first row (or null). */
+export async function q1<T extends Row = Row>(
+  sql: string,
+  params: ReadonlyArray<SQLParam> = [],
+): Promise<T | null> {
+  const rows = await q<T>(sql, params);
+  return rows.length ? rows[0] : null;
+}
+
+/** Execute a non-SELECT (INSERT/UPDATE/DELETE) and return the result header. */
+export async function exec(
+  sql: string,
+  params: ReadonlyArray<SQLParam> = [],
+): Promise<mysql.ResultSetHeader> {
+  const [res] = await getPool().execute<mysql.ResultSetHeader>(
+    sql,
+    params as unknown[],
+  );
+  return res;
+}
+
+/** Back-compat alias if other code imported `query` previously. */
+export const query = q;
+
+/** Optional: expose the pool getter if you ever need raw connections/transactions. */
+export { getPool };

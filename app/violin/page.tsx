@@ -9,16 +9,12 @@ import type { Data, Layout, PlotlyHTMLElement } from "plotly.js";
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 type MethodName = "Parsimony" | "Dirichlet" | "SSH";
-
-// Enforce this order on the x-axis and when creating traces
 const METHOD_ORDER: MethodName[] = ["Dirichlet", "Parsimony", "SSH"];
-
-// Nodes (dropdown)
-const NODES = Array.from({ length: 17 }, (_, i) => `h_${21 + i}`);
 
 type SeriesResp = {
   job_id: string;
-  root?: string;
+  roots: string[]; // <-- new: available roots for this job
+  root?: string;   // <-- server-selected if client didn't pass one
   series: { Parsimony: number[]; Dirichlet: number[]; SSH: number[] };
   counts: { Parsimony: number; Dirichlet: number; SSH: number };
 };
@@ -34,7 +30,8 @@ function isErr(x: unknown): x is ApiErr {
 
 export default function ViolinPage() {
   const [job, setJob] = useState<string>("");
-  const [root, setRoot] = useState<string>("h_32");
+  const [roots, setRoots] = useState<string[]>([]);  // <-- from DB
+  const [root, setRoot] = useState<string>("");      // <-- selected root (no default hardcode)
   const [data, setData] = useState<SeriesResp | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -42,10 +39,7 @@ export default function ViolinPage() {
   // ---- EXPORT / DOWNLOAD STATE & HELPERS ----
   const exportPrefix = useMemo(() => buildExportPrefix?.({ job }) ?? (job || "violin"), [job]);
 
-  // all chart refs live here; key = your chosen id
   const violinRefs = useRef<Record<string, PlotlyHTMLElement | null>>({});
-
-  // register a chart under a stable id
   const registerViolin = useCallback(
     (id: string) =>
       (_figure: unknown, gd: PlotlyHTMLElement) => {
@@ -54,7 +48,6 @@ export default function ViolinPage() {
     []
   );
 
-  // Plotly toImage access
   const toImage = useCallback(
     async (gd: PlotlyHTMLElement, opts: { format?: "png" | "svg" | "jpeg" | "webp"; scale?: number }) => {
       const w = window as unknown as { Plotly?: { toImage: (el: PlotlyHTMLElement, o: typeof opts) => Promise<string> } };
@@ -73,11 +66,9 @@ export default function ViolinPage() {
     a.remove();
   };
 
-  // Compact fixed-width UTC stamp: YYYYMMDD_HHMMSSZ
   const utcStamp = () =>
     new Date().toISOString().replace(/\.\d{3}Z$/, "Z").replace(/[-:]/g, "").replace("T", "_");
 
-  // Download a single chart by its id
   const downloadViolin = useCallback(
     async (id: string, fmt: "png" | "svg" = "png") => {
       const gd = violinRefs.current[id];
@@ -99,10 +90,13 @@ export default function ViolinPage() {
     }
   }, []);
 
+  // Fetch data (and roots) for current job/root
   const load = useCallback(async () => {
     if (!job) {
       setErr("No job selected. Please pick a job on the Precomputed Results page.");
       setData(null);
+      setRoots([]);
+      setRoot("");
       return;
     }
     setLoading(true);
@@ -110,7 +104,7 @@ export default function ViolinPage() {
     try {
       const u = new URL("/api/violin", window.location.origin);
       u.searchParams.set("job", job);
-      if (root) u.searchParams.set("root", root);
+      if (root) u.searchParams.set("root", root); // if empty, server may choose a default
       const res = await fetch(u.toString(), { cache: "no-store" });
 
       const ct = res.headers.get("content-type") || "";
@@ -123,10 +117,21 @@ export default function ViolinPage() {
 
       const json: unknown = await res.json();
       if (!res.ok || isErr(json)) throw new Error(isErr(json) ? json.error : `HTTP ${res.status}`);
-      setData(json as SeriesResp);
+
+      const resp = json as SeriesResp;
+
+      // Update roots and selected root
+      setRoots(resp.roots ?? []);
+      // If server provided a canonical/first root and our current is empty/invalid, adopt it
+      if ((!root || !resp.roots?.includes(root)) && (resp.root || resp.roots?.length)) {
+        setRoot(resp.root ?? resp.roots[0]);
+      }
+
+      setData(resp);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Failed to load");
       setData(null);
+      setRoots([]);
     } finally {
       setLoading(false);
     }
@@ -172,7 +177,7 @@ export default function ViolinPage() {
     return {
       type: "scatter",
       mode: "lines+markers",
-      x: METHOD_ORDER as unknown as string[], // Plotly wants string[] here
+      x: METHOD_ORDER as unknown as string[],
       y: medians,
       line: { color: "black", width: 2 },
       marker: { color: "black", size: 8 },
@@ -183,7 +188,7 @@ export default function ViolinPage() {
   }, [data]);
 
   const layout: Partial<Layout> = {
-    title: { text: `ll_final · root=${root}`, font: { color: "black" } },
+    title: { text: `ll_final · root=${root || "(none)"}`, font: { color: "black" } },
     xaxis: {
       title: { text: "Method", font: { color: "black" } },
       tickfont: { color: "black" },
@@ -212,12 +217,23 @@ export default function ViolinPage() {
       <div className="flex flex-wrap gap-3 items-end mb-4">
         <label className="flex flex-col">
           <span className="text-sm">Root node</span>
-          <select className="border rounded px-3 py-2" value={root} onChange={(e) => setRoot(e.target.value)}>
-            {NODES.map((n) => (
-              <option key={n} value={n}>
-                {n}
+          <select
+            className="border rounded px-3 py-2"
+            value={root}
+            onChange={(e) => setRoot(e.target.value)}
+            disabled={!roots.length}
+          >
+            {roots.length ? (
+              roots.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))
+            ) : (
+              <option value="" disabled>
+                {job ? "No roots for this job" : "Select a job first"}
               </option>
-            ))}
+            )}
           </select>
         </label>
 
@@ -232,7 +248,6 @@ export default function ViolinPage() {
         </div>
 
         <div className="ml-auto flex gap-2">
-          {/* Downloads */}
           <button
             className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
             onClick={() => downloadViolin("ll_final_violin", "png")}
@@ -240,7 +255,7 @@ export default function ViolinPage() {
             title="Download current violin as PNG"
           >
             Download PNG
-          </button>          
+          </button>
         </div>
       </div>
 
@@ -262,7 +277,6 @@ export default function ViolinPage() {
             ))}
           </div>
 
-          {/* Violin chart + median line */}
           <div className="bg-white border rounded p-2">
             <Plot
               data={medianLineTrace ? [...violinTraces, medianLineTrace] : violinTraces}
@@ -276,7 +290,7 @@ export default function ViolinPage() {
         </>
       ) : (
         <div className="p-4 border rounded">
-          No data. {job ? "Try Reload." : "Select a job on the Precomputed Results page."}
+          {job ? "No data for selected root." : "Select a job on the Precomputed Results page."}
         </div>
       )}
     </div>

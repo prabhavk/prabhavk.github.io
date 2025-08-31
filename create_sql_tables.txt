@@ -72,3 +72,37 @@ CREATE TABLE IF NOT EXISTS emtr_init_final (
   KEY idx_ll_job_root            (job_id, root),
   KEY idx_ll_job_method_rep_iter (job_id, method, rep, iter)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+DROP TABLE IF EXISTS emtr_trees;
+
+CREATE TABLE emtr_trees (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  job_id       VARCHAR(128)    NOT NULL,          -- app-enforced relation to emtr_jobs.job_id
+  source       VARCHAR(32)     NOT NULL DEFAULT 'familyjoining',
+  method       VARCHAR(32)     NOT NULL DEFAULT '5foldcv',  -- flexible
+  label        VARCHAR(64)     NULL,
+
+  format       VARCHAR(16)     NOT NULL DEFAULT 'newick',
+  tree         MEDIUMTEXT      NOT NULL,
+
+  rep          INT UNSIGNED    NULL,
+  iter         INT UNSIGNED    NULL,
+  epsilon      DOUBLE          NULL,
+  n_leaves     INT UNSIGNED    NULL,
+  n_edges      INT UNSIGNED    NULL,
+  root_name    VARCHAR(255)    NULL,
+  is_current   TINYINT(1)      NOT NULL DEFAULT 0,
+  tree_sha256  VARBINARY(32)   NULL,
+
+  created_at   TIMESTAMP(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at   TIMESTAMP(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                               ON UPDATE CURRENT_TIMESTAMP(6),
+
+  PRIMARY KEY (id),
+  KEY idx_job_created (job_id, created_at),
+  KEY idx_job_current (job_id, is_current),
+  KEY idx_job_rep_iter (job_id, rep, iter),
+  KEY idx_sha (tree_sha256)
+) ENGINE=InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_0900_ai_ci;
