@@ -37,13 +37,13 @@ export default function ProgressPane() {
       <div className="mt-3 flex gap-2">
         <button
           onClick={() => navigator.clipboard.writeText(logs.join("\n"))}
-          className="px-3 py-1 rounded bg-red-500 text-white text-sm hover:bg-blue-500 hover:text-white"
+          className="px-3 py-1 rounded bg-blue-500 text-white text-sm hover:bg-blue-500 hover:text-white"
         >
           Copy
         </button>
         <button
           onClick={clear}
-          className="px-3 py-1 rounded bg-blue-500 text-white text-sm hover:bg-red-500 hover:text-white"
+          className="px-3 py-1 rounded bg-red-500 text-white text-sm hover:bg-red-500 hover:text-white"
         >
           Clear
         </button>

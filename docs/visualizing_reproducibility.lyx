@@ -1,0 +1,343 @@
+#LyX 2.4 created this file. For more info see https://www.lyx.org/
+\lyxformat 620
+\begin_document
+\begin_header
+\save_transient_properties true
+\origin unavailable
+\textclass article
+\begin_preamble
+\usepackage[letterpaper,margin=1in]{geometry}
+\usepackage[round,authoryear]{natbib}
+\usepackage[hidelinks]{hyperref}
+\end_preamble
+\use_default_options true
+\maintain_unincluded_children no
+\language american
+\language_package default
+\inputencoding utf8
+\fontencoding auto
+\font_roman "default" "default"
+\font_sans "default" "default"
+\font_typewriter "default" "default"
+\font_math "auto" "auto"
+\font_default_family default
+\use_non_tex_fonts false
+\font_sc false
+\font_roman_osf false
+\font_sans_osf false
+\font_typewriter_osf false
+\font_sf_scale 100 100
+\font_tt_scale 100 100
+\use_microtype false
+\use_dash_ligatures true
+\graphics default
+\default_output_format default
+\output_sync 0
+\bibtex_command default
+\index_command default
+\float_placement class
+\float_alignment class
+\paperfontsize default
+\spacing single
+\use_hyperref false
+\papersize default
+\use_geometry false
+\use_package amsmath 1
+\use_package amssymb 1
+\use_package cancel 1
+\use_package esint 1
+\use_package mathdots 1
+\use_package mathtools 1
+\use_package mhchem 1
+\use_package stackrel 1
+\use_package stmaryrd 1
+\use_package undertilde 1
+\cite_engine basic
+\cite_engine_type default
+\biblio_style plain
+\use_bibtopic false
+\use_indices false
+\paperorientation portrait
+\suppress_date false
+\justification true
+\use_refstyle 1
+\use_formatted_ref 0
+\use_minted 0
+\use_lineno 0
+\index Index
+\shortcut idx
+\color #008000
+\end_index
+\secnumdepth 3
+\tocdepth 3
+\paragraph_separation indent
+\paragraph_indentation default
+\is_math_indent 0
+\math_numbering_side default
+\quotes_style english
+\dynamic_quotes 0
+\papercolumns 1
+\papersides 1
+\paperpagestyle default
+\tablestyle default
+\tracking_changes false
+\output_changes false
+\change_bars false
+\postpone_fragile_content true
+\html_math_output 0
+\html_css_as_file 0
+\html_be_strict false
+\docbook_table_output 0
+\docbook_mathml_prefix 1
+\end_header
+
+\begin_body
+
+\begin_layout Title
+Testing the reproducibility of phylogenetic parameter estimation
+\end_layout
+
+\begin_layout Author
+Prabhav Kalaghatgi
+\end_layout
+
+\begin_layout Standard
+\align center
+Independent Researcher,
+ Hyderabad,
+ India
+\end_layout
+
+\begin_layout Abstract
+Reproducibilty of parameter estimation is an important aspect of maximum-likelihood (ML) phylogeny inference.
+ We present here a web application called qrep (pronounced cr
+\begin_inset ERT
+status open
+
+\begin_layout Plain Layout
+
+
+\backslash
+^{e}
+\end_layout
+
+\end_inset
+
+pe) that provides an interface for users to test the reproducibility of rate matrix parameters estimated using maximum likelihood.
+ We have implemented the ML method presented in 
+\begin_inset CommandInset citation
+LatexCommand cite
+key "MuellerSpangVingron2002"
+literal "false"
+
+\end_inset
+
+.
+ Additionally,
+ we implemented the EMtree algorithm by 
+\begin_inset CommandInset citation
+LatexCommand cite
+key "IbanezMarcelo2014"
+literal "false"
+
+\end_inset
+
+ in order to correct a claim made in 
+\begin_inset CommandInset citation
+LatexCommand cite
+key "Kalaghatgi2020"
+literal "false"
+
+\end_inset
+
+ regarding the ability of the general Markov model to identify the location of the root.
+\end_layout
+
+\begin_layout Section
+Introduction
+\end_layout
+
+\begin_layout Standard
+Reproducibilty of phylogenetic analysis has come to the forefront of literature in statistical phylogenetics thanks to effort in papers such as Rokas.
+ There is currently no web application allowing users to validate the reproducibility of their phylogenetic analysis.
+ We present here a web application comprising statistical tests to quantify reproducibility of estimating rate matrix parameters using ML method described by 
+\begin_inset CommandInset citation
+LatexCommand cite
+key "MuellerSpangVingron2002"
+literal "false"
+
+\end_inset
+
+.
+ transition matrices and root probabilities of the general Markov model with application to DNA and Protein sequences.
+ 
+\end_layout
+
+\begin_layout Subsection
+Clarification of a misleading statement made in 
+\begin_inset CommandInset citation
+LatexCommand cite
+key "Kalaghatgi2020"
+literal "false"
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Section
+System and Methods
+\end_layout
+
+\begin_layout Subsection
+User-friendly web application
+\end_layout
+
+\begin_layout Subsection
+Compatibilty with state-of-the-art software
+\end_layout
+
+\begin_layout Standard
+Diagram of setup.
+ 
+\end_layout
+
+\begin_layout Standard
+UI at vercel 
+\end_layout
+
+\begin_layout Standard
+Database hosted at planetscale
+\end_layout
+
+\begin_layout Section
+Reproducibility
+\end_layout
+
+\begin_layout Subsection
+Phylogenetic Models Tested
+\end_layout
+
+\begin_layout Enumerate
+Substitution models
+\end_layout
+
+\begin_deeper
+\begin_layout Enumerate
+GMMD:
+ EM optimized GMM for Nucleic Acid sequences
+\end_layout
+
+\begin_layout Enumerate
+GMMA:
+ EM optimized GMM for Amino Acid sequences
+\end_layout
+
+\end_deeper
+\begin_layout Enumerate
+Types of Reproducibility implemented
+\end_layout
+
+\begin_deeper
+\begin_layout Enumerate
+Maximum log likelihood 
+\end_layout
+
+\begin_layout Enumerate
+Maximum likelihood estimate of parameters
+\end_layout
+
+\end_deeper
+\begin_layout Enumerate
+Visualizing Reproducibility
+\end_layout
+
+\begin_layout Enumerate
+Statistical tests to evaluate reproducibility
+\end_layout
+
+\begin_deeper
+\begin_layout Enumerate
+Log likelihood score
+\end_layout
+
+\begin_deeper
+\begin_layout Itemize
+one-sided Wilcoxon-Mann-Whitney test
+\end_layout
+
+\end_deeper
+\begin_layout Enumerate
+Model parameters
+\end_layout
+
+\begin_deeper
+\begin_layout Itemize
+1-D Wasserstein distance for root probability
+\end_layout
+
+\begin_layout Itemize
+Averaged 1-D Wasserstein distance for each transition matrix
+\end_layout
+
+\end_deeper
+\end_deeper
+\begin_layout Section
+Visualizing Results
+\end_layout
+
+\begin_layout Subsection
+Spirograph
+\end_layout
+
+\begin_layout Section
+User-friendly web application
+\end_layout
+
+\begin_layout Section
+Database to store and retrieve results
+\end_layout
+
+\begin_layout Section
+Compatibility with External Software
+\end_layout
+
+\begin_layout Subsection
+RAxML-NG
+\end_layout
+
+\begin_layout Section
+Data
+\end_layout
+
+\begin_layout Subsection
+Randall dataset
+\end_layout
+
+\begin_layout Subsection
+Test data from RAxML-NG
+\end_layout
+
+\begin_layout Section
+Reproducibility of results presented here
+\end_layout
+
+\begin_layout Section
+Discussion
+\end_layout
+
+\begin_layout Standard
+\begin_inset CommandInset bibtex
+LatexCommand bibtex
+btprint "btPrintCited"
+bibfiles "woodman"
+options "plainnat"
+encoding "default"
+
+\end_inset
+
+
+\end_layout
+
+\end_body
+\end_document

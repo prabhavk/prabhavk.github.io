@@ -683,7 +683,7 @@ tuple <vector<string>,vector<vector<unsigned char>>,vector<int>,vector<vector<in
 	vector <vector<unsigned char>> distinctPatterns;
 	map <vector<unsigned char>,vector<int>> distinctPatternsToSitesWherePatternRepeats;
 	vector <MST_vertex*> vertexPtrList;
-	for (unsigned int i = 0; i < vertexIdList.size(); i++){		
+	for (unsigned int i = 0; i < vertexIdList.size(); i++) {		
 		MST_vertex* v_ptr = (*this->vertexMap)[vertexIdList[i]];
 		vertexPtrList.push_back(v_ptr);
 		vector <unsigned char> compressedSequence;
@@ -694,7 +694,7 @@ tuple <vector<string>,vector<vector<unsigned char>>,vector<int>,vector<vector<in
 	vector<unsigned char> sitePattern;
 	for(int site = 0; site < numberOfSites; site++){
 		sitePattern.clear();
-		for (MST_vertex* v_ptr: vertexPtrList){
+		for (MST_vertex* v_ptr: vertexPtrList) {
 			sitePattern.push_back(v_ptr->sequence[site]);}
 		if (find(distinctPatterns.begin(),distinctPatterns.end(),sitePattern)!=distinctPatterns.end()){
 			distinctPatternsToSitesWherePatternRepeats[sitePattern].push_back(site);
@@ -7250,12 +7250,12 @@ EMManager::EMManager(string sequenceFileNameToSet,
 					 double M_a_1,
 					 double M_a_2,
 					 double M_a_3,
-					 double M_a_4) { // add parameters for Matrix rows			
-									 // add parameters for root probability
+					 double M_a_4) {
+									
 		this->prefix_for_output_files = "";		        
 		this->topologyFileName = topologyFileNameToSet;
-		this->supertree_method = "mstbackbone";
-        this->num_repetitions = num_repetitions;        
+		this->supertree_method = "mstbackbone"; // Remove
+        this->num_repetitions = num_repetitions;
 		this->verbose = 0;
 		this->distance_measure_for_NJ = "Hamming";
 		this->flag_topology = 1;
@@ -7264,13 +7264,15 @@ EMManager::EMManager(string sequenceFileNameToSet,
 		this->numberOfLargeEdgesThreshold = 100;				
 		this->SetDNAMap();
 		this->ancestralSequencesString = "";		
-		this->M = new MST();
-        this->M->ReadPhyx(sequenceFileNameToSet);
-		this->M->ComputeMST();		
+		this->M = new MST(); // Remove
+        this->M->ReadPhyx(sequenceFileNameToSet); // Transfer
+		this->M->ComputeMST(); // Remove		
 		int numberOfInputSequences = (int) this->M->vertexMap->size();
 		this->M->SetNumberOfLargeEdgesThreshold(this->numberOfLargeEdgesThreshold);		
 		this->P = new SEM(1,conv_threshold,max_iter,this->verbose);
 		// set dirichlet parameters
+		// this->P->ReadPhyx();
+		// this->P->ReadFasta();
 		this->P->set_alpha_PI(pi_a_1, pi_a_2, pi_a_3, pi_a_4);
 		this->P->set_alpha_M_row(M_a_1, M_a_2, M_a_3, M_a_4);
 		
@@ -7295,15 +7297,15 @@ void EMManager::EM_main() {
 	for (EM_struct EM_pars: this->P->EM_runs_pars) {
 		const string string_EM_pars = string("[EM_AllInfo]{\"parsimony\":") + this->P->em_to_json(EM_pars) + "}";
 		cout << string_EM_pars << endl;
-	}
-	// emtr::debug_counts(this->P->EMTR_results, "after-parsimony");	
+	}	
+	
 	cout << "Starting EM with initial parameters sampled from Dirichlet distribution" << endl;
 	this->P->EM_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(this->num_repetitions);
 	for (EM_struct EM_diri: this->P->EM_runs_diri) {
 		const string string_EM_diri = string("[EM_AllInfo]{\"dirichlet\":") + this->P->em_to_json(EM_diri) + "}";
 		cout << string_EM_diri << endl;
 	}
-	// emtr::debug_counts(this->P->EMTR_results, "after-dirichlet");		
+	
 	this->P->RestoreBestProbability();
 	this->P->ReparameterizeGMM();
 	cout << "Starting EM with initial parameters set using SSH" << endl;
@@ -7971,6 +7973,7 @@ void EMManager::EMgivenInputTopology(){
 	for (pair <int, MST_vertex *> vIdAndPtr : * this->M->vertexMap) {
 		idsOfVerticesForSEM.push_back(vIdAndPtr.first);
 	}
+	 // Transfer following feature to SEM
 	tie (names, sequences, sitePatternWeights, sitePatternRepetitions) = this->M->GetCompressedSequencesSiteWeightsAndSiteRepeats(idsOfVerticesForSEM);		
 	cout << "setting sequence file name, topology file name, site pattern weights, number of input sequences" << endl;
     cout << "number of site patterns is " << sitePatternWeights.size() << endl;	

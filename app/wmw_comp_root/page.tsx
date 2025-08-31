@@ -1,6 +1,8 @@
 // app/wmw_comp_root/page.tsx
 "use client";
 
+const showNode = (s: string) => s.replace(/^h_/, "");
+
 import React, { useEffect, useMemo, useState } from "react";
 
 /** ---- Types that match /api/wmw_comp_root ---- */
@@ -383,16 +385,16 @@ function MatrixTable({
     }, 0)
   );
 
-  // CSV builders
+  // CSV builders (strip h_ in headers and row labels)
   const buildCsvHeader = (): (string | number)[][] => [
-    ["row/col", ...nodes],
+    ["row/col", ...nodes.map(showNode)],
     ["sample size (per node)", ...nodes.map((n) => sizes[n] ?? 0)],
   ];
 
   const downloadPcsv = () => {
     const rows: (string | number)[][] = [...buildCsvHeader()];
     for (let i = 0; i < N; i++) {
-      const r: (string | number)[] = [nodes[i]];
+      const r: (string | number)[] = [showNode(nodes[i])];
       for (let j = 0; j < N; j++) {
         r.push(i === j ? "—" : fmtP(p[i]?.[j]));
       }
@@ -406,7 +408,7 @@ function MatrixTable({
   const downloadZcsv = () => {
     const rows: (string | number)[][] = [...buildCsvHeader()];
     for (let i = 0; i < N; i++) {
-      const r: (string | number)[] = [nodes[i]];
+      const r: (string | number)[] = [showNode(nodes[i])];
       for (let j = 0; j < N; j++) {
         r.push(i === j ? "—" : fmtZ(z[i]?.[j]));
       }
@@ -447,7 +449,7 @@ function MatrixTable({
             <tr>
               <Th className="sticky left-0 bg-white z-20">row ↓ / col →</Th>
               {nodes.map((n) => (
-                <Th key={n} className="text-center">{n}</Th>
+                <Th key={n} className="text-center">{showNode(n)}</Th>
               ))}
             </tr>
             <tr>
@@ -460,7 +462,7 @@ function MatrixTable({
           <tbody>
             {nodes.map((rowName, i) => (
               <tr key={rowName} className="hover:bg-gray-50">
-                <Td mono className="sticky left-0 bg-white z-10">{rowName}</Td>
+                <Td mono className="sticky left-0 bg-white z-10">{showNode(rowName)}</Td>
                 {nodes.map((_, j) => (
                   <Td key={`${i}-${j}`} center className={cellClass(i, j)}>
                     {i === j ? "—" : (
@@ -547,14 +549,14 @@ function CountsMatrixTable({
     return "bg-white";
   }
 
-  // CSV download for counts table
+  // CSV download for counts table (strip h_ in headers and row labels)
   const downloadCountsCsv = () => {
     const rows: (string | number)[][] = [
-      ["row/col", ...nodes],
+      ["row/col", ...nodes.map(showNode)],
       ["sample size (per node)", ...nodes.map((n) => sizes[n] ?? 0)],
     ];
     for (let i = 0; i < N; i++) {
-      const r: (string | number)[] = [nodes[i]];
+      const r: (string | number)[] = [showNode(nodes[i])];
       for (let j = 0; j < N; j++) {
         r.push(i === j ? "—" : (counts[i]?.[j] ?? ""));
       }
@@ -587,7 +589,7 @@ function CountsMatrixTable({
             <tr>
               <Th className="sticky left-0 bg-white z-20">row ↓ / col →</Th>
               {nodes.map((n) => (
-                <Th key={n} className="text-center">{n}</Th>
+                <Th key={n} className="text-center">{showNode(n)}</Th>
               ))}
             </tr>
             <tr>
@@ -601,7 +603,7 @@ function CountsMatrixTable({
           <tbody>
             {nodes.map((rowName, i) => (
               <tr key={rowName} className="hover:bg-gray-50">
-                <Td mono className="sticky left-0 bg-white z-10">{rowName}</Td>
+                <Td mono className="sticky left-0 bg-white z-10">{showNode(rowName)}</Td>
                 {nodes.map((_, j) => (
                   <Td key={`${i}-${j}`} center className={cellClass(counts[i]?.[j], i, j)}>
                     {i === j ? "—" : <span className="font-mono">{counts[i]?.[j] ?? ""}</span>}

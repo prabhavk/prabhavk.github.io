@@ -9,13 +9,14 @@ type Tab = { href: string; label: string; mode: "exact" | "deep" };
 const tabs: Tab[] = [
   { href: "/",                label: "Input Form",              mode: "exact" },
   { href: "/runs",            label: "Precomputed Results",     mode: "deep"  },
-  { href: "/violin",          label: "MLL D,P&S",               mode: "deep"  },
-  { href: "/mle",             label: "MLE in D",                mode: "deep"  },
-  { href: "/ecdll",           label: "ECDLL",                   mode: "deep"  },
-  { href: "/wmw_comp_method",  label: "WMW comp method",         mode: "deep"  },  
-  { href: "/wmw_comp_root",    label: "WMW comp root",           mode: "deep"  },  
-  { href: "/sigrec",          label: "Distribution of Recall",  mode: "deep"  },  
-  { href: "/rhodonea",        label: "Rhodonea Curves",         mode: "deep"  },  
+  // { href: "/violin",          label: "MLL D,P&S",               mode: "deep"  },
+  // { href: "/mle",             label: "MLE in D",                mode: "deep"  },
+  // { href: "/ecdll",           label: "ECDLL",                   mode: "deep"  },
+  // { href: "/wmw_comp_method", label: "WMW comp method",         mode: "deep"  },  
+  // { href: "/wmw_comp_root",   label: "WMW comp root",           mode: "deep"  },  
+  // { href: "/sigrec",          label: "Distribution of Recall",  mode: "deep"  },  
+//{ href: "/rhodonea",        label: "Rhodonea Curves",         mode: "deep"  },
+  // { href: "/spirograph",      label: "Spirographs",             mode: "deep"  },  
   
 ];
 
