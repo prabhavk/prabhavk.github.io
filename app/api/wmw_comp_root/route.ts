@@ -4,7 +4,7 @@ import { query } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-type MethodName = "Parsimony" | "Dirichlet" | "SSH";
+type MethodName = "Parsimony" | "Dirichlet" | "HSS";
 
 type Matrix = number[][];
 type ApiResp = {
@@ -26,7 +26,7 @@ function normMethod(s: string | null): MethodName | null {
   const m = s.trim().toLowerCase();
   if (m.startsWith("par") || m.includes("pars")) return "Parsimony";
   if (m.startsWith("dir") || m.includes("dirich")) return "Dirichlet";
-  if (m.includes("ssh")) return "SSH";
+  if (m.includes("hss")) return "HSS";
   return null;
 }
 
@@ -99,7 +99,7 @@ export async function GET(req: NextRequest) {
   }
   if (!methodParam) {
     return NextResponse.json(
-      { ok: false, error: "Missing or invalid ?method=Parsimony|Dirichlet|SSH" },
+      { ok: false, error: "Missing or invalid ?method=Parsimony|Dirichlet|HSS" },
       { status: 400 }
     );
   }

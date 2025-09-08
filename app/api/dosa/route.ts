@@ -4,7 +4,7 @@ import { query } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-type MethodName = "Parsimony" | "Dirichlet" | "SSH";
+type MethodName = "Parsimony" | "Dirichlet" | "HSS";
 
 // What the page expects
 type SpiralRow = {
@@ -25,7 +25,7 @@ type ApiSpiral = {
 
 // Raw DB row can have strings for numerics depending on driver
 type DBRow = {
-  root: string;
+  root: string | null;
   rep: number | string;
   ll_init: number | string | null;
   ecd_ll_first: number | string | null;
@@ -37,7 +37,7 @@ function normalizeMethod(s: string): MethodName | null {
   const m = s.trim().toLowerCase();
   if (m.includes("pars")) return "Parsimony";
   if (m.startsWith("dir") || m.includes("dirich")) return "Dirichlet";
-  if (m.includes("ssh")) return "SSH";
+  if (m.includes("hss")) return "HSS";
   return null;
 }
 
@@ -50,8 +50,8 @@ function toNumOrNull(v: unknown): number | null {
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const job = searchParams.get("job") ?? "";
-    const methodInput = searchParams.get("method") ?? "";
+    const job = (searchParams.get("job") ?? "").trim();
+    const methodInput = (searchParams.get("method") ?? "").trim();
 
     if (!job) {
       return NextResponse.json({ error: "Missing ?job=<job_id>" }, { status: 400 });
@@ -63,9 +63,10 @@ export async function GET(req: NextRequest) {
     }
 
     // Match DB 'method' case-insensitively
-    const methodLike = norm.toLowerCase(); // parsimony | dirichlet | ssh
+    const methodLike = norm.toLowerCase(); // parsimony | dirichlet | hss
 
     // Pull all reps/rows for job+method; only from completed jobs
+    // Ensure numeric ordering on rep even if it's stored/returned as text.
     const rowsRaw = await query<DBRow>(
       `
       SELECT r.root,
@@ -79,15 +80,15 @@ export async function GET(req: NextRequest) {
        WHERE r.job_id = ?
          AND LOWER(r.method) = ?
          AND j.status = 'completed'
-       ORDER BY r.root, r.rep
+       ORDER BY r.root, CAST(r.rep AS SIGNED)
       `,
       [job, methodLike]
     );
 
     // Normalize numeric shapes so the client never sees strings/bigints
     const rows: SpiralRow[] = rowsRaw.map((r) => ({
-      root: String(r.root),
-      rep: Number(r.rep), // parse even if it came as string
+      root: r.root ?? "", // avoid "null" string leaking into UI
+      rep: Number(r.rep),
       ll_init: toNumOrNull(r.ll_init),
       ecd_ll_first: toNumOrNull(r.ecd_ll_first),
       ecd_ll_final: toNumOrNull(r.ecd_ll_final),

@@ -75,6 +75,13 @@
         "__tree": "cpp",
         "filesystem": "cpp",
         "list": "cpp",
-        "set": "cpp"
+        "set": "cpp",
+        "ios": "cpp",
+        "dense": "cpp",
+        "any": "cpp",
+        "csignal": "cpp",
+        "regex": "cpp",
+        "ranges": "cpp",
+        "valarray": "cpp"
     }
 }

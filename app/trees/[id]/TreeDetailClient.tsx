@@ -16,7 +16,7 @@ export type RowLite = {
   epsilon: number | null;
   n_leaves: number | null;
   n_edges: number | null;
-  root_name: string | null;
+  root: string | null;
   is_current: YesNo | boolean;
   created_at: string;
   updated_at: string;

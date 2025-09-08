@@ -4,10 +4,10 @@ import { query } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-type MethodName = "Parsimony" | "Dirichlet" | "SSH";
-type PairKey = "parsimony_vs_dirichlet" | "parsimony_vs_ssh" | "dirichlet_vs_ssh";
+type MethodName = "Parsimony" | "Dirichlet" | "HSS";
+type PairKey = "parsimony_vs_dirichlet" | "parsimony_vs_hss" | "dirichlet_vs_hss";
 
-type DBRow = { method: string; ll_final: number };
+type DBRow = { method: string; val: number };
 
 type PairResult = {
   winner: MethodName | "none";
@@ -30,7 +30,8 @@ function normalizeMethod(s: string): MethodName | null {
   const m = s.trim().toLowerCase();
   if (m.includes("pars")) return "Parsimony";
   if (m.startsWith("dir") || m.includes("dirich")) return "Dirichlet";
-  if (m.includes("ssh")) return "SSH";
+  // accept both legacy "ssh" and new "hss"
+  if (m.includes("hss") || m.includes("ssh")) return "HSS";
   return null;
 }
 
@@ -81,8 +82,10 @@ async function decideOneSided(
   }
 
   const { z } = await safeMWU(A, B);
+  // one-tailed p-value in the direction of the observed z
   const p_one = clamp01(1 - phi(Math.abs(z)));
 
+  // choose winner by medians (stable even if z≈0)
   const mA = median(A);
   const mB = median(B);
 
@@ -95,9 +98,11 @@ async function decideOneSided(
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  const job = url.searchParams.get("job") || "";
-  const node = url.searchParams.get("node") || undefined;
+  const job = (url.searchParams.get("job") || "").trim();
+  const node = (url.searchParams.get("node") || "").trim() || undefined;
   const alpha = Number(url.searchParams.get("alpha") ?? 0.05);
+  const metricParam = (url.searchParams.get("metric") || "final").trim().toLowerCase();
+  const metric: "final" | "init" = metricParam === "init" ? "init" : "final"; // whitelist
 
   if (!job) {
     return NextResponse.json({ ok: false, error: "Missing ?job=<job_id>" }, { status: 400 });
@@ -106,32 +111,37 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Invalid alpha (0 < alpha < 1)" }, { status: 400 });
   }
 
-  const nodeFilter = node ? "AND root = ?" : "";
+  // whitelist the column to avoid SQL injection
+  const col = metric === "init" ? "ll_init" : "ll_final";
+
+  const nodeFilter = node ? "AND r.root = ?" : "";
   const sql = `
-    SELECT LOWER(method) AS method, CAST(ll_final AS DOUBLE) AS ll_final
-    FROM emtr_init_final
-    WHERE job_id = ?
-      ${nodeFilter}
-      AND ll_final IS NOT NULL
-    ORDER BY root, method, rep
+    SELECT LOWER(r.method) AS method, CAST(r.${col} AS DOUBLE) AS val
+      FROM emtr_init_final r
+      JOIN emtr_jobs j ON j.job_id = r.job_id
+     WHERE r.job_id = ?
+       ${nodeFilter}
+       AND r.${col} IS NOT NULL
+       AND j.status = 'completed'
+     ORDER BY r.root, r.method, r.rep
   `;
   const params: (string | number)[] = node ? [job, node] : [job];
 
   try {
     const rows = await query<DBRow>(sql, params);
 
-    const groups: Record<MethodName, number[]> = { Parsimony: [], Dirichlet: [], SSH: [] };
+    const groups: Record<MethodName, number[]> = { Parsimony: [], Dirichlet: [], HSS: [] };
     for (const r of rows) {
       const m = normalizeMethod(r.method);
-      if (!m) continue;
-      const v = Number(r.ll_final);
-      if (Number.isFinite(v)) groups[m].push(v);
+      const v = Number((r as any).val);
+      if (!m || !Number.isFinite(v)) continue;
+      groups[m].push(v);
     }
 
     const [pd, ps, ds] = await Promise.all([
       decideOneSided(groups.Parsimony, groups.Dirichlet, "Parsimony", "Dirichlet", alpha),
-      decideOneSided(groups.Parsimony, groups.SSH,       "Parsimony", "SSH",       alpha),
-      decideOneSided(groups.Dirichlet, groups.SSH,       "Dirichlet", "SSH",       alpha),
+      decideOneSided(groups.Parsimony, groups.HSS,       "Parsimony", "HSS",       alpha),
+      decideOneSided(groups.Dirichlet, groups.HSS,       "Dirichlet", "HSS",       alpha),
     ]);
 
     const payload: ApiResp = {
@@ -141,12 +151,12 @@ export async function GET(req: NextRequest) {
       sizes: {
         Parsimony: groups.Parsimony.length,
         Dirichlet: groups.Dirichlet.length,
-        SSH: groups.SSH.length,
+        HSS: groups.HSS.length,
       },
       pairs: {
         parsimony_vs_dirichlet: pd,
-        parsimony_vs_ssh: ps,
-        dirichlet_vs_ssh: ds,
+        parsimony_vs_hss: ps,
+        dirichlet_vs_hss: ds,
       },
     };
 

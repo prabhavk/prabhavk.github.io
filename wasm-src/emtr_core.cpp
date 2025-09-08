@@ -4,6 +4,7 @@
 using namespace std; 
 using namespace emtr;
 
+
 int ll_precision = 14;
 
 ///...///...///...///...///...///...///... Family Joining ...///...///...///...///...///...///...///
@@ -27,45 +28,35 @@ int ll_precision = 14;
 #include <vector>
 #include "third_party/eigen3/Eigen/Dense"
 #include "third_party/eigen3/unsupported/Eigen/MatrixFunctions"
+#include <tuple>
+
+using Matrix20d  = Eigen::Matrix<double,20,20>;
+using Matrix20cd = Eigen::Matrix<std::complex<double>,20,20>;
+using Vector20cd = Eigen::Matrix<std::complex<double>,20,1>;
+
+struct Spectrum {
+    Matrix20cd V;
+    Matrix20cd V_inv;
+    Vector20cd lambda;
+    bool ok = false;
+};
 
 
-class FamilyJoining {
-public:
-	void SetNewick(bool striphidden_node = true) {
-		if (T.vcount() == 0) {
-			throw std::runtime_error("SetNewick: tree is empty. Call SetFJTree() first.");
-		}
-		Graph copy = T;
-		Graph leaf = ConvertGenerallyLabeledTreeToLeafLabeledTree(copy);
-		Graph bin  = ConvertMultifurcatingTreeToBifurcatingTree(leaf);
-		std::string nwk = GetNewickLabelOfLeafLabeledTree(bin);
-		if (striphidden_node) nwk = strip_hidden_node_labels_(nwk);
-		newick_ = std::move(nwk);
-	}
 
-	void EmitNewickJSON(const std::string& job_id = "", const std::string& label  = "familyjoining", const std::string& method  = "5foldcv") const {
-		if (newick_.empty()) {
-			throw std::runtime_error("EmitNewickJSON: Newick not set. Call SetNewick() first.");
-			}
-				std::cout << "[FJ_TREE]{"
-				<< "\"job_id\":\"" << json_escape_(job_id) << "\","
-				<< "\"label\":\""  << json_escape_(label)  << "\","
-				<< "\"method\":\"" << json_escape_(method)   << "\","
-				<< "\"epsilon\":"  << std::setprecision(6) << epsilon_ << ","
-				<< "\"newick\":\"" << json_escape_(newick_) << "\""
-				<< "}" << std::endl;
-		}
-  // ------------------------ Public data types ------------------------
-  struct PairHash {
-    template <class T1, class T2>
-    std::size_t operator()(const std::pair<T1,T2>& p) const noexcept {
-      std::size_t h1 = std::hash<T1>{}(p.first);
-      std::size_t h2 = std::hash<T2>{}(p.second);
-      return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1<<6) + (h1>>2));
-    }
-  };
 
-  struct Graph {
+namespace fj {
+
+// generic hasher for std::pair<T1,T2>
+struct PairHash {
+  template <class T1, class T2>
+  std::size_t operator()(const std::pair<T1,T2>& p) const noexcept {
+    std::size_t h1 = std::hash<T1>{}(p.first);
+    std::size_t h2 = std::hash<T2>{}(p.second);
+    return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1<<6) + (h1>>2));
+  }
+};
+
+struct Graph {
     struct Edge { int u, v; double length; Edge():u(-1),v(-1),length(0.0){} Edge(int uu,int vv,double L):u(uu),v(vv),length(L){} };
     std::vector<std::string> name;
     std::vector<std::vector<int>> adj;
@@ -135,6 +126,63 @@ public:
     }
   };
 
+// distance map shared across the project
+using DistanceMap =
+  std::unordered_map<std::pair<std::string,std::string>, double, PairHash>;
+
+// optional helper (inline to avoid multiple definition issues)
+inline std::pair<std::string,std::string>
+SortedKey(const std::string& a, const std::string& b) {
+  return (a < b) ? std::make_pair(a,b) : std::make_pair(b,a);
+}
+
+}
+
+
+using namespace fj;
+
+class FamilyJoining {
+public:
+	void SetNewick(bool striphidden_node = true) {
+		if (T.vcount() == 0) {
+			throw std::runtime_error("SetNewick: tree is empty. Call SetFJTree() first.");
+		}
+		Graph copy = T;
+		Graph leaf = ConvertGenerallyLabeledTreeToLeafLabeledTree(copy);
+		Graph bin  = ConvertMultifurcatingTreeToBifurcatingTree(leaf);
+		std::string nwk = GetNewickLabelOfLeafLabeledTree(bin);
+		// cout << "newick label with all node names" << nwk;
+		// vector <tuple <string, string, double>> edge_vector = this->GetEdgeVector();
+		if (striphidden_node) nwk = strip_hidden_node_labels_(nwk);
+		newick_ = std::move(nwk);
+	}
+
+	void EmitNewickJSON(const std::string& job_id = "", const std::string& label  = "familyjoining", const std::string& method  = "epsilon_zero") const {
+		if (newick_.empty()) {
+			throw std::runtime_error("EmitNewickJSON: Newick not set. Call SetNewick() first.");
+			}
+
+  				// const std::string  edge_json = edge_list_to_json(edge_vector);
+
+				std::cout << "[FJ_TREE]{"
+				<< "\"job_id\":\"" << json_escape_(job_id) << "\","
+				<< "\"label\":\""  << json_escape_(label)  << "\","
+				<< "\"method\":\"" << json_escape_(method)   << "\","
+				<< "\"epsilon\":"  << std::setprecision(6) << epsilon_ << ","
+				<< "\"newick\":\"" << json_escape_(newick_) << "\""
+				// << "\"edge_list\":\"" <<  edge_json << "\""
+				<< "}" << std::endl;
+	}
+  // ------------------------ Public data types ------------------------
+//   struct PairHash {
+//     template <class T1, class T2>
+//     std::size_t operator()(const std::pair<T1,T2>& p) const noexcept {
+//       std::size_t h1 = std::hash<T1>{}(p.first);
+//       std::size_t h2 = std::hash<T2>{}(p.second);
+//       return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1<<6) + (h1>>2));
+//     }
+//   };
+
   const Graph& GetTree() const { return T; }
 
   // ------------------------ Construction ------------------------
@@ -142,18 +190,13 @@ public:
     ReadAlignment(alignment_path, alignment_);
 
     // dm_ = ComputeNHDistances(alignment_);
+	cout << "here 1 \n" << endl;
 	int k = 5;
 	int repeats = 2;
 	dm_ = ComputeLogDetDistances(alignment_);
 	SetFJTree(epsilon);
-	SetNewick();
+	SetNewick();	
 	EmitNewickJSON();
-	// double e_ubound = GetEpsilonUpper(dm_);
-	// cout << "Upper bound for epsilon is " << e_ubound << endl;
-	// std::map<std::pair<int, int>, std::pair<FamilyJoining::DistanceMap, FamilyJoining::DistanceMap>> kfoldDM_ = ComputeKFoldCVDistances(alignment_,k,repeats);
-	
-	// select epsilon by minimizing test error
-	
 	
   }
 
@@ -220,6 +263,23 @@ public:
 	return (edge_vector);
   }
 
+  static void AssignOLSLengthsToTree(Graph& T, const DistanceMap& DM) {
+    const std::size_t M = DM.size();
+    int N = (int)((1.0 + std::sqrt(1.0 + 8.0 * (double)M)) / 2.0);
+    IntSet vertSet; for (int i=0;i<N;++i) vertSet.insert(i);
+    auto splits = ComputeSplits(T, vertSet);
+    auto A      = ComputeAtd(T, splits, vertSet, DM);
+    auto bl     = ComputeEdges(T, splits, vertSet, A);
+    for (const auto& kv : bl) {
+      int u = kv.first.first, v = kv.first.second;
+      T.set_length(u,v, kv.second);
+    }
+  }
+
+  static void SetNegativeLengthsToZero(Graph& T, double minLen = 0.0) {
+    for (auto& e : T.edges) if (e.length <= 0.0) e.length = minLen;
+  }
+
 private: 	
   	string newick_;
 	static std::string strip_hidden_node_labels_(const std::string& s) {
@@ -279,7 +339,7 @@ private:
   std::unordered_map<std::string, std::string> alignment_;
   
 
-  using DistanceMap = std::unordered_map<std::pair<std::string,std::string>, double, PairHash>;
+//   using DistanceMap = std::unordered_map<std::pair<std::string,std::string>, double, PairHash>;
   DistanceMap dm_;
 
   // ------------------------ String helpers ------------------------
@@ -908,14 +968,7 @@ Graph GetFJTree(DistanceMap DM, double epsilon) {
     }
   }
 
-  static void SetWeightedEdges(Graph &T) {
-
-  }
-
-  static void SetNegativeLengthsToZero(Graph& T, double minLen = 0.0) {
-    for (auto& e : T.edges) if (e.length <= 0.0) e.length = minLen;
-  }
-
+  
   static SplitMap ComputeSplits(const Graph& T, const IntSet& vertSet) {
     SplitMap splits;
     std::vector<int> degrees(T.vcount());
@@ -1184,18 +1237,7 @@ Graph GetFJTree(DistanceMap DM, double epsilon) {
     return bl;
   }
 
-  static void AssignOLSLengthsToTree(Graph& T, const DistanceMap& DM) {
-    const std::size_t M = DM.size();
-    int N = (int)((1.0 + std::sqrt(1.0 + 8.0 * (double)M)) / 2.0);
-    IntSet vertSet; for (int i=0;i<N;++i) vertSet.insert(i);
-    auto splits = ComputeSplits(T, vertSet);
-    auto A      = ComputeAtd(T, splits, vertSet, DM);
-    auto bl     = ComputeEdges(T, splits, vertSet, A);
-    for (const auto& kv : bl) {
-      int u = kv.first.first, v = kv.first.second;
-      T.set_length(u,v, kv.second);
-    }
-  }
+  
 
   static void GetTreeWithLSLengthsLargerThanThreshold(Graph& T, const DistanceMap& DM, double thresh) {
     AssignOLSLengthsToTree(T, DM);
@@ -1235,7 +1277,7 @@ Graph GetFJTree(DistanceMap DM, double epsilon) {
   }
 
   static Graph GetFJTree(DistanceMap DM, std::vector<std::string> vertList, double epsilon) {
-	Graph T = GetFJTreeTopology(std::move(DM), vertList, epsilon);		
+	Graph T = GetFJTreeTopology(std::move(DM), vertList, epsilon);
 	AssignOLSLengthsToTree(T, DM);
 	SetNegativeLengthsToZero(T);
 	return (T);
@@ -2485,6 +2527,8 @@ public:
 	double sumOfEdgeLogLikelihoods = 0;
 	int rateCategory = 0;
 	int GCContent = 0;
+	bool AA_cond_like_initialized = 0;
+	bool DNA_cond_like_initialized = 0;
 	vector <SEM_vertex *> neighbors;
 	vector <SEM_vertex *> children;
 	array <double, 4> root_prob_hss;
@@ -2499,6 +2543,7 @@ public:
 	int inDegree = 0;
 	int outDegree = 0;
 	emtr::Md transitionMatrix;
+	Eigen::Matrix <double,20,20> AAtransitionMatrix;
 	emtr::Md transitionMatrix_stored;	
 	array <double, 4> rootProbability;
 	array <double, 4> posteriorProbability;
@@ -3361,14 +3406,14 @@ struct EM_struct {
 	// init method  - store before starting rep
 	int rep;
 	// rep          - store at start of each rep
-	int num_iter;   
+	int iter;   
 	map <int, double> ecd_ll_per_iter;
 	// ecd for each iteration of EM
 	double ll_init;
 	// ll initial store at completion of EM run
 	double ll_final;
 	// ll final store at completion of EM run
-	string root_name;
+	string root;
 	// init root_prob - store for each rep when params are initialized
 	array <double,4> root_prob_init;
 	// final root_prob - store if log likelihood score is maximum
@@ -3377,6 +3422,19 @@ struct EM_struct {
 	map <string, Md> trans_prob_init;	
 	// init trans_prob - store transition probability for each child node for each rep when params are initialized
 	map <string, Md> trans_prob_final;
+};
+
+struct AA_opt_struct {
+	int rep;
+	int iter;
+	map <int, double> aa_ll_per_iter;
+	double aa_ll_init;
+	double aa_ll_final;
+	string root;
+	vector <double> root_prob_init;
+	vector <double> root_prob_final;
+	Eigen::Matrix <double,20,20> exchangeability_matrix_init;
+	Eigen::Matrix <double,20,20> exchangeability_matrix_final;
 };
 
 ///...///...///...///...///...///...///...///...///... SEM ...///...///...///...///...///...///...///...///...///
@@ -3461,9 +3519,19 @@ private:
 		return os.str();
 	}
 public:
-	Eigen::Matrix <double,20,20> Q_D; // Dayhoff rate matrix
+	void SetParameters(string parameters_json);
+	Eigen::Matrix <double,20,20> Q_D;
+	Eigen::Matrix <double,20,20> Vc, Vc_inv;	
+    Eigen::Matrix <std::complex<double>,20,1> lambda;
+	Eigen::Matrix <double,20,20> S_D;
+	array <int,3> siteidx_for_regime;
+	vector <int> DNASitesByWeightDesc;
+	vector <int> DNACumulativePatternWeight;
+	vector <size_t> DNAPatternOrderByWeightDesc;
+	bool spectral_ready_ = false;
 	vector<double> pi_D;
-
+	Graph T;
+	void AssignLSBranchLengthsToTree();
 	string dayhoff_rate_matrix_file_name;
 	array <double, 4> alpha_pi;
 	array <double, 4> alpha_M_row;
@@ -3478,11 +3546,22 @@ public:
 	vector <SEM_vertex*> vertices;
 	map <pair<SEM_vertex *,SEM_vertex *>,emtr::Md> * M_hss;
 	vector <int> DNAPatternWeights;
+	vector <double> CumPercDNAPatternWeights;
 	vector <int> AAPatternWeights;
+	vector <pair<int,double>> AAsitecumweight; 
 	vector <int> gaplesscompressedDNAsites;
 	vector <bool> gapLessDNAFlag;
 	vector <bool> gapLessAAFlag;
 	int num_aa_patterns;
+	int num_repetitions;	
+	double thrCoarse = 50.0;
+	double thrMedium = 30.0;
+	double thrFine = 20.0;
+	double cum_pattern_weight_coarse;
+	double cum_pattern_weight_medium;
+	double cum_pattern_weight_fine = 100;
+	vector<pair<int,int>> AAsite_and_weight;
+	vector <double> cum_fractional_weight_AA;
 	vector <vector <int> > sitePatternRepetitions;
 	vector <int> sortedDeltaGCThresholds;
 	int numberOfInputSequences;
@@ -3491,7 +3570,13 @@ public:
 	int numberOfExternalVertices = 0;	
 	int num_dna_patterns;
 	int maxIter;
-	double logLikelihoodConvergenceThreshold = 0.1;	
+	double patW_coarse;
+	double patW_medium;
+	double patW_fine;
+	double frac_iter_coarse;
+	double frac_iter_medium;
+	double frac_iter_fine;
+	double ecdllConvergenceThreshold = 0.1;	
 	double sumOfExpectedLogLikelihoods = 0;
 	double maxSumOfExpectedLogLikelihoods = 0;
 	int node_ind = 1;
@@ -3518,7 +3603,7 @@ public:
 	double maximumLogLikelihood;
 	double max_log_likelihood_diri;
 	double max_log_likelihood_pars;
-	double max_log_likelihood_ssh;
+	double max_log_likelihood_hss;
 	double max_log_likelihood_best;
 	emtr::Md I4by4;	
 	cliqueTree * cliqueT;
@@ -3536,10 +3621,11 @@ public:
 	string probabilityFileName;
 	string probabilityFileName_best;
 	string probabilityFileName_pars;
-	string probabilityFileName_ssh;
+	string probabilityFileName_hss;
 	string probabilityFileName_diri;
 	string prefix_for_output_files;
 	string ancestralSequencesString = "";
+	void SetFJTree(const fj::Graph& tree);
 	double sequenceLength;
 	// Add vertices (and compressed sequence for leaves)
 	array <double, 4> rootProbability;
@@ -3547,6 +3633,7 @@ public:
 	SEM_vertex * root_stored;
 	vector <int> compressedSequenceToAddToMST;
 	string nameOfSequenceToAddToMST;
+	double AAlogLikelihood;
 	double logLikelihood;
 	double logLikelihood_exp_counts;
 	double logLikelihood_current;
@@ -3590,7 +3677,15 @@ public:
 	void AddSequences(vector <vector <int>> sequencesToAdd);	
 	void OpenAncestralSequencesFile();
 	void AddRootVertex();
+	void SetAASiteCumWeight();
+	void BuildCumFractionIndicesAA();
 	void SetVertexVector();
+	void OptimizeRateMatrixNelderMead(int max_iter = 4000, double tol = 1e-5, double step = 0.1, int i0 = 0, int j0 = 1, int p_ref = 19);	
+	void BuildSIndex(vector<pair<int,int>>& idxS, int i0, int j0) const;
+	void PackTheta(const vector<pair<int,int>>& idxS, int p_ref,vector<double>& theta) const;
+	void UnpackTheta(const vector<double>& theta, const vector<pair<int,int>>& idxS,int i0, int j0, int p_ref);
+	double NMObjectiveNegLL(const vector<double>& theta, const vector<pair<int,int>>& idxS, int i0, int j0, int p_ref);
+
 //	void AddCompressedSequencesAndNames(map<string,vector<int>> sequencesList, vector <vector <int>> sitePatternRepeats);	
 	void AddAllSequences(string sequencesFileName);
 	void AddNames(vector <string> namesToAdd);
@@ -3600,16 +3695,16 @@ public:
 	void RootTreeAlongAnEdgePickedAtRandom();
 	void RootTreeAtAVertexPickedAtRandom();
 	void SetParsimonySites();
-	tuple<int,double,double,double,double> EM_started_with_SSH_parameters_rooted_at(SEM_vertex *v);
+	tuple<int,double,double,double,double> EM_started_with_HSS_parameters_rooted_at(SEM_vertex *v);
 	tuple<int,double,double,double,double> EM_started_with_parsimony_rooted_at(SEM_vertex *v);
-	tuple<int,double,double,double,double> EM_started_with_dirichlet_rooted_at(SEM_vertex *v);
-	tuple<int,double,double,double,double> EM_root_search_with_parsimony_rooted_at(SEM_vertex *v);
+	tuple<int,double,double,double,double> EM_started_with_dirichlet_rooted_at(SEM_vertex *v);	
 	void StoreParamsInEMCurrent(string init_or_final);
 	void ComputeSumOfExpectedLogLikelihoods();
 	void RootTreeAlongEdge(SEM_vertex * u, SEM_vertex * v);
 	void SelectEdgeIncidentToVertexViaMLUnderGMModel(SEM_vertex * v);
 	void InitializeTransitionMatricesAndRootProbability();
 	void ComputeMPEstimateOfAncestralSequences();
+	void ComputeMPEstimateOfAncestralSequencesForThreeRegime(int regime);
 	void ComputeMAPEstimateOfAncestralSequences();
 	void ComputeMAPEstimateOfAncestralSequencesUsingCliques();
 	void SetEdgesForPreOrderTraversal();
@@ -3685,7 +3780,7 @@ public:
 		 int kcount, int *icount, int *numres, int *ifault);	
 	void ComputeInitialEstimateOfModelParameters();
 	void SetInitialEstimateOfModelParametersUsingDirichlet();
-	void SetInitialEstimateOfModelParametersUsingSSH();
+	void SetInitialEstimateOfModelParametersUsingHSS();
 	void TransformRootedTreeToBifurcatingTree();
 	void SwapRoot();
 	void SuppressRoot();
@@ -3693,7 +3788,17 @@ public:
 	bool root_search;
 	string init_criterion;
 	string parameter_file;
+	Matrix20d ExpQt_fromSpectrum(double t) const;
+	void PrecomputeSpectrum();	
+	void ComputeAALogLikelihood();
+	void ComputeAALogLikelihood_maps();
 	void ComputeLogLikelihood();
+	int siteIdx;
+	std::tuple<double,double,double>
+    LL_Grad_Hess_Counts_Reversible_Tuple(const Eigen::Matrix<double,20,20>& N, const Eigen::VectorXd& pis, const Eigen::VectorXd& invpis, const Eigen::MatrixXd& U, const Eigen::VectorXd& lambdas, double t) const;
+	tuple<Eigen::Matrix<double,20,20>, Eigen::Matrix<double,20,20>, Eigen::Matrix<double,20,20>> EvalP_QP_Q2P_Tuple(const Eigen::VectorXd& pis, const Eigen::VectorXd& invpis, const Eigen::MatrixXd& U, const Eigen::VectorXd& lambdas, double t) const;
+	tuple<Eigen::VectorXd, Eigen::VectorXd, Eigen::VectorXd,Eigen::MatrixXd, Eigen::VectorXd> ReversibleSpecTuple(const Eigen::Matrix<double,20,20>& Q, const Eigen::VectorXd& pi) const;
+	double GetMLDistance_NR_Reversible_Tuples(SEM_vertex* u, SEM_vertex* v, const Eigen::Matrix<double,20,20>& Q, const Eigen::VectorXd& pi, int max_iter = 50, double grad_tol = 1e-8, double ll_tol = 1e-10);
 	void ComputeLogLikelihoodUsingExpectedDataCompletion();
 	pair <bool, SEM_vertex *> CheckAndRetrieveSingletonHiddenVertex();
 	pair <bool, SEM_vertex *> CheckAndRetrieveHiddenVertexWithOutDegreeZeroAndInDegreeOne();
@@ -3721,6 +3826,9 @@ public:
 	emtr::Md GetExpectedCountsForVariablePair(SEM_vertex * u, SEM_vertex * v);
 	emtr::Md GetPosteriorProbabilityForVariablePair(SEM_vertex * u, SEM_vertex * v);
 	void AddToExpectedCountsForEachEdge();
+	DistanceMap DM_NR;
+	DistanceMap DM_LS;
+	Spectrum spectrum;
 	// Mutual information I(X;Y) is computing using 
 	// P(X,Y), P(X), and P(Y), which in turn are computed using
 	// A calibrated clique tree
@@ -3741,11 +3849,17 @@ public:
 	void SetAncestralSequencesString();
 	void SetWeightedEdgesToAddToGlobalPhylogeneticTree();	
 	void ComputeVertexLogLikelihood(SEM_vertex * v);
-	void ComputeEdgeLogLikelihood(SEM_vertex * u, SEM_vertex * v);	
-	void SetDayhoffRateMatrix();
+	void ComputeEdgeLogLikelihood(SEM_vertex * u, SEM_vertex * v);
+	void ComputeLSDistanceMatrix();
+	void ComputeNRDistanceMatrix();
+	void SetDayhoffExchangeabilityAndRootProbabilityParameters();	
+	void SetRateMatrixParameters();
+	void SetPerturbedDayhoffRateMatrix();
+	void SetDirichletPerturbedDayhoffRateMatrix();
 	void SetDNASequencesFromFile(string sequenceFileName);
 	void SetAASequencesFromFile(string sequenceFileName);
 	void CompressDNASequences();
+	void CompressDNASequencesBkp();
 	void CompressAASequences();
 	void SetEdgeAndVertexLogLikelihoods();
 	bool IsNumberOfNonSingletonComponentsGreaterThanZero();
@@ -3762,24 +3876,28 @@ public:
 	void AddDuplicatedSequencesToRootedTree(MST * M);
 	void AddDuplicatedSequencesToUnrootedTree(MST * M);
 	void ReadFasta();
+	Eigen::Matrix <double,20,20> GetCountMatrix(SEM_vertex * u, SEM_vertex * v);
+	vector <double> GetCountVector (SEM_vertex * u);
 	double DyadicLogLikelihood(SEM_vertex * u, SEM_vertex * v, double t);
 	double DyadicLogLikelihoodFirstDer(SEM_vertex * u, SEM_vertex * v, double t);
+	// double DyadicLogLikelihoodSecondDer(SEM_vertex * u, SEM_vertex * v, double t);
 	double GetNewtonRaphsonDistance(SEM_vertex * u, SEM_vertex * v);
-	void ComputeMLDistances();
+	double GetJukesCantorDistance(SEM_vertex * u, SEM_vertex * v);
+	void ComputeMLDistancesForAAsequences();
 	void GetOLSBranchLengths();
 	void OptimizeQ_D();
 	void SetSitePatternsAndWeights(); // account for gaps
 	void SetParameterFile();	
-	void initialize_GMM(string init_criterion);
-	void EM_AA_rooted_at_each_internal_vertex_started_with_Dayhoff_store_results(int num_repetitions);
+	void initialize_GMM(string init_criterion);	
 	void EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(int num_repetitions);
 	void EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results(int num_repetitions);	
-	void EM_DNA_rooted_at_each_internal_vertex_started_with_SSH_store_results(int num_repetitions);
+	void EM_DNA_rooted_at_each_internal_vertex_started_with_HSS_store_results(int num_repetitions);	
+	void Optimize_AA_RateMatrix_rooted_at_each_internal_vertex(int num_repetitions);
 	void EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
 	void EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
-	void EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetitions);	
+	void EM_rooted_at_each_internal_vertex_started_with_HSS_par(int num_repetitions);	
 	void EM_root_search_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
-	void EM_root_search_at_each_internal_vertex_started_with_SSH_par(int num_repetitions);
+	void EM_root_search_at_each_internal_vertex_started_with_HSS_par(int num_repetitions);
 	void set_alpha_PI(double a1, double a2, double a3, double a4);
 	void set_alpha_M_row(double a1, double a2, double a3, double a4);
 	map <pair<SEM_vertex*, SEM_vertex*>,double> ML_distances;
@@ -3787,9 +3905,13 @@ public:
     array <double, 4> sample_M_row();
 	vector <EM_struct> EM_DNA_runs_pars;
 	vector <EM_struct> EM_DNA_runs_diri;
-	vector <EM_struct> EM_DNA_runs_ssh;
+	vector <EM_struct> EM_DNA_runs_hss;
+	vector <AA_opt_struct> AA_opt_runs;
 	EM_struct EM_current{};	
+	AA_opt_struct AA_struct{};
 	string em_to_json(const EM_struct& em) const;
+	string aa_struct_to_json(const AA_opt_struct& aa_struct) const;
+	int first_index_gt(const std::vector<double>& cum, double thr);
 	// Select vertex for rooting Chow-Liu tree and update edges in T
 	// Modify T such that T is a bifurcating tree and likelihood of updated
 	// tree is equivalent to the likelihood of T
@@ -3798,7 +3920,7 @@ public:
 		this->alpha_pi = {100,100,100,100}; // default value
 		this->alpha_M_row = {100,2,2,2};
 		this->root_search = false;
-		this->logLikelihoodConvergenceThreshold = loglikelihood_conv_thresh;
+		this->ecdllConvergenceThreshold = loglikelihood_conv_thresh;
 		this->maxIter = max_EM_iter;
 		this->distance_measure_for_NJ = "Hamming";		
 		this->flag_Hamming = 1; this->flag_logDet = 0;
@@ -3833,18 +3955,805 @@ public:
 	}
 };
 
+int SEM::first_index_gt(const std::vector<double>& cum, double thr) {    
+    constexpr double EPS = 1e-12;
+    auto it = std::upper_bound(cum.begin(), cum.end(), thr + EPS);
+    return static_cast<int>(it - cum.begin());
+}
+
+
+void SEM::SetParameters(string parameters_json) {
+	json ph = json::parse(parameters_json);
+	map<string, string> settings_map;
+	flatten_json(ph, settings_map);
+	for (const auto& kv : settings_map) {
+		const string& key = kv.first;
+		const string& value = kv.second;
+
+		// cout << key << " = " << value << "\n";
+
+		if (key.find("dna.reps") != string::npos) {
+			try {this->num_repetitions = stoi(value);
+				cout << "num_repetitions " << this->num_repetitions << endl; 
+			} catch (const invalid_argument& e) {
+				throw mt_error("couldn't parse dna.reps");
+			}			 
+    	} else if (key.find("dna.D_M[0]") != string::npos) {
+			this->alpha_M_row[0] = stod(value);
+		} else if (key.find("dna.D_M[1]") != string::npos) {
+			this->alpha_M_row[1] = stod(value);
+		} else if (key.find("dna.D_M[2]") != string::npos) {
+			this->alpha_M_row[2] = stod(value);
+		} else if (key.find("dna.D_M[3]") != string::npos) {
+			this->alpha_M_row[3] = stod(value);
+		} else if (key.find("dna.D_pi[0]") != string::npos) {
+			this->alpha_pi[0] = stod(value);
+		} else if (key.find("dna.D_pi[1]") != string::npos) {
+			this->alpha_pi[1] = stod(value);
+		} else if (key.find("dna.D_pi[2]") != string::npos) {
+			this->alpha_pi[2] = stod(value);
+		} else if (key.find("dna.D_pi[3]") != string::npos) {
+			this->alpha_pi[3] = stod(value);
+		} else if (key.find("dna.thr") != string::npos) {
+			this->ecdllConvergenceThreshold = stod(value);
+		} else if (key.find("dna.maxIter") != string::npos) {
+			this->maxIter = stoi(value);
+		} else if (key.find("dna.thrPerRegime.coarse") != string::npos) {
+			this->thrCoarse = stod(value);
+		} else if (key.find("dna.thrPerRegime.medium") != string::npos) {
+			this->thrMedium = stod(value);
+		} else if (key.find("dna.thrPerRegime.fine") != string::npos) {
+			this->thrFine = stod(value);
+		} else if (key.find("dna.patWRegime.coarse") != string::npos) {
+			this->cum_pattern_weight_coarse = stod(value);
+		} else if (key.find("dna.patWRegime.medium") != string::npos) {
+			this->cum_pattern_weight_medium = stod(value);
+		} 
+	}
+}
+// void SEM::BuildCumFractionIndicesAA(double start, double end, double step) {
+//     this->cum_fraction_indices_AA.clear();
+
+//     if (cum_fractional_weight_AA.empty() || step <= 0.0) return;
+
+//     // Clamp start/end to [0,1], allow tiny epsilon beyond 1.0 to catch rounding.
+//     start = std::max(0.0, start);
+//     end   = std::min(1.0000001, end);
+
+//     // Use integer loop count to avoid FP drift.
+//     int n_steps = static_cast<int>(std::floor((end - start) / step + 0.5)) + 1;
+//     cum_fraction_indices_AA.reserve(n_steps);
+
+//     for (int k = 0; k < n_steps; ++k) {
+//         double thresh = start + k * step;
+//         if (thresh > 1.0) thresh = 1.0; // final clamp
+
+//         auto it = std::lower_bound(cum_fractional_weight_AA.begin(),
+//                                    cum_fractional_weight_AA.end(),
+//                                    thresh);
+//         if (it != cum_fractional_weight_AA.end()) {
+//             cum_fraction_indices_AA.push_back(
+//                 static_cast<int>(std::distance(cum_fractional_weight_AA.begin(), it))
+//             );
+//         } else {
+//             // Threshold not reached (shouldn’t happen if end <= 1), fallback to last index
+//             cum_fraction_indices_AA.push_back(
+//                 static_cast<int>(cum_fractional_weight_AA.size() - 1)
+//             );
+//         }
+//     }
+// }
+
+
+void SEM::SetAASiteCumWeight() {
+	this->AAsitecumweight.clear();	
+	for (int site = 0; site < this->num_aa_patterns; site++ ) {
+		this->AAsitecumweight.emplace_back(site,this->AAPatternWeights[site]);
+				
+	}
+	sort(this->AAsitecumweight.begin(), this->AAsitecumweight.end(), [](const pair<int,int>& a, const pair<int,int>& b) {
+        return a.second > b.second; });
+
+	int total_weight = 0;
+    for (const auto& p : this->AAsitecumweight) total_weight += p.second;
+	this->cum_fractional_weight_AA.clear();
+    this->cum_fractional_weight_AA.reserve(this->AAsitecumweight.size());
+
+	double cumulative = 0.0;
+    for (const auto& p : this->AAsitecumweight) {
+        cumulative += p.second;
+        this->cum_fractional_weight_AA.push_back(cumulative / total_weight);
+    }
+}
+
+Matrix20d SEM::ExpQt_fromSpectrum(double t) const {
+    if (!spectrum.ok) {    
+        return (t * Q_D).exp();
+    }
+    
+    Vector20cd d  = (spectrum.lambda.array() * t).exp();
+    Matrix20cd Pc = (spectrum.V * d.asDiagonal()) * spectrum.V_inv;
+    Matrix20d P = Pc.real();
+    
+    for (int i = 0; i < 20; ++i) {
+        double sum = 0.0;
+        for (int j = 0; j < 20; ++j) {
+            double x = P(i, j);
+            if (x < 0.0 && x > -1e-12) x = 0.0;
+            P(i, j) = x;
+            sum += x;
+        }
+        if (sum > 0.0) P.row(i) /= sum;
+    }
+    return P;
+}
+
+
+void SEM::PrecomputeSpectrum() {
+    this->spectrum = Spectrum{};
+    Eigen::ComplexEigenSolver<Matrix20d> ces;
+    ces.compute(Q_D);
+    if (ces.info() == Eigen::Success) {
+        spectrum.V      = ces.eigenvectors();
+        spectrum.lambda = ces.eigenvalues();
+        spectrum.V_inv  = spectrum.V.partialPivLu().inverse();
+        spectrum.ok = true;
+    } else {
+        spectrum.ok = false;
+    }
+}
+
+void SEM::AssignLSBranchLengthsToTree() {
+    if (this->DM_LS.empty()) {
+		cout << "AssignOLSBranchLengthsToTree: DM_NR is empty. Build the DM_NR distance map first." << endl;
+        throw std::runtime_error("AssignLSBranchLengthsToTree: DM_NR is empty. Build the DM_NR distance map first.");
+    }
+    // Refit OLS lengths on the current topology using NR distances
+    FamilyJoining::AssignOLSLengthsToTree(this->T, this->DM_LS);
+    FamilyJoining::SetNegativeLengthsToZero(this->T);
+}
+
+void SEM::SetFJTree(const fj::Graph& tree) {
+    this->T = tree;
+    this->T.rebuild();
+}
+
+
+void SEM::ComputeNRDistanceMatrix() {
+    // --- settings ---
+    const double T_MIN   = 1e-9;     // strictly positive lower bound
+    const double T_MAX   = 10.0;     // hard cap for branch length
+    const int    MAX_NR  = 60;       // max Newton iterations per pair
+    const int    MAX_BT  = 60;       // max backtracking steps
+    const double G_TOL   = 1e-10;    // gradient tolerance for stop
+    const double X_TOL   = 1e-8;     // parameter change tolerance
+    const double ALPHA0  = 1.0;      // initial step scale
+    const double BT_SHR  = 0.5;      // backtracking shrink factor
+    const double EPS_LOG = 1e-300;   // floor for log()
+    const double EPS_DEN = 1e-16;    // floor to avoid /0 in derivatives
+
+    this->DM_NR.clear();
+
+    const int n = this->numberOfInputSequences;
+    if (n <= 1) return;
+
+    // Stationary distribution as VectorXd
+    Eigen::VectorXd pi_vec(20);
+    for (int k = 0; k < 20; ++k) pi_vec[k] = this->pi_D[k];
+
+    // Precompute reversible spectral factors once for this Q_D
+    Eigen::VectorXd piN, pis, invpis, lambdas;
+    Eigen::MatrixXd U;
+    std::tie(piN, pis, invpis, U, lambdas) = ReversibleSpecTuple(this->Q_D, pi_vec);
+
+    // Canonical key for unordered pair
+    const auto keyOf = [](const std::string& a, const std::string& b) {
+        return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
+    };
+
+    // Build P, P', P'' via reversible spectral form at time t
+    auto P_and_derivs = [&](double t,
+                            Eigen::Matrix<double,20,20>& P,
+                            Eigen::Matrix<double,20,20>& Pd,
+                            Eigen::Matrix<double,20,20>& Pdd) {
+        Eigen::Matrix<double,20,20> S0 = Eigen::Matrix<double,20,20>::Zero();
+        Eigen::Matrix<double,20,20> S1 = Eigen::Matrix<double,20,20>::Zero();
+        Eigen::Matrix<double,20,20> S2 = Eigen::Matrix<double,20,20>::Zero();
+
+        for (int k = 0; k < 20; ++k) {
+            const double lam = lambdas[k];
+            const double e   = std::exp(lam * t);
+            const auto   uk  = U.col(k);
+            S0.noalias() += e           * (uk * uk.transpose());
+            S1.noalias() += (lam*e)     * (uk * uk.transpose());
+            S2.noalias() += (lam*lam*e) * (uk * uk.transpose());
+        }
+
+        for (int i = 0; i < 20; ++i) {
+            for (int j = 0; j < 20; ++j) {
+                const double pre  = invpis[i];
+                const double post = pis[j];
+                P  (i,j) = pre * S0 (i,j) * post;
+                Pd (i,j) = pre * S1 (i,j) * post;
+                Pdd(i,j) = pre * S2 (i,j) * post;
+            }
+        }
+        // Do NOT renormalize rows here—keeps derivatives exact.
+    };
+
+    // log-likelihood, gradient, Hessian at t for counts N
+    auto ll_g_h = [&](const Eigen::Matrix<double,20,20>& N, double t) {
+        Eigen::Matrix<double,20,20> P, Pd, Pdd;
+        P_and_derivs(t, P, Pd, Pdd);
+
+        double ll = 0.0, g = 0.0, h = 0.0;
+
+        for (int a = 0; a < 20; ++a) {
+            const double log_pi_a = (pi_vec[a] > 0.0) ? std::log(pi_vec[a]) : std::log(EPS_LOG);
+            for (int b = 0; b < 20; ++b) {
+                const double n_ab = N(a,b);
+                if (n_ab <= 0.0) continue;
+
+                const double Pab      = P(a,b);
+                const double Pab_log  = std::log((Pab > 0.0) ? Pab : EPS_LOG);
+                const double Pab_safe = (std::abs(Pab) > EPS_DEN) ? Pab : (Pab >= 0.0 ? EPS_DEN : -EPS_DEN);
+
+                const double Pdab = Pd(a,b);
+                const double Pddb = Pdd(a,b);
+
+                ll += n_ab * (log_pi_a + Pab_log);
+
+                const double r = Pdab / Pab_safe;
+                const double q = Pddb / Pab_safe - r*r;
+
+                g += n_ab * r;
+                h += n_ab * q;
+            }
+        }
+        return std::tuple<double,double,double>(ll, g, h);
+    };
+
+    
+    for (int i = 0; i < n; ++i) {
+        SEM_vertex* u = this->vertices[i];
+        const std::string& ui = u->name;
+
+        for (int j = i + 1; j < n; ++j) {
+            SEM_vertex* v = this->vertices[j];
+            const std::string& vj = v->name;
+
+            Eigen::Matrix<double,20,20> N = GetCountMatrix(u, v);
+            if (N.sum() <= 0.0) { this->DM_NR[keyOf(ui, vj)] = 0.0; continue; }
+
+            // Seed with JC(20); clamp to bounds
+            double t = std::max(T_MIN, std::min(T_MAX, std::max(0.0, GetJukesCantorDistance(u, v))));
+
+            double ll, g, h;
+            std::tie(ll, g, h) = ll_g_h(N, t);
+
+            // Newton–Raphson with backtracking line search
+            for (int it = 0; it < MAX_NR; ++it) {
+                if (std::abs(g) < G_TOL) break;
+
+                double step;
+                if (h < 0.0 && std::isfinite(h)) step = g / h; // true Newton (maximize)
+                else                             step = g / ( (h==0.0)? 1.0 : std::abs(h) + 1e-12 );
+
+                double alpha = ALPHA0;
+                double t_new = t - alpha * step;
+
+                for (int bt = 0; bt < MAX_BT; ++bt) {
+                    if (!(t_new >= T_MIN && t_new <= T_MAX) || !std::isfinite(t_new)) {
+                        alpha *= BT_SHR;
+                        t_new = t - alpha * step;
+                        continue;
+                    }
+                    double ll_new, g_new, h_new;
+                    std::tie(ll_new, g_new, h_new) = ll_g_h(N, t_new);
+                    if (ll_new >= ll || alpha < 1e-6) {
+                        t = t_new; ll = ll_new; g = g_new; h = h_new;
+                        break;
+                    }
+                    alpha *= BT_SHR;
+                    t_new = t - alpha * step;
+                }
+
+                if (!std::isfinite(t)) break;
+                if (std::abs(alpha * step) < X_TOL) break;
+            }
+
+            if (!(t >= 0.0) || !std::isfinite(t)) {
+                double t_jc = std::max(0.0, GetJukesCantorDistance(u, v));
+                t = std::max(T_MIN, std::min(T_MAX, t_jc));
+            }
+
+            this->DM_NR[keyOf(ui, vj)] = t;
+        }
+    }
+}
+
+
+// Builds an n x n symmetric matrix of MLE branch lengths between all pairs in `verts`.
+// using line search
+void SEM::ComputeLSDistanceMatrix() {
+    // --- settings ---
+    const double T_EPS   = 1e-9;                 // evaluate slightly > 0
+    const double T_MAX   = 10.0;                 // hard cap for branch length
+    const double T_TOL   = 1e-8;                 // interval tolerance
+    const int    MAX_IT  = 120;                  // golden-section iterations
+    const double PHI     = 0.6180339887498949;   // golden ratio conjugate
+    const double IMPROVE = 1e-9;                 // min improvement when expanding bracket
+    const double EPS_LL  = 1e-300;               // floor for probabilities in log
+
+    this->DM_LS.clear();
+
+    const int n = this->numberOfInputSequences; 
+    if (n <= 1) return;
+
+    // Stationary distribution as VectorXd
+    Eigen::VectorXd pi_vec(20);
+    for (int k = 0; k < 20; ++k) pi_vec[k] = this->pi_D[k];
+
+    // Precompute reversible spectral factors once
+    Eigen::VectorXd piN, pis, invpis, lambdas;
+    Eigen::MatrixXd U;
+    std::tie(piN, pis, invpis, U, lambdas) = ReversibleSpecTuple(this->Q_D, pi_vec);
+
+    // Canonical key: (a,b) sorted
+    const auto keyOf = [](const std::string& a, const std::string& b) {
+        return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
+    };
+
+    // LL-only evaluator using spectral form (no g/H)
+    auto ll_of_counts = [&](const Eigen::Matrix<double,20,20>& N, double t) -> double {
+        // UdexpUt = sum_k e^{λ_k t} u_k u_k^T
+        Eigen::Matrix<double,20,20> UdexpUt = Eigen::Matrix<double,20,20>::Zero();
+        for (int k = 0; k < 20; ++k) {
+            double e = std::exp(lambdas[k] * t);
+            Eigen::Matrix<double,20,1> uk = U.col(k);
+            UdexpUt.noalias() += e * (uk * uk.transpose());
+        }
+        // P = Π^{-1/2} * UdexpUt * Π^{1/2}
+        Eigen::Matrix<double,20,20> P;
+        for (int i = 0; i < 20; ++i)
+            for (int j = 0; j < 20; ++j)
+                P(i,j) = invpis[i] * UdexpUt(i,j) * pis[j];
+
+        // hygiene: clip tiny negatives, renormalize each row
+        for (int i = 0; i < 20; ++i) {
+            for (int j = 0; j < 20; ++j)
+                if (P(i,j) < 0.0 && P(i,j) > -1e-14) P(i,j) = 0.0;
+            double rsum = P.row(i).sum();
+            if (std::abs(rsum - 1.0) > 1e-10) P.row(i) /= rsum;
+        }
+
+        // log-likelihood
+        double ll = 0.0;
+        for (int a = 0; a < 20; ++a)
+            for (int b = 0; b < 20; ++b) {
+                double n_ab = N(a,b);
+                if (n_ab <= 0.0) continue;
+                double pab = P(a,b);
+                if (pab < EPS_LL) pab = EPS_LL;
+                ll += n_ab * std::log(pab);
+            }
+        return ll;
+    };
+
+    // All unordered pairs
+    for (int i = 0; i < n; ++i) {
+        SEM_vertex* u = this->vertices[i];
+        const std::string& ui = u->name;
+
+        for (int j = i + 1; j < n; ++j) {
+            SEM_vertex* v = this->vertices[j];
+            const std::string& vj = v->name;
+
+            Eigen::Matrix<double,20,20> N = GetCountMatrix(u, v);
+            if (N.sum() <= 0.0) { this->DM_LS[keyOf(ui, vj)] = 0.0; continue; }
+
+            // Seed with JC(20)
+            double t_seed = std::max(0.0, GetJukesCantorDistance(u, v));
+
+            // ---- bracket [a,b] by expanding b until no improvement or T_MAX ----
+            double a = 0.0;
+            double b = std::min(T_MAX, std::max(0.25, 2.0 * t_seed + 1.0));
+            double fb = ll_of_counts(N, b);
+            while (b < T_MAX) {
+                double b2 = std::min(T_MAX, 2.0 * b);
+                double fb2 = ll_of_counts(N, b2);
+                if (fb2 > fb + IMPROVE) { b = b2; fb = fb2; }
+                else break;
+            }
+
+            // ---- golden-section search on [left, right] to maximize LL ----
+            double left  = std::max(T_EPS, a);
+            double right = std::max(left + T_TOL, b);
+
+            double c = right - PHI * (right - left);
+            double d = left  + PHI * (right - left);
+            double fc = ll_of_counts(N, c);
+            double fd = ll_of_counts(N, d);
+
+            for (int it = 0; it < MAX_IT; ++it) {
+                if (fc < fd) {
+                    left = c;
+                    c = d;
+                    fc = fd;
+                    d = left + PHI * (right - left);
+                    fd = ll_of_counts(N, d);
+                } else {
+                    right = d;
+                    d = c;
+                    fd = fc;
+                    c = right - PHI * (right - left);
+                    fc = ll_of_counts(N, c);
+                }
+                if (std::abs(right - left) <= T_TOL) break;
+            }
+
+            // best of c, d, midpoint
+            double tm = 0.5 * (left + right);
+            double fm = ll_of_counts(N, tm);
+            double t_star = tm;
+            double fbest  = fm;
+            if (fc > fbest) { fbest = fc; t_star = c; }
+            if (fd > fbest) { fbest = fd; t_star = d; }
+
+            if (!(t_star >= 0.0) || !std::isfinite(t_star)) {
+                double t_jc = std::max(0.0, GetJukesCantorDistance(u, v));
+                t_star = std::isfinite(t_jc) ? t_jc : 0.0;
+            }
+
+            this->DM_LS[keyOf(ui, vj)] = t_star;
+        }
+    }
+}
+
+void SEM::BuildSIndex(std::vector<std::pair<int,int>>& idxS, int i0, int j0) const {
+	idxS.clear();
+    for (int i = 0; i < 20; ++i)
+        for (int j = i + 1; j < 20; ++j)
+            if (!(i == i0 && j == j0))
+                idxS.emplace_back(i, j);
+}
+
+void SEM::PackTheta(const std::vector<std::pair<int,int>>& idxS, int p_ref,
+                    std::vector<double>& theta) const {
+    theta.clear();
+    theta.reserve(idxS.size() + 19);
+
+    // S (positivity via exp)
+    for (std::size_t k = 0; k < idxS.size(); ++k) {
+        int i = idxS[k].first, j = idxS[k].second;
+        double sij = this->S_D(i, j);
+        if (!(sij > 0.0)) sij = 1e-6;
+        theta.push_back(std::log(sij));
+    }
+
+    // pi (19 logits relative to p_ref)
+    double pref = this->pi_D[p_ref];
+    if (!(pref > 0.0)) pref = 1e-6;
+    for (int i = 0; i < 20; ++i) {
+        if (i == p_ref) continue;
+        double pii = this->pi_D[i];
+        if (!(pii > 0.0)) pii = 1e-12;
+        theta.push_back(std::log(pii / pref));
+    }
+}
+
+void SEM::UnpackTheta(const std::vector<double>& theta,
+                      const std::vector<std::pair<int,int>>& idxS,
+                      int i0, int j0, int p_ref) {
+    const std::size_t mS = idxS.size();
+    // S: fill only free pairs; keep (i0,j0) as-is
+    for (std::size_t k = 0; k < mS; ++k) {
+        int i = idxS[k].first, j = idxS[k].second;
+        double sij = std::exp(theta[k]);
+        if (!(sij > 0.0)) sij = 1e-12;
+        this->S_D(i, j) = this->S_D(j, i) = sij;
+    }
+
+    // pi: anchored softmax
+    double y[20]; for (int i=0;i<20;++i) y[i] = 0.0;
+    y[p_ref] = 1.0;
+    double sumy = 1.0;
+    std::size_t t = mS;
+    for (int i = 0; i < 20; ++i) {
+        if (i == p_ref) continue;
+        double yi = std::exp(theta[t++]);
+        if (!(yi > 0.0)) yi = 1e-12;
+        y[i] = yi; sumy += yi;
+    }
+    for (int i = 0; i < 20; ++i) this->pi_D[i] = y[i] / sumy;
+}
+
+double SEM::NMObjectiveNegLL(const std::vector<double>& theta,
+                             const std::vector<std::pair<int,int>>& idxS,
+                             int i0, int j0, int p_ref) {
+    // Save
+    Eigen::Matrix<double,20,20> S_save = this->S_D;
+    Eigen::Matrix<double,20,20> Q_save = this->Q_D;
+    std::vector<double>          pi_save = this->pi_D;
+
+    double result = std::numeric_limits<double>::infinity();
+    try {
+        // Apply params
+        this->UnpackTheta(theta, idxS, i0, j0, p_ref);
+
+        // Build calibrated mean-rate-1 Q
+        this->SetRateMatrixParameters();
+
+        // Compute LL (stored in member)
+        this->ComputeAALogLikelihood();
+        double ll = this->AAlogLikelihood;
+        if (std::isfinite(ll)) result = -ll;
+    } catch (...) {
+        // leave result as +inf
+    }
+
+    // Restore
+    this->S_D  = S_save;
+    this->Q_D  = Q_save;
+    this->pi_D = pi_save;
+
+    return result;
+}
+
+void SEM::OptimizeRateMatrixNelderMead(int max_iter, double tol, double step, int i0, int j0, int p_ref) {
+    // Free S indices
+    std::vector<std::pair<int,int>> idxS;
+    this->BuildSIndex(idxS, i0, j0);
+    const std::size_t D = idxS.size() + 19; // 189 + 19 = 208
+
+    // Initial theta from current S_D, pi_D
+    std::vector<double> x0;
+    this->PackTheta(idxS, p_ref, x0);
+
+    // Initial simplex of size D+1
+    std::vector<std::vector<double>> X(D + 1, x0);
+    for (std::size_t d = 0; d < D; ++d) X[d + 1][d] += step;
+
+    auto f = [&](const std::vector<double>& x)->double {
+        return this->NMObjectiveNegLL(x, idxS, i0, j0, p_ref);
+    };
+
+    std::vector<double> F(D + 1);
+    for (std::size_t r = 0; r < D + 1; ++r) F[r] = f(X[r]);
+
+    const double alpha = 1.0, gamma = 2.0, rho = 0.5, sigma = 0.5;
+
+    std::vector<double> xc(D), xr(D), xe(D), xoc(D), xic(D);
+    for (int it = 0; it < max_iter; ++it) {
+        // Order simplex by objective
+        std::vector<std::size_t> ord(D + 1);
+        for (std::size_t r = 0; r < D + 1; ++r) ord[r] = r;
+        std::sort(ord.begin(), ord.end(), [&](std::size_t a, std::size_t b){ return F[a] < F[b]; });
+
+        // Reorder
+        std::vector<std::vector<double>> Xn(D + 1);
+        std::vector<double> Fn(D + 1);
+        for (std::size_t r = 0; r < D + 1; ++r) { Xn[r] = X[ord[r]]; Fn[r] = F[ord[r]]; }
+        X.swap(Xn); F.swap(Fn);
+
+        // Convergence checks
+        double fspan = F.back() - F.front();
+        double xspan = 0.0;
+        for (std::size_t d = 0; d < D; ++d) {
+            double vmin = X[0][d], vmax = X[0][d];
+            for (std::size_t r = 1; r < D + 1; ++r) { vmin = std::min(vmin, X[r][d]); vmax = std::max(vmax, X[r][d]); }
+            xspan = std::max(xspan, std::abs(vmax - vmin));
+        }
+        if (fspan < tol && xspan < tol) break;
+
+        // Centroid of best D vertices
+        for (std::size_t d = 0; d < D; ++d) {
+            double s = 0.0; for (std::size_t r = 0; r < D; ++r) s += X[r][d];
+            xc[d] = s / (double)D;
+        }
+
+        // Reflection
+        for (std::size_t d = 0; d < D; ++d) xr[d] = xc[d] + alpha * (xc[d] - X[D][d]);
+        double fr = f(xr);
+
+        if (fr < F[0]) {
+            // Expansion
+            for (std::size_t d = 0; d < D; ++d) xe[d] = xc[d] + gamma * (xr[d] - xc[d]);
+            double fe = f(xe);
+            if (fe < fr) { X[D] = xe; F[D] = fe; }
+            else         { X[D] = xr; F[D] = fr; }
+        } else if (fr < F[D - 1]) {
+            // Accept reflection
+            X[D] = xr; F[D] = fr;
+        } else {
+            if (fr < F[D]) {
+                // Outside contraction
+                for (std::size_t d = 0; d < D; ++d) xoc[d] = xc[d] + rho * (xr[d] - xc[d]);
+                double foc = f(xoc);
+                if (foc <= fr) { X[D] = xoc; F[D] = foc; }
+                else {
+                    // Shrink towards best
+                    for (std::size_t r = 1; r < D + 1; ++r) {
+                        for (std::size_t d = 0; d < D; ++d) X[r][d] = X[0][d] + sigma * (X[r][d] - X[0][d]);
+                        F[r] = f(X[r]);
+                    }
+                }
+            } else {
+                // Inside contraction
+                for (std::size_t d = 0; d < D; ++d) xic[d] = xc[d] - rho * (xc[d] - X[D][d]);
+                double fic = f(xic);
+                if (fic < F[D]) { X[D] = xic; F[D] = fic; }
+                else {
+                    // Shrink
+                    for (std::size_t r = 1; r < D + 1; ++r) {
+                        for (std::size_t d = 0; d < D; ++d) X[r][d] = X[0][d] + sigma * (X[r][d] - X[0][d]);
+                        F[r] = f(X[r]);
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply best parameters to this SEM instance and finalize Q
+    const std::vector<double>& xbest = X[0];
+    this->UnpackTheta(xbest, idxS, i0, j0, p_ref);
+    this->SetRateMatrixParameters();
+}
+
+double SEM::GetMLDistance_NR_Reversible_Tuples(SEM_vertex* u, SEM_vertex* v, const Eigen::Matrix<double,20,20>& Q, const Eigen::VectorXd& pi, int max_iter, double grad_tol, double ll_tol) {
+    Eigen::Matrix<double,20,20> N = GetCountMatrix(u, v);
+    if (N.sum() <= 0.0) return 0.0;
+	Eigen::VectorXd piN;
+	Eigen::VectorXd pis;
+	Eigen::VectorXd invpis;
+	Eigen::MatrixXd U;
+	Eigen::VectorXd lambdas;
+    
+    tie (piN, pis, invpis, U, lambdas) = ReversibleSpecTuple(Q, pi);
+
+    
+    double t = std::max(0.0, GetJukesCantorDistance(u, v));
+	double ll, g, H;
+
+    tie (ll, g, H) = LL_Grad_Hess_Counts_Reversible_Tuple(N, pis, invpis, U, lambdas, t);
+
+    constexpr double ALPHA_MIN = 1e-6;
+
+    for (int it = 0; it < max_iter; ++it) {
+        if (std::abs(g) <= grad_tol) break;
+
+        
+        double step;
+        if (H < -1e-12) {
+            step = g / H;    
+        } else {
+            double denom = std::max(std::abs(H), 1.0);
+            step = -g / denom;
+        }
+
+        // Backtracking with t >= 0
+        double alpha = 1.0;
+        double t_new = t, ll_new = ll, g_new = g, H_new = H;
+
+        for (int bt = 0; bt < 60; ++bt) {
+            t_new = t - alpha * step;
+            if (t_new < 0.0) t_new = 0.0;
+			
+			double ll_bt, g_bt, H_bt;
+            tie (ll_bt, g_bt, H_bt) = LL_Grad_Hess_Counts_Reversible_Tuple(N, pis, invpis, U, lambdas, t_new);
+            ll_new = ll_bt; g_new = g_bt; H_new = H_bt;
+
+            if (ll_new >= ll || alpha < ALPHA_MIN) break;
+            alpha *= 0.5;
+        }
+
+        if (ll_new < ll && std::abs(g) <= 10*grad_tol) break;
+
+        // Accept step
+        t  = t_new;
+        ll = ll_new;
+        g  = g_new;
+        H  = H_new;
+
+        if (std::abs(g) <= grad_tol) break;
+        if (std::abs(ll_new - ll) < ll_tol) break;
+    }
+
+    if (!(t >= 0.0)) t = 0.0;
+    return t;
+}
+
+tuple<double,double,double> SEM::LL_Grad_Hess_Counts_Reversible_Tuple(const Eigen::Matrix<double,20,20>& N, const Eigen::VectorXd& pis, const Eigen::VectorXd& invpis, const Eigen::MatrixXd& U, const Eigen::VectorXd& lambdas, double t) const {
+    constexpr double EPS = 1e-300;
+	Eigen::Matrix<double,20,20> P, QP, Q2P;
+    tie(P, QP, Q2P) = EvalP_QP_Q2P_Tuple(pis, invpis, U, lambdas, t);
+
+    double ll = 0.0, g = 0.0, H = 0.0;
+    for (int a = 0; a < 20; ++a) {
+        for (int b = 0; b < 20; ++b) {
+            double n = N(a,b);
+            if (n <= 0.0) continue;
+            double pab = std::max(P(a,b), EPS);
+            double r   = QP(a,b)  / pab;
+            double s   = Q2P(a,b) / pab;
+            ll += n * std::log(pab);
+            g  += n * r;
+            H  += n * (s - r*r);
+        }
+    }
+    return std::make_tuple(ll, g, H);
+}
+
+tuple<Eigen::Matrix<double,20,20>, Eigen::Matrix<double,20,20>, Eigen::Matrix<double,20,20>> SEM::EvalP_QP_Q2P_Tuple(const Eigen::VectorXd& pis, const Eigen::VectorXd& invpis, const Eigen::MatrixXd& U, const Eigen::VectorXd& lambdas, double t) const {
+    Eigen::Matrix<double,20,20> UdexpUt   = Eigen::Matrix<double,20,20>::Zero();
+    Eigen::Matrix<double,20,20> UdlexpUt  = Eigen::Matrix<double,20,20>::Zero();
+    Eigen::Matrix<double,20,20> UdllExpUt = Eigen::Matrix<double,20,20>::Zero();
+
+    for (int k = 0; k < 20; ++k) {
+        double e   = std::exp(lambdas[k] * t);
+        double le  = lambdas[k] * e;
+        double l2e = lambdas[k] * lambdas[k] * e;
+        Eigen::VectorXd uk = U.col(k);
+        Eigen::MatrixXd  outer = uk * uk.transpose(); // rank-1
+        UdexpUt   += e   * outer;
+        UdlexpUt  += le  * outer;
+        UdllExpUt += l2e * outer;
+    }
+
+    Eigen::Matrix<double,20,20> P   = UdexpUt;
+    Eigen::Matrix<double,20,20> QP  = UdlexpUt;
+    Eigen::Matrix<double,20,20> Q2P = UdllExpUt;
+
+    for (int i = 0; i < 20; ++i)
+        for (int j = 0; j < 20; ++j) {
+            P(i,j)   = invpis[i] * P(i,j)   * pis[j];
+            QP(i,j)  = invpis[i] * QP(i,j)  * pis[j];
+            Q2P(i,j) = invpis[i] * Q2P(i,j) * pis[j];
+        }
+
+    // Numerical hygiene: clip tiny negatives and row-normalize P
+    for (int i = 0; i < 20; ++i) {
+        for (int j = 0; j < 20; ++j)
+            if (P(i,j) < 0.0 && P(i,j) > -1e-14) P(i,j) = 0.0;
+        double rsum = P.row(i).sum();
+        if (std::abs(rsum - 1.0) > 1e-10) P.row(i) /= rsum;
+    }
+
+    return std::make_tuple(P, QP, Q2P);
+}
+
+tuple<Eigen::VectorXd, Eigen::VectorXd, Eigen::VectorXd, Eigen::MatrixXd, Eigen::VectorXd> SEM::ReversibleSpecTuple(const Eigen::Matrix<double,20,20>& Q, const Eigen::VectorXd& pi_in) const {
+    Eigen::VectorXd pi = pi_in;
+    if (pi.size() != 20) throw std::invalid_argument("pi must have size 20");
+    if ((pi.array() <= 0.0).any()) throw std::invalid_argument("pi must be strictly positive");
+    double s = pi.sum();
+    if (std::abs(s - 1.0) > 1e-10) pi /= s;
+
+    Eigen::VectorXd pis    = pi.array().sqrt().matrix();
+    Eigen::VectorXd invpis = pis.array().inverse().matrix();
+
+    Eigen::Matrix<double,20,20> S;
+    for (int i = 0; i < 20; ++i)
+        for (int j = 0; j < 20; ++j)
+            S(i,j) = pis[i] * Q(i,j) * invpis[j];
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double,20,20>> es(S);
+    if (es.info() != Eigen::Success)
+        throw std::runtime_error("Eigen decomposition failed for symmetric S = Π^{1/2}QΠ^{-1/2}");
+
+    Eigen::MatrixXd U     = es.eigenvectors();    // orthonormal
+    Eigen::VectorXd evals = es.eigenvalues();     // real
+
+    return std::make_tuple(pi, pis, invpis, U, evals);
+}
+
 double SEM::DyadicLogLikelihood(SEM_vertex * p, SEM_vertex * c, double t) {
-	double ll = 0.0;
-	Eigen::Matrix<double,20,20> P_t;
+	double ll = 0.0;	
+	Eigen::Matrix <double,20,20> P_t;
 	P_t = Q_D*t;
 	P_t = P_t.exp();
-	int aa_p; int aa_c;
-	cout << this->pi_D[0] << endl;
-	cout << this->pi_D[1] << endl;
-	cout << this->pi_D[2] << endl;
-	cout << this->pi_D[3] << endl;
-	for (int i = 0; i < num_aa_patterns; i++) {
-		cout << "loglikelihood " << ll << i << endl;
+	int aa_p; int aa_c;	
+	for (int i = 0; i < num_aa_patterns; i++) {		
 		aa_p = p->AAcompressed[i];
 		aa_c = c->AAcompressed[i];
 		if (aa_p > -1 && aa_c > -1) {
@@ -3855,12 +4764,56 @@ double SEM::DyadicLogLikelihood(SEM_vertex * p, SEM_vertex * c, double t) {
 	return (ll);
 }
 
+Eigen::Matrix <double,20,20> SEM::GetCountMatrix(SEM_vertex * p, SEM_vertex * c) {
+	Eigen::Matrix <double,20,20> N;
+	N.setZero();
+	int aa_p; int aa_c;
+	for (int i = 0; i < this->num_aa_patterns; i++) {
+		aa_p = p->AAcompressed[i];
+		aa_c = c->AAcompressed[i];
+		if (aa_p > -1 && aa_c > -1) {
+			N(aa_p,aa_c) += this->AAPatternWeights[i];
+		}
+	}
+	return (N);
+}
+
+vector <double> SEM::GetCountVector(SEM_vertex * p) {
+	vector <double> C(20, 0.0);
+	int aa_p;
+	for (int i = 0; i < this->num_aa_patterns; i++) {
+		aa_p = p->AAcompressed[i];
+		if (aa_p > -1) C[aa_p] += this->AAPatternWeights[i];
+	}
+	return (C);	
+}
+
+double SEM::GetJukesCantorDistance(SEM_vertex * u, SEM_vertex * v) {
+	double t, p;
+	p = 0;
+	Eigen::Matrix <double,20,20> N = GetCountMatrix(u,v);
+	double total_count = 0;
+	for (int i = 0; i < 20; i++) {
+		for (int j = 0; j < 20; j++){
+			total_count += N(i,j);
+			if (i != j) p += N(i,j);
+		}
+	}
+	p/=total_count;
+	if (p > 19.0/20.0) throw mt_error("check p distance"); 
+	t = -19.0/20.0 * log(1-((20.0*p)/19.0));
+	return (t);
+}
+
+
+
 double SEM::DyadicLogLikelihoodFirstDer(SEM_vertex * p, SEM_vertex * c, double t) {
 	double ll_first_der = 0.0;
 	Eigen::Matrix<double,20,20> P_t;
+	Eigen::Matrix<double,20,20> QP_t;
 	P_t = Q_D*t;
 	P_t = P_t.exp();
-	Eigen::Matrix<double,20,20> QP_t = Q_D*P_t;
+	QP_t = Q_D*P_t;
 	int aa_p; int aa_c;
 	for (int i = 0; i < num_aa_patterns; i++) {
 		aa_p = p->AAcompressed[i];
@@ -3899,22 +4852,21 @@ double SEM::GetNewtonRaphsonDistance(SEM_vertex * u, SEM_vertex * v) {
 	ll_fd = this->DyadicLogLikelihoodFirstDer(u,v,t);
 	t -= ll/ll_fd;
 	cout << "Distance after first iteration of NR is " << t << endl;
-	cout << "Log likelihood after first iteration of NR is " << ll_fd << endl;
-	cout << "First derivate after first iteration of NR is " << ll_fd << endl;	
+	cout << "Log likelihood after first iteration of NR is " << ll << endl;
+	cout << "First derivate of ll after first iteration of NR is " << ll_fd << endl;	
 	while (abs(ll_fd) > nr_convergence && iter < max_iter) {
 		ll = this->DyadicLogLikelihood(u,v,t);
 		ll_fd = this->DyadicLogLikelihoodFirstDer(u,v,t);
 		t -= ll/ll_fd;
 		cout << "Distance after iteration " << iter << " of NR is " << t << endl;
-		cout << "Log likelihood after iteration " << iter << " of NR is " << ll_fd << endl;
+		cout << "Log likelihood after iteration " << iter << " of NR is " << ll << endl;
 		cout << "First derivate after iteration " << iter << " of NR is " << ll_fd << endl;
 		iter++;
 	}
-
 	return (t);
 }
 
-void SEM::ComputeMLDistances() {
+void SEM::ComputeMLDistancesForAAsequences() {
 	double ML_d;
 	for (SEM_vertex * u: this->vertices) {
 		for (SEM_vertex * v: this->vertices) {
@@ -3927,7 +4879,196 @@ void SEM::ComputeMLDistances() {
 	}
 }
 
-// void SEM::SetDayhoffRateMatrix() {
+
+
+void SEM::SetDayhoffExchangeabilityAndRootProbabilityParameters() {
+	ifstream Dayhoff_file(this->dayhoff_rate_matrix_file_name);
+
+	if (!Dayhoff_file.is_open()){
+		throw mt_error("Could not open Dayhoff rate matrix file");
+	}
+	this->Q_D.setZero();
+	this->S_D.setZero();	
+	string line;
+	vector <string> line_split;
+	int line_num = 0;
+	int row; int col; int K = 20;
+	double smallest_entry_in_dayhoff = 0;
+	double rate_matrix_entry;
+    while (getline(Dayhoff_file, line)) {
+		line_num++;
+		if (line.empty()) continue;
+		// cout << "line " << line_num << " is " << line << endl;
+		line_split = split_ws(line);
+		if (line_num < K + 1) {
+			if (line_split.size() != line_num -1) throw mt_error("Check the format of Dayhoff matrix");
+			row = line_num - 1;
+			for (col = 0; col < row; col++) {
+				rate_matrix_entry = stod(line_split[col]);				
+				this->S_D(row,col) = rate_matrix_entry;
+				this->S_D(col,row) = rate_matrix_entry;
+			}
+		} else {
+			if (line_split.size() != K) throw mt_error("Check the format of Dayhoff matrix");			
+			for (int i = 0; i < K; i++) {
+				this->pi_D[i] = stod(line_split[i]);
+			}			
+		}
+	}
+	Dayhoff_file.close();
+	
+	double sum_pi = 0.0;
+	for (int i = 0; i < 20; i++) {
+		sum_pi += this->pi_D[i];
+	}
+
+	for (int i = 0; i < 20; i++) {
+		this->pi_D[i] /= sum_pi;
+	}
+
+}
+
+void SEM::SetRateMatrixParameters() {
+	int K = 20;
+
+	// set rate matrix entries for off-diagonal elements
+	// cout << "here 1" << endl;
+	for (int row = 0; row < K; row++) {
+		for (int col = 0; col < row; col++) {
+			this->Q_D(row,col) = S_D(row,col) * this->pi_D[col];
+			this->Q_D(col,row) = S_D(col,row) * this->pi_D[row];
+		}
+	}	
+	// set rate matrix entries for diagonal elements
+	// cout << "here 2" << endl;
+
+	for (int row = 0; row < K; row++) {
+    	double rowsum = 0.0;
+    	for (int col = 0; col < K; col++) {
+        	if (col == row) continue;
+        	rowsum += this->Q_D(row, col);
+    	}
+    	this->Q_D(row, row) = -rowsum;
+	}	
+
+	// cout << "here 3" << endl;
+
+	double sum_pi = 0.0;
+	for (int i = 0; i < 20; i++) {
+		sum_pi += this->pi_D[i];
+	}
+	
+	// cout << "sum_pi is " << sum_pi << endl;
+
+	// cout << " abs(sum_pi - 1.0) is " << abs(sum_pi - 1.0) << endl;
+
+    if (abs(sum_pi - 1.0) > 1e-12) {
+        throw mt_error("pi is not normalized");
+    }
+
+	// cout << "here 4" << endl;
+
+    // compute mean rate: -sum_i pi[i] * Q[i,i]
+    double mu = 0.0;
+    for (int i = 0; i < K; i++) {
+        mu += -1 * this->pi_D[i] * this->Q_D(i, i);
+    }
+	// cout << "mu is " << mu << endl;	
+    if (mu <= 0.0) {
+        throw mt_error("Non-positive mean rate; check Q and pi");
+    }	
+    this->Q_D /= mu;
+	// cout << "Dayhoff rate matrix set" << endl;
+
+}
+
+// using Mat20 = Eigen::Matrix<double,20,20>;
+// using Vec20 = Eigen::Matrix<double,20,1>;
+
+// static inline std::tuple<double,double,double>
+// ll_grad_hess(const Mat20& Q, const Mat20& N, const Vec20& pi_in, double t)
+// {
+//     // Normalize pi (tolerate small drift)
+//     Vec20 pi = pi_in;
+//     double s = pi.sum();
+//     if (!(s > 0.0)) throw std::runtime_error("pi has non-positive sum");
+//     pi /= s;
+
+//     const double epsP  = 1e-300;  // floor for P entries
+//     const double epsPi = 1e-300;  // floor for pi entries
+
+//     // P = exp(Q t), QP = Q*P, Q2P = Q*(Q*P)
+//     Mat20 P   = (Q * t).exp();
+//     Mat20 QP  = Q * P;
+//     Mat20 Q2P = Q * QP;
+
+//     double ll = 0.0, g = 0.0, H = 0.0;
+
+//     for (int x = 0; x < 20; ++x) {
+//         const double pix = std::max(pi(x), epsPi);
+//         for (int y = 0; y < 20; ++y) {
+//             const double nxy = N(x,y);
+//             if (nxy == 0.0) continue;
+
+//             const double Pxy   = std::max(P(x,y), epsP);
+//             const double QPxy  = QP(x,y);
+//             const double Q2Pxy = Q2P(x,y);
+
+//             const double r = QPxy / Pxy;  // d/dt log Pxy
+
+//             // include pi in the log-likelihood
+//             ll += nxy * (std::log(pix) + std::log(Pxy));
+//             g  += nxy * r;
+//             H  += nxy * (Q2Pxy / Pxy - r*r);
+//         }
+//     }
+//     return {ll, g, H};
+// }
+
+// struct NRResult {
+//     double t, ll, grad, hess;
+//     int iters;
+//     bool converged;
+// };
+
+// inline NRResult newton_branch_length(const Mat20& Q, const Mat20& N, const Vec20& pi, double t0, int max_iters = 50, double tol_step = 1e-8, double tol_grad = 1e-8) {
+//     if (!(t0 > 0.0)) t0 = 0.1;
+	
+//     double t = t0, ll, g, H;
+//     std::tie(ll, g, H) = ll_grad_hess(Q, N, pi, t);
+
+//     for (int it = 1; it <= max_iters; ++it) {
+//         if (!std::isfinite(H) || H >= 0.0) {
+//             return {t, ll, g, H, it-1, std::fabs(g) < tol_grad};
+//         }
+//         const double step = g / H;
+//         if (std::fabs(step) < tol_step || std::fabs(g) < tol_grad) {
+//             return {t, ll, g, H, it-1, true};
+//         }
+        
+//         double alpha = 1.0, t_new = t - step;
+//         double ll_new, g_new, H_new;
+// 		// try NR step, reduce step size if proposed changes lead to negative branch lengths
+//         for (int bt = 0; bt < 60; ++bt) {
+//             if (!(t_new > 0.0)) { alpha *= 0.5; t_new = t - alpha*step; continue; }
+//             std::tie(ll_new, g_new, H_new) = ll_grad_hess(Q, N, pi, t_new);
+//             if (ll_new >= ll || alpha < 1e-6) break;
+//             alpha *= 0.5; t_new = t - alpha*step;
+//         }
+
+//         if (alpha < 1e-6 && ll_new < ll) {
+//             return {t, ll, g, H, it-1, std::fabs(g) < tol_grad};
+//         }
+
+//         t = t_new; ll = ll_new; g = g_new; H = H_new;
+
+//         if (std::fabs(g) < tol_grad) return {t, ll, g, H, it, true};
+//         if (std::fabs(alpha*step) < tol_step) return {t, ll, g, H, it, true};
+//     }
+//     return {t, ll, g, H, max_iters, false};
+// }
+
+
 // 	// cout << this->Q_D << endl;
 // 	constexpr int K = 20;
 // 	const std::string path = this->dayhoff_rate_matrix_file_name.empty()
@@ -4092,16 +5233,104 @@ inline string SEM::em_to_json(const EM_struct& em) const {
   os << "{"
      << "\"method\":"           << jstr(em.method)                 << ","
      << "\"rep\":"              << em.rep                          << ","
-	 << "\"num_iter\":"          << em.num_iter                     << ","
+	 << "\"iter\":"             << em.iter                         << ","
      << "\"ecd_ll_per_iter\":"  << jseries_iter_val(em.ecd_ll_per_iter) << ","
 	 << "\"ll_init\":"          << jnum(em.ll_init)                << ","
      << "\"ll_final\":"         << jnum(em.ll_final)               << ","
-     << "\"root_name\":"        << jstr(em.root_name)              << ","
+     << "\"root\":"             << jstr(em.root)                   << ","
      << "\"root_prob_init\":"   << jvec4(em.root_prob_init)        << ","
      << "\"root_prob_final\":"  << jvec4(em.root_prob_final)       << ","
      << "\"trans_prob_init\":"  << jmap_mat4(em.trans_prob_init)   << ","
      << "\"trans_prob_final\":" << jmap_mat4(em.trans_prob_final)
      << "}";
+  return os.str();
+}
+
+inline std::string SEM::aa_struct_to_json(const AA_opt_struct& s) const {
+  auto json_escape = [](const std::string& in) -> std::string {
+    std::ostringstream o;
+    for (char c : in) {
+      switch (c) {
+        case '\"': o << "\\\""; break;
+        case '\\': o << "\\\\"; break;
+        case '\b': o << "\\b";  break;
+        case '\f': o << "\\f";  break;
+        case '\n': o << "\\n";  break;
+        case '\r': o << "\\r";  break;
+        case '\t': o << "\\t";  break;
+        default:
+          if (static_cast<unsigned char>(c) < 0x20) {
+            o << "\\u" << std::hex << std::setw(4) << std::setfill('0')
+              << static_cast<int>(static_cast<unsigned char>(c))
+              << std::dec << std::setw(0);
+          } else {
+            o << c;
+          }
+      }
+    }
+    return o.str();
+  };
+
+  auto jvec = [](const std::vector<double>& v) -> std::string {
+    std::ostringstream os;
+    os.setf(std::ios::fixed); os << std::setprecision(17);
+    os << "[";
+    for (size_t i = 0; i < v.size(); ++i) {
+      if (i) os << ",";
+      os << v[i];
+    }
+    os << "]";
+    return os.str();
+  };
+
+  auto jmat20 = [](const Eigen::Matrix<double,20,20>& M) -> std::string {
+    std::ostringstream os;
+    os.setf(std::ios::fixed); os << std::setprecision(17);
+    os << "[";
+    for (int r = 0; r < 20; ++r) {
+      if (r) os << ",";
+      os << "[";
+      for (int c = 0; c < 20; ++c) {
+        if (c) os << ",";
+        os << M(r,c);
+      }
+      os << "]";
+    }
+    os << "]";
+    return os.str();
+  };
+
+  auto jmap_int_double = [](const std::map<int,double>& m) -> std::string {
+    // JSON object with stringified integer keys
+    std::ostringstream os;
+    os.setf(std::ios::fixed); os << std::setprecision(17);
+    os << "{";
+    bool first = true;
+    for (const auto& kv : m) {
+      if (!first) os << ",";
+      first = false;
+      os << "\"" << kv.first << "\":" << kv.second;
+    }
+    os << "}";
+    return os.str();
+  };
+
+  std::ostringstream os;
+  os.setf(std::ios::fixed); os << std::setprecision(17);
+
+  os << "{";
+  os << "\"rep\":"                 << s.rep << ",";
+  os << "\"iter\":"                << s.iter << ",";
+  os << "\"aa_ll_per_iter\":"      << jmap_int_double(s.aa_ll_per_iter) << ",";
+  os << "\"aa_ll_init\":"          << s.aa_ll_init << ",";
+  os << "\"aa_ll_final\":"         << s.aa_ll_final << ",";
+  os << "\"root\":\""              << json_escape(s.root) << "\",";
+  os << "\"root_prob_init\":"      << jvec(s.root_prob_init) << ",";
+  os << "\"root_prob_final\":"     << jvec(s.root_prob_final) << ",";
+  os << "\"exchangeability_matrix_init\":"  << jmat20(s.exchangeability_matrix_init) << ",";
+  os << "\"exchangeability_matrix_final\":" << jmat20(s.exchangeability_matrix_final);
+  os << "}";
+
   return os.str();
 }
 
@@ -4542,7 +5771,7 @@ void SEM::SetGMMparameters() {
 
 void SEM::ReparameterizeGMM() {
 	
-	// Compute pi, P(u,v) and P(v,u) for each vertex and edge using the method described in ssh paper	
+	// Compute pi, P(u,v) and P(v,u) for each vertex and edge using the method described in hss paper	
 	
 	// 1. Set pi for root
 	
@@ -4586,7 +5815,7 @@ void SEM::ReparameterizeGMM() {
 		// 5. Compute M_cp for root at child		
 		for (int x = 0; x < 4; x++) {
 			for (int y = 0; y < 4; y++) {
-				M_cp[y][x] = M_pc[x][y] * pi_p[x]/pi_c[y];			// Bayes rule as described in SSH paper
+				M_cp[y][x] = M_pc[x][y] * pi_p[x]/pi_c[y];			// Bayes rule as described in HSS paper
 			}
 		}
 		
@@ -5059,9 +6288,7 @@ emtr::Md SEM::ComputeTransitionMatrixUsingAncestralStates(SEM_vertex * p, SEM_ve
 			P[dna_p][dna_c] += this->DNAPatternWeights[site];
 		}
 	}
-//	cout << "Sequence of parent: " << EncodeAsDNA(p->compressedSequence) << endl;
-//	cout << "Sequence of child: " << EncodeAsDNA(c->compressedSequence) << endl;
-//	cout << "Count matrix is " << P << endl;
+
 	double rowSum;
 	for (int i = 0; i < 4; i ++) {
 		rowSum = 0;
@@ -5074,12 +6301,6 @@ emtr::Md SEM::ComputeTransitionMatrixUsingAncestralStates(SEM_vertex * p, SEM_ve
 	}
 	return P;
 }
-
-// void SEM::OpenAncestralSequencesFile() {
-// }
-
-// void SEM::WriteAncestralSequences() {		
-// }
 
 void SEM::SetPrefixForOutputFiles(string prefix_for_output_files_to_set){
 	this->prefix_for_output_files = prefix_for_output_files_to_set;
@@ -5553,11 +6774,11 @@ void SEM::ComputeExpectedCounts() {
 		// cout << "computing expected counts for site " << site << endl;
 		this->cliqueT->SetSite(site);		
 		// cout << "12b" << endl;
-		this->cliqueT->InitializePotentialAndBeliefs();	// gap check	
+		this->cliqueT->InitializePotentialAndBeliefs();
 		// cout << "12c" << endl;
-		this->cliqueT->CalibrateTree();	// gap check
+		this->cliqueT->CalibrateTree();
 		// cout << "12d" << endl;
-		this->cliqueT->ComputeMarginalProbabilitesForEachEdge(); // gap check
+		this->cliqueT->ComputeMarginalProbabilitesForEachEdge();
 		// cout << "12e" << endl;
 		this->AddToExpectedCountsForEachVariable();
 		// cout << "12f" << endl;
@@ -6038,6 +7259,172 @@ void SEM::ComputeLogLikelihoodUsingExpectedDataCompletion() {
 	}
 }
 
+void SEM::ComputeAALogLikelihood_maps() {
+	this->AAlogLikelihood = 0;
+	constexpr size_t K = 20;
+	map <SEM_vertex*,array<double,K>> conditionalLikelihoodMap;
+	std::array <double,K> conditionalLikelihood;
+	double partialLikelihood;
+	double siteLikelihood;	
+	double largestConditionalLikelihood = 0;
+	double currentProb;			
+	vector <SEM_vertex *> verticesToVisit;	
+	SEM_vertex * p;
+	SEM_vertex * c;
+	Eigen::Matrix <double,20,20> P;
+	double t;
+	// this->num_aa_patterns = 10;
+	for (int site = 0; site < this->num_aa_patterns; site++) {
+    conditionalLikelihoodMap.clear();
+    this->ResetLogScalingFactors();
+
+		for (auto& edge : this->edgesForPostOrderTreeTraversal) {
+			tie(p, c) = edge;
+			t = this->GetEdgeLength(p,c);
+			P = this->Q_D * t;
+			P = P.exp();
+			c->AAtransitionMatrix = P;
+
+			p->logScalingFactors += c->logScalingFactors;
+
+			// Initialize leaf child
+			if (c->outDegree == 0) {
+				if (c->AAcompressed[site] > -1) {
+					conditionalLikelihood.fill(0.0);
+					conditionalLikelihood[c->AAcompressed[site]] = 1.0;
+				} else {
+					conditionalLikelihood.fill(1.0);
+				}
+				conditionalLikelihoodMap.insert({c, conditionalLikelihood});
+			}
+
+			// Initialize parent p if absent
+			if (conditionalLikelihoodMap.find(p) == conditionalLikelihoodMap.end()) {
+				if (p->id > this->numberOfObservedVertices - 1) {
+					conditionalLikelihood.fill(1.0);      // latent
+				} else {
+					conditionalLikelihood.fill(0.0);      // observed
+					conditionalLikelihood[p->AAcompressed[site]] = 1.0;
+				}
+				conditionalLikelihoodMap.insert({p, conditionalLikelihood});
+			}
+
+			// DP update using safer access for child
+			double largestConditionalLikelihood = 0.0;
+			const auto& childCL = conditionalLikelihoodMap.at(c);
+
+			for (int dna_p = 0; dna_p < K; ++dna_p) {
+				double partialLikelihood = 0.0;
+				for (int dna_c = 0; dna_c < K; ++dna_c) {
+					partialLikelihood += P(dna_p,dna_c) * childCL[dna_c];
+				}
+				conditionalLikelihoodMap[p][dna_p] *= partialLikelihood;
+				largestConditionalLikelihood = std::max(largestConditionalLikelihood, conditionalLikelihoodMap[p][dna_p]);
+			}
+
+			if (largestConditionalLikelihood > 0.0) {
+				for (int dna_p = 0; dna_p < K; ++dna_p) {
+					conditionalLikelihoodMap[p][dna_p] /= largestConditionalLikelihood;
+				}
+				p->logScalingFactors += std::log(largestConditionalLikelihood);
+			} else {
+				throw mt_error("Largest conditional likelihood value is zero");
+			}
+		}
+		double siteLikelihood = 0.0;
+		const auto& rootCL = conditionalLikelihoodMap.at(this->root);
+		for (int dna = 0; dna < K; ++dna) {
+			siteLikelihood += this->pi_D[dna] * rootCL[dna];
+		}
+		if (siteLikelihood <= 0.0) throw mt_error("siteLikelihood <= 0");
+
+		this->AAlogLikelihood += (this->root->logScalingFactors + std::log(siteLikelihood)) * this->AAPatternWeights[site];
+	}
+}
+
+void SEM::ComputeAALogLikelihood() {
+	int num_states = 20;
+	this->AAlogLikelihood = 0;		
+	vector <vector<double>> conditionalLikelihoodVec;
+	int num_vertices = this->vertices.size();
+	int num_obs_vertices = this->numberOfObservedVertices;
+	vector <double> logScalingFactorVec(num_vertices, 0.0);
+	std::array <double,20> conditionalLikelihood;
+	double partialLikelihood;
+	double siteLikelihood;	
+	double largestConditionalLikelihood = 0;
+	double currentProb;			
+	vector <SEM_vertex *> verticesToVisit;	
+	SEM_vertex * p;
+	SEM_vertex * c;	
+	int root_id = this->root->id;
+	double blen;
+	
+	for (pair<SEM_vertex *,SEM_vertex *> edge : this->edgesForPostOrderTreeTraversal) {
+		tie (p, c) = edge;
+		blen = this->GetEdgeLength(p,c);		
+		c->AAtransitionMatrix = ExpQt_fromSpectrum(blen);
+		cout << " transition matrix entry is " << c->AAtransitionMatrix(3,3) << endl;
+	}
+
+	for (int site = 0; site < this->num_aa_patterns; site++) {				
+		for (int i = 0; i < num_obs_vertices; i++) {
+			c = this->vertices[i];
+			if (c->AAcompressed[site] > -1) {
+				conditionalLikelihoodVec[i].assign(20,0);
+				conditionalLikelihoodVec[i][c->AAcompressed[site]] = 1;
+			} else {				
+				conditionalLikelihoodVec[i].assign(20,1);
+			}			
+		}
+		for (int i = num_obs_vertices; i < num_vertices; i++) conditionalLikelihoodVec[i].assign(20,1);
+
+		fill(logScalingFactorVec.begin(), logScalingFactorVec.end(), 0.0);				
+		int p_id, c_id;
+		for (pair<SEM_vertex *,SEM_vertex *> edge : this->edgesForPostOrderTreeTraversal) {
+			tie (p, c) = edge;
+			p_id = p->id;
+			c_id = c->id;			
+			logScalingFactorVec[p_id] += logScalingFactorVec[c_id];
+			largestConditionalLikelihood = 0;
+			for (int aa_p = 0; aa_p < 20; aa_p++) {
+				partialLikelihood = 0;
+				for (int aa_c = 0; aa_c < 20; aa_c++) {
+					partialLikelihood += c->AAtransitionMatrix(aa_p,aa_c)*conditionalLikelihoodVec[c_id][aa_c];
+				}
+				conditionalLikelihoodVec[p_id][aa_p] *= partialLikelihood;
+				if (conditionalLikelihoodVec[p_id][aa_p] > largestConditionalLikelihood) {
+					largestConditionalLikelihood = conditionalLikelihoodVec[p_id][aa_p];
+				}
+			}
+			if (largestConditionalLikelihood != 0){
+				for (int aa_p = 0; aa_p < 20; aa_p++) {
+					conditionalLikelihoodVec[p_id][aa_p] /= largestConditionalLikelihood;
+				}				
+				logScalingFactorVec[p_id] += log(largestConditionalLikelihood);
+			} else {
+				cout << site;
+				cout << " parent name " << p->name << " ";
+				cout << " child name " << c->name << " ";
+				for (int i = 0; i < 20; i ++) {
+					for (int j = 0; j < 20; j++) {
+						cout << c->AAtransitionMatrix(i,j) << endl;
+					}
+				}				
+				cout << "Largest conditional likelihood value is zero" << endl;				
+				throw mt_error("Largest conditional likelihood value is zero");
+			}					
+		}
+		siteLikelihood = 0; 							
+		for (int aa = 0; aa < 20; aa++) {
+			currentProb = this->pi_D[aa]*conditionalLikelihoodVec[root_id][aa];
+			siteLikelihood += currentProb;
+		}		
+		this->AAlogLikelihood += (logScalingFactorVec[root_id] + log(siteLikelihood)) * this->AAPatternWeights[site];				
+	}
+}
+
+
 // Case 1: Observed vertices may have out degree > 0
 // Case 2: Root may have out degree = one
 // Case 3: Directed tree (rooted) with vertices with outdegree 2 or 0.
@@ -6054,80 +7441,67 @@ void SEM::ComputeLogLikelihood() {
 	SEM_vertex * c;
 	emtr::Md P;
 	for (int site = 0; site < this->num_dna_patterns; site++) {
-		conditionalLikelihoodMap.clear();
-		this->ResetLogScalingFactors();
-		for (pair<SEM_vertex *,SEM_vertex *> edge : this->edgesForPostOrderTreeTraversal){
-			tie (p, c) = edge;
+    conditionalLikelihoodMap.clear();
+    this->ResetLogScalingFactors();
+
+		for (auto& edge : this->edgesForPostOrderTreeTraversal) {
+			tie(p, c) = edge;
 			P = c->transitionMatrix;
+
 			p->logScalingFactors += c->logScalingFactors;
-			// Initialize conditional likelihood for leaves
-			if (c->outDegree==0) {
-				if (c->DNAcompressed[site] > -1) {					
-					for (int dna_c = 0; dna_c < 4; dna_c ++) conditionalLikelihood[dna_c] = 0;
-					conditionalLikelihood[c->DNAcompressed[site]] = 1;				
+
+			// Initialize leaf child
+			if (c->outDegree == 0) {
+				if (c->DNAcompressed[site] > -1) {
+					conditionalLikelihood.fill(0.0);
+					conditionalLikelihood[c->DNAcompressed[site]] = 1.0;
 				} else {
-					// cout << "gap case for " << c->name << endl;
-					for (int dna_c = 0; dna_c < 4; dna_c ++) conditionalLikelihood[dna_c] = 1;
+					conditionalLikelihood.fill(1.0);
 				}
-				conditionalLikelihoodMap.insert(pair <SEM_vertex *,array<double,4>>(c,conditionalLikelihood));
+				conditionalLikelihoodMap.insert({c, conditionalLikelihood});
 			}
-			// Initialize conditional likelihood for ancestors
+
+			// Initialize parent p if absent
 			if (conditionalLikelihoodMap.find(p) == conditionalLikelihoodMap.end()) {
-				// Case 1: Ancestor is not an observed vertex
-				if (p->id > this->numberOfObservedVertices -1) {
-					for (int dna_c = 0; dna_c < 4; dna_c++){
-						conditionalLikelihood[dna_c] = 1;
-					}
+				if (p->id > this->numberOfObservedVertices - 1) {
+					conditionalLikelihood.fill(1.0);      // latent
 				} else {
-				// Case 2: Ancestor is an observed vertex
-					for (int dna_c = 0; dna_c < 4; dna_c ++) {
-						conditionalLikelihood[dna_c] = 0;
-					}
-					conditionalLikelihood[p->DNAcompressed[site]] = 1;
-				}								
-				conditionalLikelihoodMap.insert(pair <SEM_vertex *,array<double,4>>(p,conditionalLikelihood));					
-			}			
-			if (conditionalLikelihoodMap.find(p) == conditionalLikelihoodMap.end()) {
-				for (int dna_c = 0; dna_c < 4; dna_c++) {
-				conditionalLikelihood[dna_c] = 1;
+					conditionalLikelihood.fill(0.0);      // observed
+					conditionalLikelihood[p->DNAcompressed[site]] = 1.0;
 				}
-				conditionalLikelihoodMap.insert(pair <SEM_vertex *,array<double,4>>(p,conditionalLikelihood));
+				conditionalLikelihoodMap.insert({p, conditionalLikelihood});
 			}
-			largestConditionalLikelihood = 0;
-			for (int dna_p = 0; dna_p < 4; dna_p++) {
-				partialLikelihood = 0;
-				for (int dna_c = 0; dna_c < 4; dna_c++) {
-					partialLikelihood += P[dna_p][dna_c]*conditionalLikelihoodMap[c][dna_c];
+
+			// DP update using safer access for child
+			double largestConditionalLikelihood = 0.0;
+			const auto& childCL = conditionalLikelihoodMap.at(c);
+
+			for (int dna_p = 0; dna_p < 4; ++dna_p) {
+				double partialLikelihood = 0.0;
+				for (int dna_c = 0; dna_c < 4; ++dna_c) {
+					partialLikelihood += P[dna_p][dna_c] * childCL[dna_c];
 				}
 				conditionalLikelihoodMap[p][dna_p] *= partialLikelihood;
-				if (conditionalLikelihoodMap[p][dna_p] > largestConditionalLikelihood) {
-					largestConditionalLikelihood = conditionalLikelihoodMap[p][dna_p];
-				}
+				largestConditionalLikelihood = std::max(largestConditionalLikelihood, conditionalLikelihoodMap[p][dna_p]);
 			}
-			if (largestConditionalLikelihood != 0){
-				for (int dna_p = 0; dna_p < 4; dna_p++) {
+
+			if (largestConditionalLikelihood > 0.0) {
+				for (int dna_p = 0; dna_p < 4; ++dna_p) {
 					conditionalLikelihoodMap[p][dna_p] /= largestConditionalLikelihood;
 				}
-				p->logScalingFactors += log(largestConditionalLikelihood);
+				p->logScalingFactors += std::log(largestConditionalLikelihood);
 			} else {
-				cout << site;
-				cout << " parent name " << p->name << " ";
-				cout << " child name " << c->name << " ";
-				for (int i = 0; i < 4; i ++) {
-					for (int j = 0; j < 4; j++){
-						cout << c->transitionMatrix[i][j] << endl;
-					}
-				}				
-				cout << "Largest conditional likelihood value is zero" << endl;				
 				throw mt_error("Largest conditional likelihood value is zero");
-			}					
+			}
 		}
-		siteLikelihood = 0; 							
-		for (int dna = 0; dna < 4; dna++) {
-			currentProb = this->rootProbability[dna]*conditionalLikelihoodMap[this->root][dna];
-			siteLikelihood += currentProb;
+		double siteLikelihood = 0.0;
+		const auto& rootCL = conditionalLikelihoodMap.at(this->root);
+		for (int dna = 0; dna < 4; ++dna) {
+			siteLikelihood += this->rootProbability[dna] * rootCL[dna];
 		}
-		this->logLikelihood += (this->root->logScalingFactors + log(siteLikelihood)) * this->DNAPatternWeights[site];				
+		if (siteLikelihood <= 0.0) throw mt_error("siteLikelihood <= 0");
+
+		this->logLikelihood += (this->root->logScalingFactors + std::log(siteLikelihood)) * this->DNAPatternWeights[site];
 	}
 }
 
@@ -6147,7 +7521,7 @@ vector<int> SEM::DecompressSequence(vector<int> compressedSequence, vector<vecto
 			decompressedSequence[pos] = dnaToAdd;
 		}
 	}
-	return (decompressedSequence);	
+	return (decompressedSequence);
 }
 
 string SEM::EncodeAsDNA(vector<int> sequence){
@@ -6159,22 +7533,75 @@ string SEM::EncodeAsDNA(vector<int> sequence){
 	return dnaSequence;
 }
 
-void SEM::initialize_GMM(string init_criterion) {
-	if (init_criterion == "ssh"){
+void SEM::Optimize_AA_RateMatrix_rooted_at_each_internal_vertex(int num_repetitions) {
+	int n = this->numberOfObservedVertices;
+	int num_vertices = this->vertexMap->size();		
+	vector<int> vertex_indices_to_visit;
+	vertex_indices_to_visit.reserve(std::max(0, num_vertices - n));
+	
+	for (int v_ind = n; v_ind < num_vertices; ++v_ind) vertex_indices_to_visit.push_back(v_ind);
 
-	} else if (init_criterion == "parsimony"){
+	unsigned seed = chrono::system_clock::now().time_since_epoch().count();
+    mt19937 rng(seed);
 
-	} else if (init_criterion == "dirichlet") {
-
-	} else {
-		throw mt_error("initialization criterion not recognized");
+    // Shuffle the vector
+	cout << "randomizing the order in which nodes will be visited" << endl;
+    shuffle(vertex_indices_to_visit.begin(), vertex_indices_to_visit.end(), rng);
+    int num_vertices_to_visit = vertex_indices_to_visit.size();
+	int v_ind;
+	SEM_vertex * v;
+	double aa_ll_init;
+	double aa_ll_final;
+	int max_iter = 50;	
+	for (int v_i = 0; v_i < num_vertices_to_visit; v_i++) {		
+		v_ind = vertex_indices_to_visit[v_i];
+		v = (*this->vertexMap)[v_ind];
+		cout << "node " << v_i+1 << " of " << num_vertices_to_visit << ":" << v->name << endl;
+		this->RootTreeAtVertex(v);		
+		double aa_ll_previous;
+		double aa_ll_current;
+		double conv_threshold = 0.01;
+		int iter;
+		for (int rep = 0; rep < num_repetitions; rep++) {
+			this->SetDayhoffExchangeabilityAndRootProbabilityParameters();
+			this->SetRateMatrixParameters();
+			this->PrecomputeSpectrum();
+			this->ComputeNRDistanceMatrix();
+			this->AssignLSBranchLengthsToTree();
+			this->ComputeAALogLikelihood();		
+			this->AA_struct = AA_opt_struct{};
+			this->AA_struct.root = v->name;			
+			this->AA_struct.aa_ll_init = this->AAlogLikelihood;
+			this->AA_struct.exchangeability_matrix_init = this->S_D;
+			this->AA_struct.root_prob_init = this->pi_D;
+			this->AA_struct.rep = rep;
+			aa_ll_previous = this->AAlogLikelihood;
+			cout << "AA log likelihood for Dayhoff is " << this->AA_struct.aa_ll_init << endl;				
+			for (iter = 0; iter < max_iter; iter++) {
+				this->OptimizeRateMatrixNelderMead();
+				this->ComputeNRDistanceMatrix();
+				this->AssignLSBranchLengthsToTree();				
+				this->ComputeAALogLikelihood();
+				aa_ll_current = this->AAlogLikelihood;
+				this->AA_struct.aa_ll_per_iter[iter+1] = aa_ll_current;
+				double diff_ll = aa_ll_current - aa_ll_previous;
+				// cout << "current aa_ll " << aa_ll_current << endl;
+				// cout << "aa_ll_current - aa_ll_previous for iter " << iter + 1 << " is " << aa_ll_current - aa_ll_previous << endl;
+				if (fabs(diff_ll) < conv_threshold) {
+					break;
+				} else {
+					cout << "AA log likelihood for iter " << iter+1 << " is " << setprecision(8) << aa_ll_current << endl;
+					cout << "Change in AA log likelihood for iter " << iter+1 << " is " << setprecision(8) << (diff_ll) << endl;
+					aa_ll_previous = aa_ll_current;
+				}				
+			}
+			this->AA_struct.iter = iter+1;
+			this->AA_struct.aa_ll_init = this->AAlogLikelihood;
+			this->AA_struct.exchangeability_matrix_final = this->S_D;
+			this->AA_struct.root_prob_final = this->pi_D;
+			this->AA_opt_runs.push_back(this->AA_struct);
+		}
 	}
-}
-
-void SEM::EM_AA_rooted_at_each_internal_vertex_started_with_Dayhoff_store_results(int num_repetitions) {
-
-
-
 }
 
 void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(int num_repetitions) {
@@ -6205,7 +7632,7 @@ void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_res
 		for (int rep = 0; rep < num_repetitions; rep++) {
 			this->EM_current = EM_struct{};
 			this->EM_current.method = "dirichlet";
-			this->EM_current.root_name = v->name;
+			this->EM_current.root = v->name;
 			this->EM_current.rep = rep + 1;			
 			auto tup = this->EM_started_with_dirichlet_rooted_at(v);
 			EM_struct EM_diri{this->EM_current};
@@ -6240,6 +7667,8 @@ void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_res
 	}		
 	cout << "max log likelihood obtained using Dirichlet parameters is " << setprecision(10) << this->max_log_likelihood_diri << endl;
 }
+
+
 
 void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repetitions) {
 	int n = this->numberOfObservedVertices;
@@ -6313,10 +7742,8 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repet
 }
 
 void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results(int num_repetitions) {
-	int n = this->numberOfObservedVertices;
-	cout << n << endl;
-	int num_vertices = this->vertexMap->size();
-	cout << num_vertices << endl;
+	int n = this->numberOfObservedVertices;	
+	int num_vertices = this->vertexMap->size();	
 	this->max_log_likelihood_pars = -1 * pow(10,5);
 	
 	vector<int> vertex_indices_to_visit;
@@ -6333,21 +7760,20 @@ void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_res
     shuffle(vertex_indices_to_visit.begin(), vertex_indices_to_visit.end(), rng);
     
 	for (int v_i = 0; v_i < vertex_indices_to_visit.size(); v_i++) {
-        const int v_ind = vertex_indices_to_visit[v_i];
+		const int v_ind = vertex_indices_to_visit[v_i];
 		SEM_vertex * v = (*this->vertexMap)[v_ind];
-		// int v_fix = this->GetVertexId("h_1");
-		// v = this->GetVertex("h_1");
-		cout << "node " << v_ind + 1 << " of " << num_vertices_to_visit << " :" << v->name << endl;
-		// cout << "here1" << endl;
-		// cout << "degree is " << v->degree << endl;	
-		if(v->degree != 3) throw mt_error("Expect internal nodes to have degree three");
+		cout << "node " << v_i+1 << " of " << num_vertices_to_visit << ":" << v->name << endl;				
+		if (v->degree != 3) throw mt_error("Expect internal nodes to have degree three");
 		// cout << "here1" << endl;
 		for (int rep = 0; rep < num_repetitions; rep++) {
+			// cout << " size of EM_DNA_runs_pars is " << this->EM_DNA_runs_pars.size() << endl;
 			this->EM_current = EM_struct{};
 			this->EM_current.method = "parsimony";
-			this->EM_current.root_name = v->name;
+			this->EM_current.root = v->name;
 			this->EM_current.rep = rep + 1;
 			auto tup = this->EM_started_with_parsimony_rooted_at(v);
+			// const string string_EM_pars = string("[EM_AllInfo]{\"parsimony\":") + this->em_to_json(this->EM_current) + "}";
+			// cout << string_EM_pars << endl;
 			EM_struct EM_pars = this->EM_current;
 			this->EM_DNA_runs_pars.push_back(EM_pars);			
 			const int    iter                    = std::get<0>(tup);
@@ -6457,11 +7883,11 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repet
 }
 
 
-void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_SSH_store_results(int num_repetitions) {
+void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_HSS_store_results(int num_repetitions) {
 	int n = this->numberOfObservedVertices;
 	int num_vertices = this->vertexMap->size();	
 		
-	this->max_log_likelihood_ssh = -1 * pow(10,5);
+	this->max_log_likelihood_hss = -1 * pow(10,5);
 	
 	vector<int> vertex_indices_to_visit;
 	vertex_indices_to_visit.reserve(std::max(0, num_vertices - n));
@@ -6484,35 +7910,35 @@ void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_SSH_store_results(i
 		
 		for (int rep = 0; rep < num_repetitions; rep++) {
 			this->EM_current = EM_struct{};
-			this->EM_current.method = "ssh";
-			this->EM_current.root_name = v->name;
+			this->EM_current.method = "hss";
+			this->EM_current.root = v->name;
 			this->EM_current.rep = rep + 1;
-			auto tup = this->EM_started_with_SSH_parameters_rooted_at(v);
-			EM_struct EM_ssh{this->EM_current};
-			this->EM_DNA_runs_ssh.push_back(EM_ssh);
+			auto tup = this->EM_started_with_HSS_parameters_rooted_at(v);
+			EM_struct EM_hss{this->EM_current};
+			this->EM_DNA_runs_hss.push_back(EM_hss);
 			const int    iter                    = std::get<0>(tup);
-            const double logLikelihood_ssh       = std::get<1>(tup);
+            const double logLikelihood_hss       = std::get<1>(tup);
             const double loglikelihood_ecd_first = std::get<2>(tup);
             const double loglikelihood_ecd_final = std::get<3>(tup);
             const double logLikelihood_final     = std::get<4>(tup);
 
 			emtr::push_result(
                 this->EMTR_results,                 // vector<tuple<string,string,int,int,double,double,double,double>>
-                "ssh",		                        // init_method
+                "hss",		                        // init_method
                 v->name,                            // root
                 rep + 1,                            // repetition (1-based)
                 iter,
-                logLikelihood_ssh,                 // ll_initial
+                logLikelihood_hss,                 // ll_initial
                 loglikelihood_ecd_first,
                 loglikelihood_ecd_final,
                 logLikelihood_final
             );
 
 
-			if (this->max_log_likelihood_ssh < logLikelihood_final) {				
-				this->max_log_likelihood_ssh = logLikelihood_final;				
-				if (this->max_log_likelihood_best < this->max_log_likelihood_ssh) {
-					this->max_log_likelihood_best = this->max_log_likelihood_ssh;
+			if (this->max_log_likelihood_hss < logLikelihood_final) {				
+				this->max_log_likelihood_hss = logLikelihood_final;				
+				if (this->max_log_likelihood_best < this->max_log_likelihood_hss) {
+					this->max_log_likelihood_best = this->max_log_likelihood_hss;
 					this->StoreRootAndRootProbability();
 					this->StoreTransitionMatrices();
 				}
@@ -6520,10 +7946,10 @@ void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_SSH_store_results(i
 		}
 	}
 		
-	cout << "max log likelihood obtained using SSH parameters is " << setprecision(10) << this->max_log_likelihood_ssh << endl;	
+	cout << "max log likelihood obtained using HSS parameters is " << setprecision(10) << this->max_log_likelihood_hss << endl;	
 }
 
-void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetitions) {
+void SEM::EM_rooted_at_each_internal_vertex_started_with_HSS_par(int num_repetitions) {
 	// cout << "convergence threshold for EM is " << this->logLikelihoodConvergenceThreshold << endl;
 	// (* this->logFile) << "convergence threshold for EM is " << this->logLikelihoodConvergenceThreshold << endl;
 	// cout << "maximum number of EM iterations allowed is " << this->maxIter << endl;
@@ -6533,11 +7959,11 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetit
 	SEM_vertex * v;
 	vector <double> loglikelihoodscoresForEachRepetition;
 	ofstream loglikelihood_node_rep_file;
-	loglikelihood_node_rep_file.open(this->prefix_for_output_files + ".SSH_rooting_initial_final_rep_loglik");
+	loglikelihood_node_rep_file.open(this->prefix_for_output_files + ".HSS_rooting_initial_final_rep_loglik");
     loglikelihood_node_rep_file << "root" << "\t"
                                 << "rep" << "\t"
                                 << "iter" << "\t"
-                                << "ll SSH" << "\t"
+                                << "ll HSS" << "\t"
                                 << "ecd ll first" << "\t"
                                 << "ecd ll final" << "\t"
                                 << "ll final" << endl;
@@ -6569,7 +7995,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetit
         }
 		loglikelihoodscoresForEachRepetition.clear();
 		for (int rep = 0; rep < num_repetitions; rep++) {					
-			iter_parsll_edllfirst_edllfinal_llfinal = this->EM_started_with_SSH_parameters_rooted_at(v);
+			iter_parsll_edllfirst_edllfinal_llfinal = this->EM_started_with_HSS_parameters_rooted_at(v);
 			iter = get<0>(iter_parsll_edllfirst_edllfinal_llfinal);
 			logLikelihood_pars = get<1>(iter_parsll_edllfirst_edllfinal_llfinal);
 			loglikelihood_ecd_first = get<2>(iter_parsll_edllfirst_edllfinal_llfinal);
@@ -6589,8 +8015,8 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetit
 		}
 	}
 	loglikelihood_node_rep_file.close();
-	cout << "max log likelihood obtained using SSH parameters is " << setprecision(10) << max_log_likelihood << endl;
-	// (*this->logFile) << "max log likelihood obtained using SSH parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;	
+	cout << "max log likelihood obtained using HSS parameters is " << setprecision(10) << max_log_likelihood << endl;
+	// (*this->logFile) << "max log likelihood obtained using HSS parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;	
 }
 
 /*
@@ -6602,7 +8028,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_SSH_par(int num_repetit
 6. Final location of root selected by EM
 */
 
-tuple <int,double,double,double,double> SEM::EM_root_search_with_parsimony_rooted_at(SEM_vertex *v) {
+tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at(SEM_vertex *v) {
 	//	cout << "10a" << endl;
 	// iterate over each internal node	
 	this->RootTreeAtVertex(v);
@@ -6610,6 +8036,7 @@ tuple <int,double,double,double,double> SEM::EM_root_search_with_parsimony_roote
 	this->ComputeMPEstimateOfAncestralSequences();	
 	// cout << "10c" << endl;
 	this->ComputeInitialEstimateOfModelParameters();
+	this->StoreParamsInEMCurrent("init");
 	this->ComputeLogLikelihood();
 	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "10d" << endl;
@@ -6622,7 +8049,8 @@ tuple <int,double,double,double,double> SEM::EM_root_search_with_parsimony_roote
 	bool continueIterations = 1;
 	this->debug = 0;
 	bool verbose = 0;
-	logLikelihood_pars = this->logLikelihood;
+	logLikelihood_pars = this->logLikelihood;	
+	this->EM_current.ll_init = logLikelihood_pars;
 	// cout << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
 	// cout << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
 	// (*this->logFile) << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
@@ -6631,79 +8059,58 @@ tuple <int,double,double,double,double> SEM::EM_root_search_with_parsimony_roote
 	while (continueIterations) {
 		// t_start_time = chrono::high_resolution_clock::now();
 		iter += 1;
-		// if (verbose) {
-		// 	cout << "Iteration no. " << iter << endl;
-		// 	(*this->logFile) << "Iteration no. " << iter << endl;
-		// }
-		// 1. Construct clique tree		
-		// if (verbose) {
-		// 	cout << "Construct clique tree" << endl;
-		// 	(*this->logFile) << "Iteration no. " << iter << endl;
-			
-		// }		
-		
+					
 		this->ConstructCliqueTree();			
 		// 2. Compute expected counts
 		this->ComputeExpectedCounts();
 
 		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
-
-		
-		// 3. Optimize model parameters
-		// if (verbose) {
-		// 	cout << "Optimize model parameters given expected counts" << endl;
-		// }
 		
 		// this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
 		this->ComputeMLRootedTreeForRootSearchUnderGMM();
 		// this->ComputeLogLikelihoodUsingExpectedDataCompletion();
 		
 		// cout << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-		
+		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;		
 		if (iter == 1){			
 			logLikelihood_exp_data_first = this->logLikelihood;
             logLikelihood_exp_data_previous = this->logLikelihood;
-		} else if ((this->logLikelihood > logLikelihood_exp_data_previous + this->logLikelihoodConvergenceThreshold) and (iter < this->maxIter)) {
+			this->EM_current.ecd_ll_per_iter[iter] = this->logLikelihood;
+		} else if ((this->logLikelihood > logLikelihood_exp_data_previous + this->ecdllConvergenceThreshold) and (iter < this->maxIter)) {
 			logLikelihood_exp_data_previous = this->logLikelihood;
+			this->EM_current.ecd_ll_per_iter[iter] = this->logLikelihood;
 		} else {
 			continueIterations = 0;
 			logLikelihood_exp_data_final = logLikelihood_exp_data_previous;
 		}
 	}
 	this->ComputeLogLikelihood();
-		
-	// cout << "log-likelihood computed by marginalization using EM parameters after iterations " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-	// cout << "Root location selected by EM is " << this->root->name << endl;
-	// cout << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
-	// (*this->logFile) << "log-likelihood computed by marginalization using EM parameters after iterations " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-	// (*this->logFile) <<  "Root location selected by EM is " << this->root->name << endl;
-	// (*this->logFile) << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
-	
+	this->StoreParamsInEMCurrent("final");
+	this->EM_current.iter = iter;
+	this->EM_current.ll_final = this->logLikelihood;
 	
 	return tuple<int,double,double,double,double>(iter,logLikelihood_pars,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
 }
 
 /*
 1. Number of iterations until EM converges
-2. Initial log-likelihood with SSH based parameters
+2. Initial log-likelihood with HSS based parameters
 3. Expected-data log-likelihood after one EM iteration
 4. Expected-data log-likelihood after last EM iteration
 5. Final log-likelihood using EM based parameters
 */
 
-tuple <int,double,double,double,double> SEM::EM_started_with_SSH_parameters_rooted_at(SEM_vertex *v) {
+tuple <int,double,double,double,double> SEM::EM_started_with_HSS_parameters_rooted_at(SEM_vertex *v) {
 	//	cout << "10a" << endl;
 	// iterate over each internal node	
 	this->RootTreeAtVertex(v);
 	// cout << "10b" << endl;	
-	this->SetInitialEstimateOfModelParametersUsingSSH();
+	this->SetInitialEstimateOfModelParametersUsingHSS();
 	this->StoreParamsInEMCurrent("init");
-	this->ComputeLogLikelihood();
-	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;	
+	this->ComputeLogLikelihood();	
 	// cout << "10d" << endl;
 	this->ResetAncestralSequences();
-	double logLikelihood_ssh;
+	double logLikelihood_hss;
 	double logLikelihood_exp_data_previous;
 	double logLikelihood_exp_data_first;
 	double logLikelihood_exp_data_final;
@@ -6711,12 +8118,12 @@ tuple <int,double,double,double,double> SEM::EM_started_with_SSH_parameters_root
 	bool continueIterations = 1;
 	this->debug = 0;
 	bool verbose = 0;
-	logLikelihood_ssh = this->logLikelihood;
-	this->EM_current.ll_init = logLikelihood_ssh;
+	logLikelihood_hss = this->logLikelihood;
+	this->EM_current.ll_init = logLikelihood_hss;
 	// cout << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
-	// cout << "log-likelihood computed by marginalization using SSH parameters is " << setprecision(ll_precision) << logLikelihood_ssh << endl;
+	// cout << "log-likelihood computed by marginalization using HSS parameters is " << setprecision(ll_precision) << logLikelihood_hss << endl;
 	// (*this->logFile) << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
-	// (*this->logFile) << "log-likelihood computed by marginalization using SSH parameters is " << setprecision(ll_precision) << logLikelihood_ssh << endl;
+	// (*this->logFile) << "log-likelihood computed by marginalization using HSS parameters is " << setprecision(ll_precision) << logLikelihood_hss << endl;
 	logLikelihood_exp_data_previous = -1 * pow(10,4);
 	while (continueIterations) {
 		// t_start_time = chrono::high_resolution_clock::now();
@@ -6727,24 +8134,19 @@ tuple <int,double,double,double,double> SEM::EM_started_with_SSH_parameters_root
 
 		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
 
-		
-		// 3. Optimize model parameters
-		// if (verbose) {
-		// 	cout << "Optimize model parameters given expected counts" << endl;
-		// }
-		
 		this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
 		
 		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
 		
 		// cout << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-		this->EM_current.ecd_ll_per_iter[iter] = this->logLikelihood;
-		if (iter == 1){
+		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;		
+		if (iter == 1) {
 			logLikelihood_exp_data_previous = this->logLikelihood;
 			logLikelihood_exp_data_first = this->logLikelihood;
-		} else if ((this->logLikelihood > logLikelihood_exp_data_previous + this->logLikelihoodConvergenceThreshold) and (iter < this->maxIter)) {
+			this->EM_current.ecd_ll_per_iter[iter] = this->logLikelihood;
+		} else if ((this->logLikelihood > logLikelihood_exp_data_previous + this->ecdllConvergenceThreshold) and (iter < this->maxIter)) {
 			logLikelihood_exp_data_previous = this->logLikelihood;
+			this->EM_current.ecd_ll_per_iter[iter] = this->logLikelihood;
 		} else {
 			continueIterations = 0;
 			logLikelihood_exp_data_final = logLikelihood_exp_data_previous;
@@ -6752,7 +8154,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_SSH_parameters_root
 	}
 	this->ComputeLogLikelihood();
 	this->StoreParamsInEMCurrent("final");
-	this->EM_current.num_iter = iter;
+	this->EM_current.iter = iter;
 	this->EM_current.ll_final = this->logLikelihood;
 	// cout << "log-likelihood computed by marginalization after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
@@ -6760,7 +8162,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_SSH_parameters_root
 	// (*this->logFile) << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
 	
 	
-	return tuple<int,double,double,double,double>(iter,logLikelihood_ssh,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
+	return tuple<int,double,double,double,double>(iter,logLikelihood_hss,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
 }
 
 
@@ -6775,10 +8177,10 @@ tuple <int,double,double,double,double> SEM::EM_started_with_SSH_parameters_root
 tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at(SEM_vertex *v) {
 	//	cout << "10a" << endl;
 	// iterate over each internal node	
-	this->RootTreeAtVertex(v);	
+	this->RootTreeAtVertex(v); // take outside
 	// cout << "10c" << endl;
 	this->SetInitialEstimateOfModelParametersUsingDirichlet();
-	this->StoreParamsInEMCurrent("init");
+	this->StoreParamsInEMCurrent("init"); // take outside
 	this->ComputeLogLikelihood();
 	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "10d" << endl;
@@ -6792,9 +8194,7 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 	this->debug = 0;
 	bool verbose = 0;
 	logLikelihood_diri = this->logLikelihood;
-	this->EM_current.ll_init = logLikelihood_diri;
-	// cout << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
-	// cout << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_diri << endl;
+	this->EM_current.ll_init = logLikelihood_diri;	
 	// (*this->logFile) << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
 	// (*this->logFile) << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_diri << endl;
 	logLikelihood_exp_data_current = -1 * pow(10,4);
@@ -6806,33 +8206,28 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 		this->ComputeExpectedCounts();
 
 		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
-
-		
-		// 3. Optimize model parameters
-		// if (verbose) {
-		// 	cout << "Optimize model parameters given expected counts" << endl;
-		// }
 		
 		this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
 		
 		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
 		
 		// cout << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-		this->EM_current.ecd_ll_per_iter[iter] = this->logLikelihood;
+		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;		
 		if (iter == 1){
 			logLikelihood_exp_data_first = this->logLikelihood;
 			logLikelihood_exp_data_current = this->logLikelihood;			
-		} else if ((this->logLikelihood > logLikelihood_exp_data_current + this->logLikelihoodConvergenceThreshold) and (iter < this->maxIter)) {
+			this->EM_current.ecd_ll_per_iter[iter] = this->logLikelihood;
+		} else if ((this->logLikelihood > logLikelihood_exp_data_current + this->ecdllConvergenceThreshold) and (iter < this->maxIter)) {
 			logLikelihood_exp_data_current = this->logLikelihood;
+			this->EM_current.ecd_ll_per_iter[iter] = this->logLikelihood;
 		} else {
 			continueIterations = 0;
 			logLikelihood_exp_data_final = logLikelihood_exp_data_current;
 		}
 	}
 	this->ComputeLogLikelihood();
-	this->StoreParamsInEMCurrent("final");
-	this->EM_current.num_iter = iter;
+	this->StoreParamsInEMCurrent("final"); // switch to three regime
+	this->EM_current.iter = iter;
 	this->EM_current.ll_final = this->logLikelihood;	
 	// cout << "log-likelihood computed by marginalization using EM parameters " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
 	// cout << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
@@ -6842,7 +8237,6 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 	return tuple<int,double,double,double,double>(iter,logLikelihood_diri,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
 }
 
-
 /*
 1. Number of iterations until EM converges
 2. Initial log-likelihood with parsimony based parameters
@@ -6851,105 +8245,105 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 5. Final log-likelihood using EM based parameters
 */
 
-tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at(SEM_vertex *v) {	
-	// iterate over each internal node	
-	this->RootTreeAtVertex(v);
-	// cout << "10a" << endl;
-	// select sites that don't have gap
-	this->ComputeMPEstimateOfAncestralSequences(); // iterate over all sites including gaps	
-	// cout << "10b" << endl;
-	this->ComputeInitialEstimateOfModelParameters(); // skip sites that have gaps
-	// cout << "10c" << endl;
-	this->StoreParamsInEMCurrent("init");
-	// cout << "10d" << endl;
-	// cout << this->EM_current.root_prob_init[0] << "\t" << this->EM_current.root_prob_init[1] 
-	// << "\t" << this->EM_current.root_prob_init[2] 
-	// << "\t" << this->EM_current.root_prob_init[3] << endl;
-	this->ComputeLogLikelihood(); // set conditional likelihood to 1 for all char having a gap	
-	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;
-	// cout << "10e" << endl;
-	this->ResetAncestralSequences();
-	// cout << "10f" << endl;
-	double logLikelihood_pars;
-	double logLikelihood_exp_data_current;
-	double logLikelihood_exp_data_first;
-	double logLikelihood_exp_data_final;
-	int iter = 0;	
-	bool continueIterations = 1;
-	this->debug = 0;
-	bool verbose = 0;
-	logLikelihood_pars = this->logLikelihood;
-	this->EM_current.ll_init = logLikelihood_pars;
-	// cout << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
-	// cout << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
-	// (*this->logFile) << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
-	// (*this->logFile) << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
-	logLikelihood_exp_data_current = -1 * pow(10,4);
-	while (continueIterations) {
-		// t_start_time = chrono::high_resolution_clock::now();
-		iter += 1;
-		// if (verbose) {
-		// 	cout << "Iteration no. " << iter << endl;
-		// 	(*this->logFile) << "Iteration no. " << iter << endl;
-		// }
-		// 1. Construct clique tree		
-		// if (verbose) {
-		// 	cout << "Construct clique tree" << endl;
-		// 	(*this->logFile) << "Iteration no. " << iter << endl;
+// tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at(SEM_vertex *v) {
+// 	// iterate over each internal node	
+// 	this->RootTreeAtVertex(v);
+// 	// cout << "10a" << endl;
+// 	// select sites that don't have gap
+// 	this->ComputeMPEstimateOfAncestralSequences(); // iterate over all sites including gaps	
+// 	// cout << "10b" << endl;
+// 	this->ComputeInitialEstimateOfModelParameters(); // skip sites that have gaps
+// 	// cout << "10c" << endl;
+// 	this->StoreParamsInEMCurrent("init");
+// 	// cout << "10d" << endl;
+// 	// cout << this->EM_current.root_prob_init[0] << "\t" << this->EM_current.root_prob_init[1] 
+// 	// << "\t" << this->EM_current.root_prob_init[2] 
+// 	// << "\t" << this->EM_current.root_prob_init[3] << endl;
+// 	this->ComputeLogLikelihood(); // set conditional likelihood to 1 for all char having a gap	
+// 	// cout << "Initial value of log-likelihood is " << setprecision(ll_precision) << this->logLikelihood << endl;
+// 	// cout << "10e" << endl;
+// 	this->ResetAncestralSequences();
+// 	// cout << "10f" << endl;
+// 	double logLikelihood_pars;
+// 	double logLikelihood_exp_data_current;
+// 	double logLikelihood_exp_data_first;
+// 	double logLikelihood_exp_data_final;
+// 	int iter = 0;	
+// 	bool continueIterations = 1;
+// 	this->debug = 0;
+// 	bool verbose = 0;
+// 	logLikelihood_pars = this->logLikelihood;
+// 	this->EM_current.ll_init = logLikelihood_pars;
+// 	// cout << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
+// 	// cout << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
+// 	// (*this->logFile) << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
+// 	// (*this->logFile) << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
+// 	logLikelihood_exp_data_current = -1 * pow(10,4);
+// 	while (continueIterations) {
+// 		// t_start_time = chrono::high_resolution_clock::now();
+// 		iter += 1;
+// 		// if (verbose) {
+// 		// 	cout << "Iteration no. " << iter << endl;
+// 		// 	(*this->logFile) << "Iteration no. " << iter << endl;
+// 		// }
+// 		// 1. Construct clique tree		
+// 		// if (verbose) {
+// 		// 	cout << "Construct clique tree" << endl;
+// 		// 	(*this->logFile) << "Iteration no. " << iter << endl;
 			
-		// }		
+// 		// }		
 		
-		this->ConstructCliqueTree();
-		// cout << "10g" << endl;
+// 		this->ConstructCliqueTree();
+// 		// cout << "10g" << endl;
 					
-		// 2. Compute expected counts
-		this->ComputeExpectedCounts();
-		// cout << "10h" << endl;
+// 		// 2. Compute expected counts
+// 		this->ComputeExpectedCounts();
+// 		// cout << "10h" << endl;
 
-		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
-		// cout << "10i" << endl;
+// 		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
+// 		// cout << "10i" << endl;
 
 		
-		// 3. Optimize model parameters
-		// if (verbose) {
-		// 	cout << "Optimize model parameters given expected counts" << endl;
-		// }
+// 		// 3. Optimize model parameters
+// 		// if (verbose) {
+// 		// 	cout << "Optimize model parameters given expected counts" << endl;
+// 		// }
 		
-		this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
-		// cout << "10j" << endl;
+// 		this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
+// 		// cout << "10j" << endl;
 		
-		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
-		// cout << "10k" << endl;
+// 		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
+// 		// cout << "10k" << endl;
 		
-		// cout << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-		this->EM_current.ecd_ll_per_iter[iter] = this->logLikelihood;
-		if (iter == 1){
-			// cout << "10l" << endl;
-			logLikelihood_exp_data_first = this->logLikelihood;
-			logLikelihood_exp_data_current = this->logLikelihood;			
-		} else if ((this->logLikelihood > logLikelihood_exp_data_current + this->logLikelihoodConvergenceThreshold) and (iter < this->maxIter)) {
-			logLikelihood_exp_data_current = this->logLikelihood;
-			// cout << "10m" << endl;
-		} else {
-			continueIterations = 0;
-			logLikelihood_exp_data_final = logLikelihood_exp_data_current;
-			// cout << "10n" << endl;
-		}
-	}
-	this->ComputeLogLikelihood();
-	// cout << "10o" << endl;
-	this->StoreParamsInEMCurrent("final");
-	// cout << "10p" << endl;
-	this->EM_current.num_iter = iter;
-	this->EM_current.ll_final = this->logLikelihood;	
-	// cout << "log-likelihood computed by marginalization using EM parameters " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-	// cout << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
-	// (*this->logFile) << "log-likelihood computed by marginalization using EM parameters " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
-	// (*this->logFile) << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
-	// cout << "10q" << endl;
-	return tuple<int,double,double,double,double>(iter,logLikelihood_pars,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
-}
+// 		// cout << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
+// 		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
+// 		this->EM_current.ecd_ll_per_iter[iter] = this->logLikelihood;
+// 		if (iter == 1){
+// 			// cout << "10l" << endl;
+// 			logLikelihood_exp_data_first = this->logLikelihood;
+// 			logLikelihood_exp_data_current = this->logLikelihood;			
+// 		} else if ((this->logLikelihood > logLikelihood_exp_data_current + this->ecdllConvergenceThreshold) and (iter < this->maxIter)) {
+// 			logLikelihood_exp_data_current = this->logLikelihood;
+// 			// cout << "10m" << endl;
+// 		} else {
+// 			continueIterations = 0;
+// 			logLikelihood_exp_data_final = logLikelihood_exp_data_current;
+// 			// cout << "10n" << endl;
+// 		}
+// 	}
+// 	this->ComputeLogLikelihood();
+// 	// cout << "10o" << endl;
+// 	this->StoreParamsInEMCurrent("final");
+// 	// cout << "10p" << endl;
+// 	this->EM_current.iter = iter;
+// 	this->EM_current.ll_final = this->logLikelihood;	
+// 	// cout << "log-likelihood computed by marginalization using EM parameters " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
+// 	// cout << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
+// 	// (*this->logFile) << "log-likelihood computed by marginalization using EM parameters " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
+// 	// (*this->logFile) << "- + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + - + -" << endl;
+// 	// cout << "10q" << endl;
+// 	return tuple<int,double,double,double,double>(iter,logLikelihood_pars,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
+// }
 
 
 void SEM::ComputeSumOfExpectedLogLikelihoods() {
@@ -7521,7 +8915,7 @@ void SEM::StoreParamsInEMCurrent(string init_or_final) {
 	}
 }
 
-void SEM::SetInitialEstimateOfModelParametersUsingSSH() {
+void SEM::SetInitialEstimateOfModelParametersUsingHSS() {
 	
 	// cout << "root is set at " << this->root->name << endl;
 	// set root probability 
@@ -8260,7 +9654,7 @@ void SEM::SetEdgesFromTopologyFile() {
 		}		
 	}
 	inputFile.close();
-	cout << "number of edges in topology file is " << num_edges << endl;
+	// cout << "number of edges in topology file is " << num_edges << endl;
 }
 
 void SEM::CompressAASequences() {			
@@ -8302,7 +9696,119 @@ void SEM::CompressAASequences() {
 	this->num_aa_patterns = this->AAPatternWeights.size();
 }
 
-void SEM::CompressDNASequences() {			
+#include <algorithm>
+#include <numeric>   // accumulate
+#include <map>
+#include <vector>
+
+void SEM::CompressDNASequences() {
+    // Reset
+    this->DNAPatternWeights.clear();
+    this->gapLessDNAFlag.clear();
+
+    std::vector<std::vector<int>> uniquePatterns;
+    std::map<std::vector<int>, std::vector<int>> uniquePatternsToSitesWherePatternRepeats;
+
+    // Clear per-leaf compressed storage
+    for (unsigned int i = 0; i < this->leaves.size(); ++i) {
+        SEM_vertex* l_ptr = this->leaves[i];
+        l_ptr->DNAcompressed.clear();
+    }
+
+    // Build unique patterns and where they repeat
+    const int numberOfSites = static_cast<int>(this->leaves[0]->DNArecoded.size());
+    std::vector<int> sitePattern;
+    sitePattern.reserve(this->leaves.size());
+
+    for (int site = 0; site < numberOfSites; ++site) {
+        sitePattern.clear();
+        for (SEM_vertex* l_ptr : this->leaves) {
+            sitePattern.push_back(l_ptr->DNArecoded[site]);
+        }
+
+        auto it = uniquePatternsToSitesWherePatternRepeats.find(sitePattern);
+        if (it != uniquePatternsToSitesWherePatternRepeats.end()) {
+            it->second.push_back(site);
+        } else {
+            uniquePatterns.push_back(sitePattern);
+            uniquePatternsToSitesWherePatternRepeats[uniquePatterns.back()] = std::vector<int>(1, site);
+        }
+    }
+
+    // Weights and gap-less flags (initial order)
+    for (const std::vector<int>& pat : uniquePatterns) {
+        int w = static_cast<int>(uniquePatternsToSitesWherePatternRepeats[pat].size());
+        this->DNAPatternWeights.push_back(w);
+
+        bool gapLess = true;
+        for (int ch : pat) { if (ch < 0) { gapLess = false; break; } }
+        this->gapLessDNAFlag.push_back(gapLess);
+    }
+
+    this->num_dna_patterns = static_cast<int>(this->DNAPatternWeights.size());
+    if (this->num_dna_patterns == 0) {
+        this->CumPercDNAPatternWeights.clear();
+        return;
+    }
+
+    // Sort pattern indices by decreasing weight
+    std::vector<size_t> order(this->DNAPatternWeights.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(),
+        [this](size_t a, size_t b) {
+            return this->DNAPatternWeights[a] > this->DNAPatternWeights[b];
+        }
+    );
+
+    // Rebuild DNAcompressed and metadata in sorted order
+    for (SEM_vertex* l_ptr : this->leaves) {
+        l_ptr->DNAcompressed.clear();
+        l_ptr->DNAcompressed.reserve(order.size());
+    }
+
+    std::vector<int>  newWeights;  newWeights.reserve(order.size());
+    std::vector<bool> newGapLess;  newGapLess.reserve(order.size());
+
+    for (size_t k = 0; k < order.size(); ++k) {
+        const size_t pidx = order[k];
+        const std::vector<int>& pat = uniquePatterns[pidx];
+
+        for (unsigned int i = 0; i < pat.size(); ++i) {
+            SEM_vertex* l_ptr = this->leaves[i];
+            l_ptr->DNAcompressed.push_back(pat[i]);
+        }
+
+        newWeights.push_back(this->DNAPatternWeights[pidx]);
+        newGapLess.push_back(this->gapLessDNAFlag[pidx]);
+    }
+
+    this->DNAPatternWeights.swap(newWeights);
+    this->gapLessDNAFlag.swap(newGapLess);
+    
+    this->CumPercDNAPatternWeights.clear();
+    this->CumPercDNAPatternWeights.reserve(this->DNAPatternWeights.size());
+
+    const double totalW = std::accumulate(
+        this->DNAPatternWeights.begin(), this->DNAPatternWeights.end(), 0.0);
+
+    double running = 0.0;
+    if (totalW > 0.0) {
+        for (size_t i = 0; i < this->DNAPatternWeights.size(); ++i) {
+            running += static_cast<double>(this->DNAPatternWeights[i]);
+            double pct = (running / totalW) * 100.0;
+            if (pct > 100.0) pct = 100.0;
+            this->CumPercDNAPatternWeights.push_back(pct);
+        }        
+        this->CumPercDNAPatternWeights.back() = 100.0;
+    } else {
+        // No weight -> all zeros
+        for (size_t i = 0; i < this->DNAPatternWeights.size(); ++i) {
+            this->CumPercDNAPatternWeights.push_back(0.0);
+        }
+    }
+}
+
+void SEM::CompressDNASequencesBkp() {			
 	this->DNAPatternWeights.clear();	
 	vector <vector<int>> uniquePatterns;
 	this->gapLessDNAFlag.clear();
@@ -8338,7 +9844,15 @@ void SEM::CompressDNASequences() {
 		for (int character: sitePattern) if (character < 0) gapLessPattern = 0;
 		this->gapLessDNAFlag.push_back(gapLessPattern);
 	}	
-	this->num_dna_patterns = this->DNAPatternWeights.size();	
+	this->num_dna_patterns = this->DNAPatternWeights.size();
+	
+	vector <size_t> order(this->DNAPatternWeights.size());
+	iota(order.begin(), order.end(), 0);
+	stable_sort(order.begin(), order.end(), [this](size_t a, size_t b) 
+	{
+		return this->DNAPatternWeights[a] > this->DNAPatternWeights[b];
+	});
+	
 }
 
 void SEM::SetDNASequencesFromFile(string sequenceFileName) {
@@ -8599,87 +10113,60 @@ double SEM::ComputeDistance(int v_i, int v_j) {
 
 EMManager::EMManager(string DNAsequenceFileNameToSet,				 
 					 string AAsequenceFileNameToSet,
-					 int num_repetitions,
-					 int max_iter,
-					 double conv_threshold,
-					 double pi_a_1,
-					 double pi_a_2,
-					 double pi_a_3,
-					 double pi_a_4,
-					 double M_a_1,
-					 double M_a_2,
-					 double M_a_3,
-					 double M_a_4) {
-		this->prefix_for_output_files = "";		
-		this->supertree_method = "";
-        this->num_repetitions = num_repetitions;
+					 const std::string& parameters_json) {
+		this->parameters_json = parameters_json;		
+		
+		if (DNAsequenceFileNameToSet.empty()) {
+        	DNAsequenceFileNameToSet = "/data/RAxML_DNA_test.fa";
+		}
+		if (AAsequenceFileNameToSet.empty()) {
+			AAsequenceFileNameToSet = "/data/RAxML_AA_test.fa";
+		}		
+
+		this->prefix_for_output_files = "";
+		this->supertree_method = "";        
 		this->verbose = 0;
 		this->distance_measure_for_NJ = "log-det";
-		this->flag_topology = 1;
-		this->conv_thresh = conv_threshold;
-		this->max_EM_iter = max_iter;		
-		this->numberOfLargeEdgesThreshold = 100;				
+		this->flag_topology = 1;		
+		this->max_EM_iter = max_iter;
+		this->numberOfLargeEdgesThreshold = 100;
 		this->SetDNAMap();
-		this->ancestralSequencesString = "";		
-		this->P = new SEM(conv_threshold,max_iter,this->verbose);
-		this->setDayhoffMatrixPath("/data/Dayhoff.dat");
-		// cout << "Dayhoff rate matrix path is " << this->rate_matrix_path_ << endl;
-		this->P->dayhoff_rate_matrix_file_name = this->rate_matrix_path_;
-		// this->P->SetDayhoffRateMatrix();
-		// exit(-1);
-		this->F = new FamilyJoining(DNAsequenceFileNameToSet, 0.001);
+		this->ancestralSequencesString = "";
+		cout << "here 1" << endl;
+		this->P = new SEM(0.01,100,this->verbose);	
+		cout << "here 1" << endl;
+		this->F = new FamilyJoining(DNAsequenceFileNameToSet, 0.0);
+		cout << "here 2" << endl;
+		this->P->SetFJTree(this->F->GetTree());		
+		cout << "here 3" << endl;
 		vector <tuple <string, string, double>> edge_vector = this->F->GetEdgeVector();
-		cout << "num of edges in FJ tree is "<< edge_vector.size() << endl;
-		// string u_name;
-		// string v_name;
-		// double length;			
-		// transform to leaf-labeled tree because it makes life easier 
-		// when working with likelihood and parsimony algorithms	
-		// vector <tuple <string, string, double>> edge_vector = this->F->GetEdgeVector();				
-		
+		cout << "here 4" << endl;
+		// this->F->EmitNewickJSON(edge_vector);
+		// for (auto e: edge_vector) {
+		// 	cout << get<0>(e) << "\t" << get<1>(e) << "\t" << get<2>(e) << endl;
+		// }
+		// cout << "num of edges in FJ tree is "<< edge_vector.size() << endl;			
 		this->P->SetDNASequencesFromFile(DNAsequenceFileNameToSet);		
-		this->P->AddWeightedEdges(edge_vector);		
-		this->P->logLikelihoodConvergenceThreshold = conv_threshold;
-		this->P->maxIter = max_iter;
+		cout << "here 5" << endl;
+		this->P->AddWeightedEdges(edge_vector);				
 		this->P->SetVertexVector();
-		// cout << "total sites " << this->P->leaves[0]->DNArecoded.size() << endl;		
-		this->P->CompressDNASequences();		
-		int total_dna_sites = 0;
-		int total_gapless_dna_sites = 0;
-		int total_gapped_dna_sites = 0;
+		this->P->CompressDNASequences();
+		this->P->DNAPatternWeights.size();
+		this->P->SetParameters(parameters_json);
+		cout << "total num dna patterns is " << this->P->num_dna_patterns << endl;
+		cout << "site, pattern weight, cum_pattern_weight" << this->P->num_dna_patterns << endl;
 		for (int i = 0; i < this->P->num_dna_patterns; i++) {
-			total_dna_sites += this->P->DNAPatternWeights[i];
-			if (this->P->gapLessDNAFlag[i]) {
-				total_gapless_dna_sites += this->P->DNAPatternWeights[i];
-			} else {
-				total_gapped_dna_sites += this->P->DNAPatternWeights[i];				
-			}
+			cout << i << " " << this->P->DNAPatternWeights[i] << " " << this->P->CumPercDNAPatternWeights[i] << endl;
 		}
-		cout << " number of dna sites is " << total_dna_sites << endl;
-		cout << " number of gapless DNA sites is " << total_gapless_dna_sites << endl;
-		cout << " number of gapped DNA sites is " << total_gapped_dna_sites << endl;
-		
-		this->P->SetAASequencesFromFile(AAsequenceFileNameToSet);
-		this->P->CompressAASequences();
-		
-		int total_aa_sites = 0;
-		int total_gapless_aa_sites = 0;
-		int total_gapped_aa_sites = 0;
-		for (int i = 0; i < this->P->num_aa_patterns; i++) {
-			total_aa_sites += this->P->AAPatternWeights[i];
-			if (this->P->gapLessDNAFlag[i]) {
-				total_gapless_aa_sites += this->P->AAPatternWeights[i];
-			} else {
-				total_gapped_aa_sites += this->P->AAPatternWeights[i];				
-			}
-		}
+		const auto& cum = this->P->CumPercDNAPatternWeights;
 
-		cout << " number of AA sites is " << total_aa_sites << endl;
-		cout << " number of gapless AA sites is " << total_gapless_aa_sites << endl;
-		cout << " number of gapped AA sites is " << total_gapped_aa_sites << endl;
-		
-		this->P->set_alpha_PI(pi_a_1, pi_a_2, pi_a_3, pi_a_4);
-		this->P->set_alpha_M_row(M_a_1, M_a_2, M_a_3, M_a_4);
+		// this->P->siteidx_for_regime[0] = this->P->first_index_gt(cum, this->P->cum_pattern_weight_coarse);
+		// this->P->siteidx_for_regime[1] = this->P->first_index_gt(cum, this->P->cum_pattern_weight_medium);
+		// this->P->siteidx_for_regime[2] = this->P->first_index_gt(cum, 100);
+
+		// cout << "num of patterns used for first regime is " << this->P->siteidx_for_regime[0] << endl;
+		// cout << "num of patterns used for second regime is " << this->P->siteidx_for_regime[1] << endl;
+		// cout << "num of patterns used for third regime is " << this->P->siteidx_for_regime[2] << endl;
     }
 
 EMManager::~EMManager() {
@@ -8688,24 +10175,20 @@ EMManager::~EMManager() {
 	}
 
 void EMManager::EM_main() {
-	this->P->ComputeMLDistances();
-	// cout << "Starting EM AA with initial parameters sampled from Dirichlet distribution" << endl;
-	// for (EM_struct EM_diri_AA: this->P->EM_DNA_runs_diri) {
-	// 	const string string_EM_diri_AA = string("[EM_AllInfo]{\"dirichlet_AA\":") + this->P->em_to_json(EM_diri_AA) + "}";
-	// 	cout << string_EM_diri_AA << endl;
-	// }
-
-	if (false) {
+	this->num_repetitions = this->P->num_repetitions;
+	if (true) {
 		this->P->max_log_likelihood_best = -1 * pow(10,10);
-		cout << "Starting EM DNA with initial parameters set using parsimony" << endl;	
+		cout << "Starting EMDNA with initial parameters set using parsimony" << endl;			
 		this->P->EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results(this->num_repetitions);
+		cout << "EMDNA pars reps available is " << this->P->EM_DNA_runs_pars.size() << endl;
 		for (EM_struct EM_pars: this->P->EM_DNA_runs_pars) {
 			const string string_EM_pars = string("[EM_AllInfo]{\"parsimony\":") + this->P->em_to_json(EM_pars) + "}";
 			cout << string_EM_pars << endl;
 		}
 		
-		cout << "Starting EM DNA with initial parameters sampled from Dirichlet distribution" << endl;
+		cout << "Starting EMDNA with initial parameters sampled from Dirichlet distribution" << endl;
 		this->P->EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(this->num_repetitions);
+		cout << "EMDNA dirichlet reps available is " << this->P->EM_DNA_runs_diri.size() << endl;		
 		for (EM_struct EM_diri: this->P->EM_DNA_runs_diri) {
 			const string string_EM_diri = string("[EM_AllInfo]{\"dirichlet\":") + this->P->em_to_json(EM_diri) + "}";
 			cout << string_EM_diri << endl;
@@ -8713,13 +10196,14 @@ void EMManager::EM_main() {
 		
 		this->P->RestoreBestProbability();
 		this->P->ReparameterizeGMM();
-		cout << "Starting EM DNA with initial parameters set using SSH" << endl;
-		this->P->EM_DNA_rooted_at_each_internal_vertex_started_with_SSH_store_results(this->num_repetitions);
-		for (EM_struct EM_ssh: this->P->EM_DNA_runs_ssh) {
-			const string string_EM_ssh = string("[EM_AllInfo]{\"ssh\":") + this->P->em_to_json(EM_ssh) + "}";
-			cout << string_EM_ssh << endl;
+		cout << "Starting EMDNA with initial parameters set using HSS" << endl;
+		this->P->EM_DNA_rooted_at_each_internal_vertex_started_with_HSS_store_results(this->num_repetitions);
+		cout << "EMDNA hss reps available is " << this->P->EM_DNA_runs_diri.size() << endl;
+		for (EM_struct EM_hss: this->P->EM_DNA_runs_hss) {
+			const string string_EM_hss = string("[EM_AllInfo]{\"hss\":") + this->P->em_to_json(EM_hss) + "}";
+			cout << string_EM_hss << endl;
 		}	
-		cout << "transmitting EMTR ll change results" << endl;
+		cout << "transmitting EMDNA ll change results" << endl;
 		emtr::flush_rows_json(this->P->EMTR_results);
 	}
 }
@@ -8744,7 +10228,7 @@ void EMManager::EMdirichlet() {
 	this->P->EM_rooted_at_each_internal_vertex_started_with_dirichlet(this->num_repetitions);
 }
 
-void EMManager::SetprobFileforSSH() {
+void EMManager::SetprobFileforHSS() {
 	if (this->max_log_lik_pars > this->max_log_lik_diri) {
 		cout << "Initializing with Parsimony yielded higher log likelihood score" << endl;
 		this->probabilityFileName_best = this->probabilityFileName_pars;
@@ -8754,14 +10238,14 @@ void EMManager::SetprobFileforSSH() {
 	}
 }
 
-void EMManager::EMssh() {
-	this->SetprobFileforSSH();
-	cout << "Starting EM with initial parameters set using Bayes rule as described in SSH paper" << endl;
+void EMManager::EMhss() {
+	this->SetprobFileforHSS();
+	cout << "Starting EM with initial parameters set using Bayes rule as described in HSS paper" << endl;
 	this->P->probabilityFileName_best = this->probabilityFileName_best;
 	cout << this->P->probabilityFileName_best << endl;
     this->P->SetGMMparameters();
 	this->P->ReparameterizeGMM();    
-    this->P->EM_rooted_at_each_internal_vertex_started_with_SSH_par(this->num_repetitions);
+    this->P->EM_rooted_at_each_internal_vertex_started_with_HSS_par(this->num_repetitions);
 }
 
 void EMManager::SetDNAMap() {

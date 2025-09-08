@@ -7,24 +7,24 @@ export const runtime = "edge";
 /* -------------------- Types -------------------- */
 
 type EMStruct = {
-  method?: string;                                   // "Parsimony" | "Dirichlet" | "SSH"
+  method?: string;
   rep?: number | null;
-  num_iter?: number | null;
+  iter?: number | null;
   ecd_ll_per_iter?: Record<string, number> | number[] | null;
   ll_init?: number | null;
   ll_final?: number | null;
-  root_name?: string | null;
-  root_prob_init?: number[] | null;                  // length 4
-  root_prob_final?: number[] | null;                 // length 4
-  trans_prob_init?: Record<string, unknown> | null;  // keep as JSON
-  trans_prob_final?: Record<string, unknown> | null; // keep as JSON
+  root?: string | null;
+  root_prob_init?: number[] | null;
+  root_prob_final?: number[] | null;
+  trans_prob_init?: Record<string, unknown> | null;
+  trans_prob_final?: Record<string, unknown> | null;
 };
 
 type BestRow = {
   method: string | null;
   rep: number | null;
-  num_iter: number | null;
-  root_name: string | null;
+  iter: number | null;
+  root: string | null;
   ll_init: number | null;
   ll_final: number | null;
   root_prob_init: string | null;
@@ -61,8 +61,8 @@ function coerceBestRow(u: unknown): BestRow {
   return {
     method: toStrOrNull(o.method),
     rep: toNumOrNull(o.rep),
-    num_iter: toNumOrNull(o.num_iter),
-    root_name: toStrOrNull(o.root_name),
+    iter: toNumOrNull(o.iter),
+    root: toStrOrNull(o.root),
     ll_init: toNumOrNull(o.ll_init),
     ll_final: toNumOrNull(o.ll_final),
     root_prob_init: toStrOrNull(o.root_prob_init),
@@ -99,13 +99,13 @@ function parseMaybeJson<T>(v: unknown): T | null {
   return (v as T) ?? null;
 }
 
-/** Accept worker payloads of different shapes and normalize to {pars?, dirichlet?, ssh?}. */
+/** Accept worker payloads of different shapes and normalize to {pars?, dirichlet?, hss?}. */
 function normalizeIncoming(obj: Record<string, unknown>): {
   pars?: EMStruct;
   dirichlet?: EMStruct;
-  ssh?: EMStruct;
+  hss?: EMStruct;
 } {
-  const out: { pars?: EMStruct; dirichlet?: EMStruct; ssh?: EMStruct } = {};
+  const out: { pars?: EMStruct; dirichlet?: EMStruct; hss?: EMStruct } = {};
 
   const getStruct = (k: string): EMStruct | undefined => {
     const v = asObj(obj[k]);
@@ -115,19 +115,19 @@ function normalizeIncoming(obj: Record<string, unknown>): {
   // Common keyed variants
   const pars1 = getStruct("pars") ?? getStruct("parsimony");
   const dir1  = getStruct("dirichlet");
-  const ssh1  = getStruct("ssh");
+  const hss1  = getStruct("hss");
 
   if (pars1) out.pars = pars1;
   if (dir1)  out.dirichlet = dir1;
-  if (ssh1)  out.ssh = ssh1;
+  if (hss1)  out.hss = hss1;
 
   // Single-method struct at top-level (no keys)
-  if (!out.pars && !out.dirichlet && !out.ssh) {
+  if (!out.pars && !out.dirichlet && !out.hss) {
     const maybeSingle = obj as Partial<EMStruct>;
     const m = typeof maybeSingle.method === "string" ? maybeSingle.method.toLowerCase() : "";
     if (m.includes("pars")) out.pars = maybeSingle as EMStruct;
     else if (m.includes("dir")) out.dirichlet = maybeSingle as EMStruct;
-    else if (m.includes("ssh")) out.ssh = maybeSingle as EMStruct;
+    else if (m.includes("hss")) out.hss = maybeSingle as EMStruct;
   }
 
   return out;
@@ -135,7 +135,7 @@ function normalizeIncoming(obj: Record<string, unknown>): {
 
 /* -------------------- DB upsert -------------------- */
 
-type MethodKey = "parsimony" | "dirichlet" | "ssh";
+type MethodKey = "parsimony" | "dirichlet" | "hss";
 
 function computeNumIter(ecd: EMStruct["ecd_ll_per_iter"]): number | null {
   if (!ecd) return null;
@@ -154,10 +154,10 @@ async function upsertOne(
   // If your table’s PK is (job_id, method) only, the latest write overwrites the previous rep.
   const rep = Number.isFinite(em.rep as number) ? (em.rep as number) : 1;
 
-  const root_name        = typeof em.root_name === "string" ? em.root_name : null;
+  const root        = typeof em.root === "string" ? em.root : null;
   const ll_init          = Number.isFinite(em.ll_init as number) ? (em.ll_init as number) : null;
   const ll_final         = Number.isFinite(em.ll_final as number) ? (em.ll_final as number) : null;
-  const num_iter         = Number.isFinite(em.num_iter as number) ? (em.num_iter as number) : computeNumIter(em.ecd_ll_per_iter);
+  const iter         = Number.isFinite(em.iter as number) ? (em.iter as number) : computeNumIter(em.ecd_ll_per_iter);
 
   const root_prob_init   = em.root_prob_init ?? null;
   const root_prob_final  = em.root_prob_final ?? null;
@@ -169,13 +169,13 @@ async function upsertOne(
 
   const sql = `
     INSERT INTO emtr_all_info
-      (job_id, method, rep, num_iter, root_name, ll_init, ll_final,
+      (job_id, method, rep, iter, root, ll_init, ll_final,
        root_prob_init, root_prob_final, trans_prob_init, trans_prob_final, ecd_ll_per_iter, raw_json)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON DUPLICATE KEY UPDATE
       rep = VALUES(rep),
-      num_iter = VALUES(num_iter),
-      root_name = VALUES(root_name),
+      iter = VALUES(iter),
+      root = VALUES(root),
       ll_init = VALUES(ll_init),
       ll_final = VALUES(ll_final),
       root_prob_init = VALUES(root_prob_init),
@@ -188,7 +188,7 @@ async function upsertOne(
   `;
 
   await conn.execute(sql, [
-    job_id, methodKey, rep, num_iter, root_name, ll_init, ll_final,
+    job_id, methodKey, rep, iter, root, ll_init, ll_final,
     JSON.stringify(root_prob_init),
     JSON.stringify(root_prob_final),
     JSON.stringify(trans_prob_init),
@@ -214,17 +214,17 @@ export async function POST(req: NextRequest) {
     const job_id = String(obj.job_id ?? "").trim();
     if (!job_id) return NextResponse.json({ ok: false, error: "job_id is required" }, { status: 400 });
 
-    // Normalize any worker shape into {pars?, dirichlet?, ssh?}
-    const { pars, dirichlet, ssh } = normalizeIncoming(obj);
+    // Normalize any worker shape into {pars?, dirichlet?, hss?}
+    const { pars, dirichlet, hss } = normalizeIncoming(obj);
 
-    if (!pars && !dirichlet && !ssh) {
-      return NextResponse.json({ ok: false, error: "No best structs found (pars/dirichlet/ssh missing)" }, { status: 400 });
+    if (!pars && !dirichlet && !hss) {
+      return NextResponse.json({ ok: false, error: "No best structs found (pars/dirichlet/hss missing)" }, { status: 400 });
     }
 
     const conn = db();
     if (pars)      await upsertOne(conn, job_id, "parsimony", { ...pars,      method: pars.method ?? "Parsimony" });
     if (dirichlet) await upsertOne(conn, job_id, "dirichlet", { ...dirichlet, method: dirichlet.method ?? "Dirichlet" });
-    if (ssh)       await upsertOne(conn, job_id, "ssh",       { ...ssh,       method: ssh.method ?? "SSH" });
+    if (hss)       await upsertOne(conn, job_id, "hss",       { ...hss,       method: hss.method ?? "HSS" });
 
     return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
   } catch (e) {
@@ -271,7 +271,7 @@ export async function GET(req: NextRequest) {
     // 2) Fetch rows (all methods) for this job.
     // If multiple reps were written, you can change this to pick the best per method.
     const rsBest = (await conn.execute(
-      `SELECT method, rep, num_iter, root_name, ll_init, ll_final,
+      `SELECT method, rep, iter, root, ll_init, ll_final,
               root_prob_init, root_prob_final,
               trans_prob_init, trans_prob_final,
               ecd_ll_per_iter, raw_json
@@ -284,7 +284,7 @@ export async function GET(req: NextRequest) {
 
     let pars: EMStruct | null = null;
     let dirichlet: EMStruct | null = null;
-    let ssh: EMStruct | null = null;
+    let hss: EMStruct | null = null;
 
     for (const row of rows) {
       const method = String(row.method ?? "").toLowerCase();
@@ -298,10 +298,10 @@ export async function GET(req: NextRequest) {
         em = {
           method: row.method ?? undefined,
           rep: row.rep ?? null,
-          num_iter: row.num_iter ?? null,
+          iter: row.iter ?? null,
           ll_init: row.ll_init ?? null,
           ll_final: row.ll_final ?? null,
-          root_name: row.root_name ?? null,
+          root: row.root ?? null,
           root_prob_init: parseMaybeJson<number[]>(row.root_prob_init),
           root_prob_final: parseMaybeJson<number[]>(row.root_prob_final),
           trans_prob_init: parseMaybeJson<Record<string, unknown>>(row.trans_prob_init),
@@ -312,11 +312,11 @@ export async function GET(req: NextRequest) {
 
       if (method === "parsimony") pars = em;
       else if (method === "dirichlet") dirichlet = em;
-      else if (method === "ssh") ssh = em;
+      else if (method === "hss") hss = em;
     }
 
     return NextResponse.json(
-      { ok: true, job_id, D_pi, D_M, pars, dirichlet, ssh },
+      { ok: true, job_id, D_pi, D_M, pars, dirichlet, hss },
       { headers: { "cache-control": "no-store" } }
     );
   } catch (e) {

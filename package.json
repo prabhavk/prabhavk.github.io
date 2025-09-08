@@ -13,8 +13,9 @@
     "@planetscale/database": "^1.19.0",
     "buffer": "^6.0.3",
     "d3": "^5.16.0",
+    "lucide-react": "^0.542.0",
     "mysql2": "^3.14.3",
-    "next": "15.4.6",
+    "next": "15.5.2",
     "phylotree": "^2.1.7",
     "plotly.js": "^3.1.0",
     "plotly.js-basic-dist": "^3.1.0",
@@ -32,7 +33,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "15.4.6",
+    "eslint-config-next": "15.5.2",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

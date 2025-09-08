@@ -9,7 +9,7 @@ import { buildExportPrefix } from "@/lib/exportName";
 
 const Plot = dynamic<PlotParams>(() => import("react-plotly.js"), { ssr: false });
 
-type MethodName = "Dirichlet" | "Parsimony" | "SSH";
+type MethodName = "Dirichlet" | "Parsimony" | "HSS";
 
 type RhodoneaRow = {
   root: string;
@@ -29,11 +29,15 @@ type ApiRhodonea = {
 
 type ApiErr = { error: string };
 
-// 17 internal nodes: h_21..h_37
-const NODES = Array.from({ length: 17 }, (_, i) => `h_${21 + i}`);
+// Fallback only; actual node list is derived from data.
+const DEFAULT_NODES = Array.from({ length: 17 }, (_, i) => `h_${21 + i}`);
 
-// Sequential color scales
-const BLUES_SCALE: [number, string][] = [
+/* -------------------- Color scales -------------------- */
+type MethodKey = "dirichlet" | "parsimony" | "hss";
+type ColorStop = [number, string];
+
+/** Keep your original blue scale for init/ecd_ll_first. */
+const BLUES_SCALE: ColorStop[] = [
   [0.0,   "#6baed6"],
   [0.125, "#57a0ce"],
   [0.25,  "#4292c6"],
@@ -45,17 +49,46 @@ const BLUES_SCALE: [number, string][] = [
   [1.0,   "#08306b"],
 ];
 
-const REDS_SCALE: [number, string][] = [
-  [0.0,   "#fb6a4a"],
-  [0.125, "#f5523b"],
-  [0.25,  "#ef3b2c"],
-  [0.375, "#dd2a24"],
-  [0.5,   "#cb181d"],
-  [0.625, "#b81419"],
-  [0.75,  "#a50f15"],
-  [0.875, "#860811"],
-  [1.0,   "#67000d"],
-];
+/** Method-specific gradients for final/ecd_ll_final. */
+const FINAL_SCALES: Record<MethodKey, ColorStop[]> = {
+  // around #D2691E (chocolate)
+  dirichlet: [
+    [0.0,   "#F6DDCC"],
+    [0.125, "#F1D1BE"],
+    [0.25,  "#EAC4AD"],
+    [0.375, "#E2B596"],
+    [0.5,   "#DCA57F"],
+    [0.625, "#CF8757"],
+    [0.75,  "#C06B37"],
+    [0.875, "#A55222"],
+    [1.0,   "#7A3C0F"],
+  ],
+  // around #FF6B3D (bright orange)
+  parsimony: [
+    [0.0,   "#FFE0D6"],
+    [0.125, "#FFD4C5"],
+    [0.25,  "#FFC5B1"],
+    [0.375, "#FFB59A"],
+    [0.5,   "#FFA582"],
+    [0.625, "#FF906A"],
+    [0.75,  "#FF7B53"],
+    [0.875, "#E25E36"],
+    [1.0,   "#8C2B12"],
+  ],
+  // around #BB1E10 (deep red)
+  hss: [
+    [0.0,   "#F4C0BD"],
+    [0.125, "#F0AAA6"],
+    [0.25,  "#EA8F8A"],
+    [0.375, "#E4726E"],
+    [0.5,   "#D95654"],
+    [0.625, "#C93D3A"],
+    [0.75,  "#B42626"],
+    [0.875, "#8F1717"],
+    [1.0,   "#5E0B07"],
+  ],
+};
+
 
 /* -------------------- Utils -------------------- */
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -81,14 +114,11 @@ function extent(nums: number[]): [number, number] {
   return [mn, mx];
 }
 function clamp01(x: number) { return Math.max(0, Math.min(1, x)); }
-function colorFromScale(
-  v: number,
-  vmin: number,
-  vmax: number,
-  scale: [number, string][]
-): string {
-  if (!Number.isFinite(v)) return "rgb(255,255,255)";
-  const t = vmax === vmin ? 0.5 : clamp01((v - vmin) / (vmax - vmin));
+function colorFromScale(v: number, vmin: number | undefined, vmax: number | undefined, scale: [number, string][]): string {
+  const sv = Number.isFinite(v) ? v : 0;
+  const lo = Number.isFinite(vmin as number) ? (vmin as number) : 0;
+  const hi = Number.isFinite(vmax as number) ? (vmax as number) : 1;
+  const t = hi === lo ? 0.5 : clamp01((sv - lo) / (hi - lo));
   for (let i = 1; i < scale.length; i++) {
     const [t1, c1] = scale[i - 1];
     const [t2, c2] = scale[i];
@@ -103,7 +133,7 @@ function colorFromScale(
       const [r1, g1, b1] = parse(c1);
       const [r2, g2, b2] = parse(c2);
       const r = Math.round(r1 + u * (r2 - r1));
-      const g = Math.round(g1 + u * (g2 - g1)); // ✅ correct channel
+      const g = Math.round(g1 + u * (g2 - g1));
       const b = Math.round(b1 + u * (b2 - b1));
       return `rgb(${r},${g},${b})`;
     }
@@ -122,18 +152,18 @@ export default function RhodoneaPage() {
   const [err, setErr] = useState<string | null>(null);
 
   // geometry constants for dosa layout
-  const r0 = 0.6;           // inner ring radius
-  const dr = 0.35;          // ring spacing
-  const coreRadius = 0.085; // center disk & dosa base
-  const turns = 1.25;       // total windings from base to tip
-  const ribbonHalfWidth = 0.035; // angular half-thickness of ribbon (radians)
+  const r0 = 0.6;                 // inner ring radius
+  const dr = 0.35;                // ring spacing
+  const coreRadius = 0.085;       // center disk & dosa base
+  const turns = 1.25;             // total windings from base to tip
+  const ribbonHalfWidth = 0.035;  // angular half-thickness of ribbon (radians)
 
   // read selected job
   useEffect(() => {
     try {
       const saved = localStorage.getItem("emtr:selectedJobId");
       if (saved) setJob(saved);
-    } catch {/* ignore */}
+    } catch { /* ignore */ }
   }, []);
 
   const load = useCallback(async () => {
@@ -168,7 +198,7 @@ export default function RhodoneaPage() {
 
       setRows(json.rows);
       setRepsAll(json.reps);
-      setSelectedReps(sampleReps(json.reps, Math.min(5, json.reps.length)));
+      setSelectedReps(sampleReps(json.reps, Math.min(9, json.reps.length)));
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Failed to load");
       setRows([]); setRepsAll([]); setSelectedReps([]);
@@ -182,6 +212,14 @@ export default function RhodoneaPage() {
   const onResample = useCallback(() => {
     setSelectedReps(sampleReps(repsAll, Math.min(5, repsAll.length)));
   }, [repsAll]);
+
+  // ----- Derive node list from data (fallback to DEFAULT_NODES) -----
+  const nodes = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of rows) if (r.root) s.add(r.root);
+    const arr = Array.from(s).sort();
+    return arr.length ? arr : DEFAULT_NODES;
+  }, [rows]);
 
   // ----- Build rep ranking across ALL rows (for outermost detection) -----
   const allRepsSorted = useMemo(
@@ -206,85 +244,91 @@ export default function RhodoneaPage() {
 
   // ---------- Label trace (outermost) ----------
   const labelTrace = useMemo(() => {
-    return buildOuterLabelsTrace(byRootRepAll, repRankAll, {
+    return buildOuterLabelsTrace(byRootRepAll, repRankAll, nodes, {
       r0, dr,
       labelOffset: 0.06, // radial push
       tOffset: 0.03,     // tangential nudge
     });
-  }, [byRootRepAll, repRankAll, r0, dr]);
+  }, [byRootRepAll, repRankAll, nodes, r0, dr]);
 
   // ---------- Traces (Dosa ribbons + selected markers + labels) ----------
   const initTraces = useMemo<Partial<ScatterData>[]>(() => {
     if (!rows.length || !selectedReps.length) return [];
-    const avgMap = makeNodeAvgMap(byRootRepAll, selectedReps, (r) => r.ll_init);
+    const avgMap = makeNodeAvgMap(byRootRepAll, selectedReps, nodes, (r) => r.ll_init);
     const avgs = Array.from(avgMap.values());
     const [mn, mx] = extent(avgs);
     const dosas = buildDosaRibbonTraces(
       { title: "ll_init", colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
-      byRootRepAll, repRankAll, avgMap,
+      byRootRepAll, repRankAll, nodes, avgMap,
       { turns, ribbonHalfWidth, samples: 220, coreRadius, r0, dr }
     );
     const markers = buildMarkersTraceDosa(
       { title: "ll_init", values: (r) => r.ll_init, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
-      byRootRepAll, repRankAll, selectedReps,
+      byRootRepAll, repRankAll, nodes, selectedReps,
       { coreRadius, r0, dr, turns }
     );
     return [...dosas, markers, ...(labelTrace ? [labelTrace as Partial<ScatterData>] : [])];
-  }, [rows, byRootRepAll, repRankAll, selectedReps, coreRadius, r0, dr, turns, ribbonHalfWidth, labelTrace]);
+  }, [rows, byRootRepAll, repRankAll, nodes, selectedReps, coreRadius, r0, dr, turns, ribbonHalfWidth, labelTrace]);
+
+  const methodKey = method.toLowerCase() as MethodKey; // "dirichlet" | "parsimony" | "hss"
 
   const finalTraces = useMemo<Partial<ScatterData>[]>(() => {
     if (!rows.length || !selectedReps.length) return [];
-    const avgMap = makeNodeAvgMap(byRootRepAll, selectedReps, (r) => r.ll_final);
+    const avgMap = makeNodeAvgMap(byRootRepAll, selectedReps, nodes, (r) => r.ll_final);
     const avgs = Array.from(avgMap.values());
     const [mn, mx] = extent(avgs);
+    const scaleF = FINAL_SCALES[methodKey];
+
     const dosas = buildDosaRibbonTraces(
-      { title: "ll_final", colorScale: REDS_SCALE, cmin: mn, cmax: mx },
-      byRootRepAll, repRankAll, avgMap,
+      { title: "ll_final", colorScale: scaleF, cmin: mn, cmax: mx },
+      byRootRepAll, repRankAll, nodes, avgMap,
       { turns, ribbonHalfWidth, samples: 220, coreRadius, r0, dr }
     );
     const markers = buildMarkersTraceDosa(
-      { title: "ll_final", values: (r) => r.ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
-      byRootRepAll, repRankAll, selectedReps,
+      { title: "ll_final", values: (r) => r.ll_final, colorScale: scaleF, cmin: mn, cmax: mx },
+      byRootRepAll, repRankAll, nodes, selectedReps,
       { coreRadius, r0, dr, turns }
     );
     return [...dosas, markers, ...(labelTrace ? [labelTrace as Partial<ScatterData>] : [])];
-  }, [rows, byRootRepAll, repRankAll, selectedReps, coreRadius, r0, dr, turns, ribbonHalfWidth, labelTrace]);
+  }, [rows, byRootRepAll, repRankAll, nodes, selectedReps, coreRadius, r0, dr, turns, ribbonHalfWidth, labelTrace, methodKey]);
 
   const ecdFirstTraces = useMemo<Partial<ScatterData>[]>(() => {
     if (!rows.length || !selectedReps.length) return [];
-    const avgMap = makeNodeAvgMap(byRootRepAll, selectedReps, (r) => r.ecd_ll_first);
+    const avgMap = makeNodeAvgMap(byRootRepAll, selectedReps, nodes, (r) => r.ecd_ll_first);
     const avgs = Array.from(avgMap.values());
     const [mn, mx] = extent(avgs);
     const dosas = buildDosaRibbonTraces(
       { title: "ecd_ll_first", colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
-      byRootRepAll, repRankAll, avgMap,
+      byRootRepAll, repRankAll, nodes, avgMap,
       { turns, ribbonHalfWidth, samples: 220, coreRadius, r0, dr }
     );
     const markers = buildMarkersTraceDosa(
       { title: "ecd_ll_first", values: (r) => r.ecd_ll_first, colorScale: BLUES_SCALE, cmin: mn, cmax: mx },
-      byRootRepAll, repRankAll, selectedReps,
+      byRootRepAll, repRankAll, nodes, selectedReps,
       { coreRadius, r0, dr, turns }
     );
     return [...dosas, markers, ...(labelTrace ? [labelTrace as Partial<ScatterData>] : [])];
-  }, [rows, byRootRepAll, repRankAll, selectedReps, coreRadius, r0, dr, turns, ribbonHalfWidth, labelTrace]);
+  }, [rows, byRootRepAll, repRankAll, nodes, selectedReps, coreRadius, r0, dr, turns, ribbonHalfWidth, labelTrace]);
 
   const ecdFinalTraces = useMemo<Partial<ScatterData>[]>(() => {
     if (!rows.length || !selectedReps.length) return [];
-    const avgMap = makeNodeAvgMap(byRootRepAll, selectedReps, (r) => r.ecd_ll_final);
+    const avgMap = makeNodeAvgMap(byRootRepAll, selectedReps, nodes, (r) => r.ecd_ll_final);
     const avgs = Array.from(avgMap.values());
     const [mn, mx] = extent(avgs);
+    const scaleEF = FINAL_SCALES[methodKey];
+
     const dosas = buildDosaRibbonTraces(
-      { title: "ecd_ll_final", colorScale: REDS_SCALE, cmin: mn, cmax: mx },
-      byRootRepAll, repRankAll, avgMap,
+      { title: "ecd_ll_final", colorScale: scaleEF, cmin: mn, cmax: mx },
+      byRootRepAll, repRankAll, nodes, avgMap,
       { turns, ribbonHalfWidth, samples: 220, coreRadius, r0, dr }
     );
     const markers = buildMarkersTraceDosa(
-      { title: "ecd_ll_final", values: (r) => r.ecd_ll_final, colorScale: REDS_SCALE, cmin: mn, cmax: mx },
-      byRootRepAll, repRankAll, selectedReps,
+      { title: "ecd_ll_final", values: (r) => r.ecd_ll_final, colorScale: scaleEF, cmin: mn, cmax: mx },
+      byRootRepAll, repRankAll, nodes, selectedReps,
       { coreRadius, r0, dr, turns }
     );
     return [...dosas, markers, ...(labelTrace ? [labelTrace as Partial<ScatterData>] : [])];
-  }, [rows, byRootRepAll, repRankAll, selectedReps, coreRadius, r0, dr, turns, ribbonHalfWidth, labelTrace]);
+  }, [rows, byRootRepAll, repRankAll, nodes, selectedReps, coreRadius, r0, dr, turns, ribbonHalfWidth, labelTrace, methodKey]);
 
   // ---------- Export helpers ----------
   const initGDRef = useRef<PlotlyHTMLElement | null>(null);
@@ -330,7 +374,7 @@ export default function RhodoneaPage() {
         </div>
 
         <div className="flex gap-2 ml-4">
-          {(["Dirichlet", "Parsimony", "SSH"] as const).map((m) => (
+          {(["Dirichlet", "Parsimony", "HSS"] as const).map((m) => (
             <button
               key={m}
               type="button"
@@ -405,10 +449,11 @@ export default function RhodoneaPage() {
 function makeNodeAvgMap(
   byRootRepAll: Map<string, Map<number, RhodoneaRow>>,
   selectedReps: number[],
+  nodes: string[],
   values: (r: RhodoneaRow) => number | null
 ): Map<string, number> {
   const m = new Map<string, number>();
-  for (const node of NODES) {
+  for (const node of nodes) {
     const perRep = byRootRepAll.get(node);
     if (!perRep) continue;
     let sum = 0, cnt = 0;
@@ -425,14 +470,12 @@ function makeNodeAvgMap(
 
 /** Build dosa ribbons (Archimedean) for each node arm. */
 function buildDosaRibbonTraces(
-  cfg: { title: string; colorScale: [number, string][]; cmin: number; cmax: number; },
+  cfg: { title: string; colorScale: [number, string][]; cmin?: number; cmax?: number; },
   byRootRepAll: Map<string, Map<number, RhodoneaRow>>,
   repRankAll: Map<number, number>,
+  nodes: string[],
   avgMap: Map<string, number>,
-  opts?: {
-    turns?: number; ribbonHalfWidth?: number; samples?: number;
-    coreRadius?: number; r0?: number; dr?: number;
-  }
+  opts?: { turns?: number; ribbonHalfWidth?: number; samples?: number; coreRadius?: number; r0?: number; dr?: number; }
 ): Partial<ScatterData>[] {
   const traces: Partial<ScatterData>[] = [];
   const turns = Math.max(0, opts?.turns ?? 1.25);
@@ -442,13 +485,13 @@ function buildDosaRibbonTraces(
   const r0 = opts?.r0 ?? 0.6;
   const dr = opts?.dr ?? 0.35;
 
-  const n = NODES.length;
+  const n = nodes.length;
   if (!n) return traces;
 
   const dThetaArm = (2 * Math.PI) / n;
 
   for (let i = 0; i < n; i++) {
-    const node = NODES[i];
+    const node = nodes[i];
     const perRep = byRootRepAll.get(node);
     if (!perRep) continue;
 
@@ -469,7 +512,6 @@ function buildDosaRibbonTraces(
     const span = Math.max(0, Rmax - coreRadius);
     if (span <= 0) continue;
 
-    // Archimedean dosa: r(t) = core + span * t; theta(t) = theta0 + 2π * turns * t
     const leftX: number[] = [];
     const leftY: number[] = [];
     const rightX: number[] = [];
@@ -479,8 +521,6 @@ function buildDosaRibbonTraces(
       const t = j / samples;
       const r = coreRadius + span * t;
       const th = theta0 + (2 * Math.PI * turns) * t;
-
-      // thin ribbon by offsetting ±ribbonHalfWidth in angle
       leftX.push(r * Math.cos(th - ribbonHalfWidth));
       leftY.push(r * Math.sin(th - ribbonHalfWidth));
       rightX.push(r * Math.cos(th + ribbonHalfWidth));
@@ -498,7 +538,6 @@ function buildDosaRibbonTraces(
       y: ys,
       fill: "toself",
       fillcolor: colorFromScale(avg, cfg.cmin, cfg.cmax, cfg.colorScale),
-      // ⬇ better contrast on light bg
       line: { width: 0.6, color: "rgba(0,0,0,0.25)" },
       hovertemplate: `${node}, outermost rep ${outerRep}<br>${cfg.title} (avg of selected): ${avg.toFixed(3)}<extra></extra>`,
       showlegend: false,
@@ -511,15 +550,10 @@ function buildDosaRibbonTraces(
 
 /** Overlay replicate markers along the same dosa, spaced between base and tip. */
 function buildMarkersTraceDosa(
-  cfg: {
-    title: string;
-    values: (r: RhodoneaRow) => number | null;
-    colorScale: [number, string][];
-    cmin: number;
-    cmax: number;
-  },
+  cfg: { title: string; values: (r: RhodoneaRow) => number | null; colorScale: [number, string][]; cmin?: number; cmax?: number; },
   byRootRepAll: Map<string, Map<number, RhodoneaRow>>,
   repRankAll: Map<number, number>,
+  nodes: string[],
   selectedReps: number[],
   geometry: { coreRadius: number; r0: number; dr: number; turns?: number }
 ): Partial<ScatterData> {
@@ -528,12 +562,14 @@ function buildMarkersTraceDosa(
   const colors: number[] = [];
   const texts: string[] = [];
 
-  const nArms = NODES.length;
+  const nArms = nodes.length;
+  if (!nArms) return { type: "scatter", mode: "markers", x: [], y: [] };
+
   const dThetaArm = (2 * Math.PI) / nArms;
   const turns = geometry.turns ?? 1.25;
 
   for (let i = 0; i < nArms; i++) {
-    const node = NODES[i];
+    const node = nodes[i];
     const perRep = byRootRepAll.get(node);
     if (!perRep) continue;
 
@@ -560,7 +596,7 @@ function buildMarkersTraceDosa(
     for (let k = 0; k < m; k++) {
       const frac = (k + 1) / (m + 1);      // (0,1) spacing
       const r = base + frac * span;        // radial
-      const t = (r - base) / span;         // 0..1 param
+      const t = (r - base) / Math.max(1e-9, span); // 0..1 param
       const th = theta0 + (2 * Math.PI * turns) * t;
 
       const row = perRep.get(repsHere[k])!;
@@ -606,9 +642,10 @@ function buildMarkersTraceDosa(
 function buildOuterLabelsTrace(
   byRoot: Map<string, Map<number, RhodoneaRow>>,
   repRanks: Map<number, number>,
+  nodes: string[],
   geometry: { r0: number; dr: number; labelOffset?: number; tOffset?: number }
 ): Partial<ScatterData> | null {
-  const n = NODES.length;
+  const n = nodes.length;
   if (!n) return null;
 
   const { r0, dr, labelOffset = 0.06, tOffset = 0.0 } = geometry;
@@ -619,7 +656,7 @@ function buildOuterLabelsTrace(
   const texts: string[] = [];
 
   for (let i = 0; i < n; i++) {
-    const node = NODES[i];
+    const node = nodes[i];
     const perRep = byRoot.get(node);
     if (!perRep) continue;
 
@@ -697,7 +734,7 @@ function ChartCard({
         x1:  centerRadius, y1:  centerRadius,
         line: { width: 0 },
         fillcolor: "black",
-        layer: "below",   // ⬅ so it doesn't cover traces
+        layer: "below",
         opacity: 1,
       },
     ],

@@ -4,9 +4,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import TreeViewer from "@/components/tree-viewer";
 
+/* -------------------- Types -------------------- */
 type YesNo = 0 | 1;
 
-type TreeRec = {
+export type TreeRec = {
   id: number;
   job_id: string;
   source: string;
@@ -14,8 +15,53 @@ type TreeRec = {
   label: string | null;
   format: "newick" | string;
   tree?: string | null;      // present when full=1
+  newick?: string | null;    // some APIs use this field name
   is_current: YesNo | boolean;
   created_at?: string;
+};
+
+type ApiTrees = {
+  ok?: boolean;
+  error?: unknown;
+  trees?: unknown;
+  items?: unknown;
+};
+
+/* -------------------- Utilities -------------------- */
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  v !== null && typeof v === "object";
+
+const isYesNoBool = (v: unknown): v is YesNo | boolean =>
+  typeof v === "boolean" || v === 0 || v === 1;
+
+const isOptString = (v: unknown): v is string | null | undefined =>
+  v == null || typeof v === "string";
+
+const isTreeRec = (v: unknown): v is TreeRec => {
+  if (!isRecord(v)) return false;
+  const id = v["id"];
+  const job_id = v["job_id"];
+  const source = v["source"];
+  const method = v["method"];
+  const format = v["format"];
+  const is_current = v["is_current"];
+  const label = v["label"];
+  const tree = v["tree"];
+  const newick = v["newick"];
+  const created_at = v["created_at"];
+
+  return (
+    typeof id === "number" &&
+    typeof job_id === "string" &&
+    typeof source === "string" &&
+    typeof method === "string" &&
+    typeof format === "string" &&
+    isYesNoBool(is_current) &&
+    isOptString(label) &&
+    isOptString(tree) &&
+    isOptString(newick) &&
+    isOptString(created_at)
+  );
 };
 
 function getQueryParam(name: string): string {
@@ -23,16 +69,17 @@ function getQueryParam(name: string): string {
   const u = new URL(window.location.href);
   return u.searchParams.get(name) ?? "";
 }
+
 function normalizeNewick(n: unknown): string {
   if (typeof n !== "string") return "";
   const t = n.trim();
   return t && !t.endsWith(";") ? `${t};` : t;
 }
 
-/** Sum of all branch lengths in a Newick string (unrooted/ rooted agnostic). */
+/** Sum of all branch lengths in a Newick string (unrooted/rooted agnostic). */
 function sumBranchLengths(nw: string): number {
   let total = 0;
-  // match numbers immediately following a colon (branch length tokens)
+  // numbers immediately after a colon, including scientific notation
   const re = /:\s*([+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(nw)) !== null) {
@@ -42,22 +89,46 @@ function sumBranchLengths(nw: string): number {
   return total;
 }
 
-async function fetchCurrentTree(jobId: string): Promise<TreeRec | null> {
+/* -------------------- Data fetch -------------------- */
+async function fetchCurrentTree(jobId: string, signal?: AbortSignal): Promise<TreeRec | null> {
   const u = new URL("/api/trees", window.location.origin);
   u.searchParams.set("job", jobId);
   u.searchParams.set("current", "1");
   u.searchParams.set("full", "1");
-  const res = await fetch(u.toString(), { cache: "no-store" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const j = await res.json();
-  const rows: TreeRec[] = Array.isArray(j?.trees)
-    ? j.trees
-    : Array.isArray(j?.items)
-    ? j.items
+
+  const res = await fetch(u.toString(), { cache: "no-store", signal });
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  const isJson = ct.includes("application/json");
+
+  // Read body once
+  const bodyText = await res.text();
+  const bodyJson: unknown = isJson
+    ? (() => { try { return JSON.parse(bodyText); } catch { return {}; } })()
+    : {};
+
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    if (isJson && isRecord(bodyJson)) {
+      const errVal = (bodyJson as ApiTrees).error;
+      if (typeof errVal === "string" && errVal.trim()) msg = errVal;
+    } else if (bodyText) {
+      msg = bodyText.slice(0, 200);
+    }
+    throw new Error(msg);
+  }
+
+  const payload: ApiTrees = isRecord(bodyJson) ? (bodyJson as ApiTrees) : {};
+  const rowsUnknown: unknown[] = Array.isArray(payload.trees)
+    ? (payload.trees as unknown[])
+    : Array.isArray(payload.items)
+    ? (payload.items as unknown[])
     : [];
+
+  const rows: TreeRec[] = rowsUnknown.filter(isTreeRec);
   return rows[0] ?? null;
 }
 
+/* -------------------- Page -------------------- */
 export default function TreesPage() {
   const [job, setJob] = useState<string>("");
   const [tree, setTree] = useState<TreeRec | null>(null);
@@ -70,10 +141,12 @@ export default function TreesPage() {
       const fromUrl = getQueryParam("job") || getQueryParam("job_id");
       const fromLs = localStorage.getItem("emtr:selectedJobId") || "";
       setJob(fromUrl || fromLs || "");
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, []);
 
-  // React to selection changes (e.g., Precomputed Results page updating localStorage)
+  // React to selection changes (e.g., other pages updating localStorage)
   useEffect(() => {
     function onStorage(ev: StorageEvent) {
       if (ev.key === "emtr:selectedJobId") {
@@ -92,8 +165,10 @@ export default function TreesPage() {
     }
     setLoading(true);
     setErr(null);
+
+    const ctrl = new AbortController();
     try {
-      const t = await fetchCurrentTree(job);
+      const t = await fetchCurrentTree(job, ctrl.signal);
       setTree(t);
       if (!t) setErr(`No current tree found for job ${job}.`);
     } catch (e) {
@@ -102,11 +177,17 @@ export default function TreesPage() {
     } finally {
       setLoading(false);
     }
+    // No need to abort here; provided as pattern for future concurrent reloads
+    // return () => ctrl.abort();
   }, [job]);
 
-  useEffect(() => { if (job) void reload(); }, [job, reload]);
+  useEffect(() => {
+    if (job) void reload();
+  }, [job, reload]);
 
-  const newick = useMemo(() => normalizeNewick(tree?.tree ?? ""), [tree]);
+  // prefer `tree`, fall back to `newick`
+  const newickRaw = tree?.tree ?? tree?.newick ?? "";
+  const newick = useMemo(() => normalizeNewick(newickRaw), [newickRaw]);
 
   // Compute total tree length (sum of branch lengths)
   const totalLen = useMemo(() => {
@@ -140,14 +221,12 @@ export default function TreesPage() {
         <div className="p-3 border rounded">No current tree to display.</div>
       ) : (
         <>
-          <div className="text-sm text-gray-200">
+          <div className="text-sm text-gray-600">
             <b>{tree.label ?? "Current tree"}</b> · method: <b>{tree.method}</b> · source:{" "}
             <b>{tree.source}</b>{" "}
-            {tree.created_at ? (
-              <>· created: {new Date(tree.created_at).toLocaleString()}</>
-            ) : null}
+            {tree.created_at ? <>· created: {new Date(tree.created_at).toLocaleString()}</> : null}
             {totalLen !== null ? (
-              <> · total length: <b>{totalLen.toFixed(4)} log det units</b></>
+              <> · total length (sum of branch lengths): <b>{totalLen.toFixed(4)}</b></>
             ) : null}
           </div>
           <TreeViewer newick={newick} height={520} />

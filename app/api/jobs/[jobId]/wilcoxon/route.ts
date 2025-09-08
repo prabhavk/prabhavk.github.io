@@ -4,7 +4,7 @@ import { db } from "@/lib/pscale";
 
 export const runtime = "edge";
 
-type Method = "parsimony" | "dirichlet" | "ssh";
+type Method = "parsimony" | "dirichlet" | "hss";
 type Row = {
   root: string;
   method: Method;
@@ -109,7 +109,7 @@ export async function GET(_req: Request, ctx: unknown) {
       SELECT root, LOWER(method) AS method, rep, ll_final
       FROM emtr_init_final
       WHERE job_id = ?
-        AND LOWER(method) IN ('parsimony','dirichlet','ssh')
+        AND LOWER(method) IN ('parsimony','dirichlet','hss')
       ORDER BY root, method, rep
       `,
       [jobId]
@@ -118,15 +118,15 @@ export async function GET(_req: Request, ctx: unknown) {
 
     const byRoot = new Map<string, Record<Method, number[]>>();
     for (const r of rows) {
-      if (!byRoot.has(r.root)) byRoot.set(r.root, { parsimony: [], dirichlet: [], ssh: [] });
+      if (!byRoot.has(r.root)) byRoot.set(r.root, { parsimony: [], dirichlet: [], hss: [] });
       byRoot.get(r.root)![r.method].push(r.ll_final);
     }
 
     const results = Array.from(byRoot, ([root, s]) => ({
       root,
       parsimony_vs_dirichlet: mannWhitney(s.parsimony, s.dirichlet),
-      parsimony_vs_ssh:       mannWhitney(s.parsimony, s.ssh),
-      dirichlet_vs_ssh:       mannWhitney(s.dirichlet, s.ssh),
+      parsimony_vs_hss:       mannWhitney(s.parsimony, s.hss),
+      dirichlet_vs_hss:       mannWhitney(s.dirichlet, s.hss),
     }));
 
     return NextResponse.json({ ok: true, jobId, results });

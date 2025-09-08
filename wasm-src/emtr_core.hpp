@@ -19,6 +19,7 @@
 #include <vector>
 #include <unordered_set>
 #include "third_party/eigen3/Eigen/Dense"
+#include "third_party/json/single_include/nlohmann/json.hpp"
 
 class FamilyJoining;
 class MST_vertex;
@@ -85,9 +86,7 @@ private:
 	int GetEdgeIndex (int vertexIndex1, int vertexIndex2, int numberOfVertices);
 	FamilyJoining * F;
 	MST * M;
-	SEM * P;
-	// SEM * P_AA;
-	// SEM * P;
+	SEM * P;	
 	SEM * p;
 	void WriteOutputFiles();
 	bool debug;
@@ -106,44 +105,46 @@ private:
 	double conv_thresh;
     public:
 	void setDayhoffMatrixPath(const std::string& path);
-    EMManager(string sequenceFileNameToSet,            
-			  string topologyFileNameToSet,
-              int num_repetitions,
-              int max_iter,
-              double conv_threshold,
-			  double pi_a_1,
-			  double pi_a_2,
-			  double pi_a_3,
-			  double pi_a_4,
-			  double M_a_1,
-			  double M_a_2,
-			  double M_a_3,
-			  double M_a_4);
+	
+    EMManager(const string DNAsequenceFileNameToSet,            
+	 		  const string AAsequenceFileNameToSet,
+			  const std::string& parameters_json);
+	//           int num_repetitions,
+	//           int max_iter,
+	//           double conv_threshold,
+	// 		  double pi_a_1,
+	// 		  double pi_a_2,
+	// 		  double pi_a_3,
+	// 		  double pi_a_4,
+	// 		  double M_a_1,
+	// 		  double M_a_2,
+	// 		  double M_a_3,
+	// 		  double M_a_4);
 	~EMManager();
 	double max_log_lik;
 	double max_log_lik_pars;
 	double max_log_lik_diri;
 	double max_log_lik_ssh;
+	string parameters_json;
 	void SetDNAMap();
 	void SetThresholds();
 	void EMTRackboneWithOneExternalVertex();
 	void EMTRackbone_k2020_preprint();
-	void EMgivenInputTopology();
-	void RootSuperTree();		
+	void EMgivenInputTopology();	
 	void EMTRackboneWithRootSEMAndMultipleExternalVertices();
 	void EMTRackboneOverlappingSets();
 	void EMTRackboneOnlyLocalPhylo();
 	void EMforCompleteData();
 	void ReadAllSequences(string complete_sequence_file_name);
 	void main(string init_criterion, bool root_search);
-	void MR_SSH(int num_rounds);
+	void MR_HSS(int num_rounds);
 	void EM_main();
-	void EM_pars_ssh();
-	void EM_diri_ssh();
+	void EM_pars_hss();
+	void EM_diri_hss();
     void EMparsimony();
 	void EMdirichlet();
-	void SetprobFileforSSH();
-    void EMssh();
+	void SetprobFileforHSS();
+    void EMhss();
 	string EncodeAsDNA(vector<unsigned char> sequence);
 	vector<unsigned char> DecompressSequence(vector<unsigned char>* compressedSequence, vector<vector<int>>* sitePatternRepeats);	
 };

@@ -20,20 +20,34 @@ const DNA = ["a", "c", "g", "t"] as const;
 type HistogramXBins = { start: number | string; end: number | string; size: number | string };
 const XBINS_0_1: HistogramXBins = { start: 0, end: 1, size: 0.02 }; // bin size
 
+// Shared axis-frame styling (black frame around plotting area)
+const axisFrame = {
+  ticks: "outside" as const,
+  showline: true,
+  linecolor: "white",
+  linewidth: 2,
+  mirror: true as const,
+  zeroline: false,
+};
+
 const smallLayout: Partial<Layout> = {
-  margin: { l: 40, r: 10, t: 10, b: 35 }, // smaller top (labels via annotations)
-  xaxis: { title: { text: "p" }, range: [0, 1] },
-  yaxis: { title: { text: "count" } },
+  margin: { l: 40, r: 10, t: 10, b: 35 },
+  xaxis: { title: { text: "p" }, range: [0, 1], ...axisFrame },
+  yaxis: { title: { text: "count" }, ...axisFrame },
   height: 240,
   showlegend: false,
+  plot_bgcolor: "white",
+  paper_bgcolor: "white",
 };
 
 const bigLayout: Partial<Layout> = {
   margin: { l: 40, r: 10, t: 10, b: 35 },
-  xaxis: { title: { text: "p" }, range: [0, 1] },
-  yaxis: { title: { text: "count" } },
+  xaxis: { title: { text: "p" }, range: [0, 1], ...axisFrame },
+  yaxis: { title: { text: "count" }, ...axisFrame },
   height: 320,
   showlegend: false,
+  plot_bgcolor: "white",
+  paper_bgcolor: "white",
 };
 
 const baseConfig: Partial<Config> = { displayModeBar: false, responsive: true };
@@ -239,7 +253,6 @@ function betaCdf(x: number, a: number, b: number): number {
 
 /** Inverse CDF (quantile) via bisection */
 function betaInvCDF(p: number, a: number, b: number): number {
-  // guard
   const pp = Math.min(1 - 1e-12, Math.max(1e-12, p));
   let lo = 0, hi = 1, mid = 0.5;
   for (let i = 0; i < 80; i++) {
@@ -363,16 +376,19 @@ export function ProbHists({
   const hasAlphaM  = !!(alphaM  && alphaM.length  === 4 && alphaM.every(a => Number.isFinite(a) && a > 0));
   const alpha0M    = hasAlphaM ? alphaM!.reduce((s, x) => s + x, 0) : 0;
 
+  // shared wrapper class for black border around each histogram/plot
+  const plotFrameCls = "border-2 border-black rounded";
+
   return (
     <div className="space-y-6">
-      {/* Root panels: Beta density (gray) + vertical line at value (black) + optional CI */}
+      {/* Root panels */}
       <section>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold">
+          <h2 className="text-lg text-gray-900 font-semibold">
             {rootName ? `Root distribution at ${rootName}` : "Root probability (final)"}
           </h2>
           <div>{rootHeaderRight ?? null}</div>
-          </div>
+        </div>
         {rootOK ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {rootClean.map((val, i) => {
@@ -389,16 +405,113 @@ export function ProbHists({
               if (Number.isFinite(val)) shapes.push(makeVerticalShape(val));
 
               return (
-                <div key={`root-${i}`} className="border rounded p-5">
+                <div key={`root-${i}`} className="rounded p-5 border-2 border-black">
+                  <div className={plotFrameCls}>
+                    <Plot
+                      data={traces}
+                      layout={{
+                        ...smallLayout,
+                        bargap: 0.05,
+                        shapes,
+                        annotations: [
+                          {
+                            text: label_root_prob(i + 1) + (rootName ? ` @ root ${rootName}` : ""),
+                            xref: "paper",
+                            yref: "paper",
+                            x: 0.5, y: 0.95,
+                            showarrow: false,
+                            font: { size: 14 },
+                            align: "center",
+                          },
+                        ],
+                      }}
+                      config={baseConfig}
+                      style={{ width: "100%", height: "100%" }}
+                    />
+                  </div>
+                  <div className="text-xs text-gray-900 mt-0">
+                    probability: <span className="font-mono">{val.toFixed(4)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-sm text-gray-600">No root_prob_final (expected 4 values).</div>
+        )}
+      </section>
+
+      {/* Single node-specific entry */}
+      <section>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg text-black font-semibold">Transition matrix entry (per node)</h2>
+          <div>{singleHeaderRight ?? null}</div>
+        </div>
+        {!anyTrans ? (
+          <div className="text-sm text-gray-600">No transition matrices available.</div>
+        ) : (
+          <div className="border-2 border-black rounded p-3 space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="text-black text-sm">
+                Child Node&nbsp;
+                <select
+                  className="border rounded px-2 py-1 text-black text-sm"
+                  value={nodeKey}
+                  onChange={(e) => setNodeKey(e.target.value)}
+                >
+                  {nodeKeys.map(k => (
+                    <option key={k} value={k}>{k}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">
+                Row&nbsp;
+                <select
+                  className="border rounded px-2 py-1 text-black text-sm"
+                  value={rowIdx}
+                  onChange={(e) => setRowIdx(Number(e.target.value))}
+                >
+                  {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+              <label className="text-sm">
+                Col&nbsp;
+                <select
+                  className="border rounded px-2 py-1 text-black text-sm"
+                  value={colIdx}
+                  onChange={(e) => setColIdx(Number(e.target.value))}
+                >
+                  {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+              {rootKey ? (
+                <div className="text-xs text-black">Root excluded: <code>{rootKey}</code></div>
+              ) : null}
+            </div>
+
+            {(() => {
+              const traces: Partial<PlotData>[] = [];
+              const shapes: Partial<Shape>[] = [];
+              if (hasAlphaM) {
+                const isDiag = rowIdx === colIdx;
+                const a = isDiag ? alphaM![0] : alphaM![1];
+                const b = alpha0M - a;
+                traces.push(makeBetaLineTrace(a, b, 1, `Beta(${a.toFixed(1)}, ${b.toFixed(1)})`));
+                if (showBetaCI) shapes.push(...makeBetaCIShapes(a, b, betaCILevel));
+              }
+              if (Number.isFinite(selectedValue)) shapes.push(makeVerticalShape(selectedValue));
+
+              return (
+                <div className={plotFrameCls}>
                   <Plot
                     data={traces}
                     layout={{
-                      ...smallLayout,
+                      ...bigLayout,
                       bargap: 0.05,
                       shapes,
                       annotations: [
                         {
-                          text: label_root_prob(i + 1) + (rootName ? ` @ root ${rootName}` : ""),
+                          text: `${label_trans_prob(rowIdx, colIdx)} for child node ${nodeKey || "?"}`,
                           xref: "paper",
                           yref: "paper",
                           x: 0.5, y: 0.95,
@@ -411,104 +524,11 @@ export function ProbHists({
                     config={baseConfig}
                     style={{ width: "100%", height: "100%" }}
                   />
-                  <div className="text-xs text-gray-200 mt-0">
-                    probability: <span className="font-mono">{val.toFixed(4)}</span>
-                  </div>
                 </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="text-sm text-gray-600">No root_prob_final (expected 4 values).</div>
-        )}
-      </section>
-
-      {/* Single node-specific entry: Beta (gray) + vertical line (black) + optional CI */}
-     <section>
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold">Transition matrix entry (per node)</h2>
-          <div>{singleHeaderRight ?? null}</div>
-        </div>
-        {!anyTrans ? (
-          <div className="text-sm text-gray-600">No transition matrices available.</div>
-        ) : (
-          <div className="border rounded p-3 space-y-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="text-sm">
-                Child Node&nbsp;
-                <select
-                  className="border rounded px-2 py-1 text-sm"
-                  value={nodeKey}
-                  onChange={(e) => setNodeKey(e.target.value)}
-                >
-                  {nodeKeys.map(k => (
-                    <option key={k} value={k}>{k}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-sm">
-                Row&nbsp;
-                <select
-                  className="border rounded px-2 py-1 text-sm"
-                  value={rowIdx}
-                  onChange={(e) => setRowIdx(Number(e.target.value))}
-                >
-                  {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </label>
-              <label className="text-sm">
-                Col&nbsp;
-                <select
-                  className="border rounded px-2 py-1 text-sm"
-                  value={colIdx}
-                  onChange={(e) => setColIdx(Number(e.target.value))}
-                >
-                  {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </label>
-              {rootKey ? (
-                <div className="text-xs text-gray-200">Root excluded: <code>{rootKey}</code></div>
-              ) : null}
-            </div>
-
-            {(() => {
-              const traces: Partial<PlotData>[] = [];
-              const shapes: Partial<Shape>[] = [];
-              if (hasAlphaM) {
-                const isDiag = rowIdx === colIdx;
-                const a = isDiag ? alphaM![0] : alphaM![1]; // α1 for diag, α2 (same as α3, α4) for off-diag
-                const b = alpha0M - a;
-                traces.push(makeBetaLineTrace(a, b, 1, `Beta(${a.toFixed(1)}, ${b.toFixed(1)})`));
-                if (showBetaCI) shapes.push(...makeBetaCIShapes(a, b, betaCILevel));
-              }
-              if (Number.isFinite(selectedValue)) shapes.push(makeVerticalShape(selectedValue));
-
-              return (
-                <Plot
-                  data={traces}
-                  layout={{
-                    ...bigLayout,
-                    bargap: 0.05,
-                    shapes,
-                    annotations: [
-                      {
-                        text: `${label_trans_prob(rowIdx, colIdx)} for child node ${nodeKey || "?"}`,
-                        xref: "paper",
-                        yref: "paper",
-                        x: 0.5, y: 0.95,
-                        showarrow: false,
-                        font: { size: 14 },
-                        align: "center",
-                      },
-                    ],
-                  }}
-                  config={baseConfig}
-                  style={{ width: "100%", height: "100%" }}
-                />
               );
             })()}
 
-            <div className="text-xs text-gray-200">
+            <div className="text-xs text-gray-900">
               {Number.isFinite(selectedValue)
                 ? <>Selected probability:&nbsp;<span className="font-mono">{selectedValue.toFixed(4)}</span></>
                 : <>No value available for this selection.</>}
@@ -517,10 +537,10 @@ export function ProbHists({
         )}
       </section>
 
-      {/* Aggregated across matrices: histograms (black) + Beta density (gray) + optional CI */}
+      {/* Aggregated across matrices */}
       <section>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold">Transition matrix entries (aggregated)</h2>
+          <h2 className="text-lg text-black font-semibold">Transition matrix entries (aggregated)</h2>
           <div>{aggHeaderRight ?? null}</div>
         </div>
         {transCells.some(arr => arr.length) ? (
@@ -541,34 +561,36 @@ export function ProbHists({
               }
 
               return (
-                <div key={`m-${idx}`} className="border rounded p-2">
-                  <Plot
-                    data={traces}
-                    layout={{
-                      ...smallLayout,
-                      bargap: 0.05,
-                      shapes,
-                      annotations: [
-                        {
-                          text: `${label_trans_prob(i, j)} (n=${arr.length})`,
-                          xref: "paper",
-                          yref: "paper",
-                          x: 0.5, y: 0.95,
-                          showarrow: false,
-                          font: { size: 13 },
-                          align: "center",
-                        },
-                      ],
-                    }}
-                    config={baseConfig}
-                    style={{ width: "100%", height: "100%" }}
-                  />
+                <div key={`m-${idx}`} className="rounded p-2 border-2 border-black">
+                  <div className={plotFrameCls}>
+                    <Plot
+                      data={traces}
+                      layout={{
+                        ...smallLayout,
+                        bargap: 0.05,
+                        shapes,
+                        annotations: [
+                          {
+                            text: `${label_trans_prob(i, j)} (n=${arr.length})`,
+                            xref: "paper",
+                            yref: "paper",
+                            x: 0.5, y: 0.95,
+                            showarrow: false,
+                            font: { size: 13 },
+                            align: "center",
+                          },
+                        ],
+                      }}
+                      config={baseConfig}
+                      style={{ width: "100%", height: "100%" }}
+                    />
+                  </div>
                 </div>
               );
             })}
           </div>
         ) : (
-          <div className="text-sm text-gray-600">
+          <div className="text-sm text-gray-900">
             No transition probabilities found in <code>trans_prob_final</code>.
           </div>
         )}

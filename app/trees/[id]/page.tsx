@@ -21,7 +21,7 @@ interface TreeRow {
   epsilon: number | null;
   n_leaves: number | null;
   n_edges: number | null;
-  root_name: string | null;
+  root: string | null;
   is_current: YesNo;
   created_at: string | Date;
   updated_at: string | Date;
@@ -59,7 +59,7 @@ export default async function Page({
 
   const rows = await q<TreeRow>(
     `SELECT id, job_id, label, method, source, format, tree,
-            rep, iter, epsilon, n_leaves, n_edges, root_name,
+            rep, iter, epsilon, n_leaves, n_edges, root,
             is_current, created_at, updated_at
      FROM emtr_trees
      WHERE id = ?
@@ -100,7 +100,7 @@ export default async function Page({
         epsilon: row.epsilon,
         n_leaves: row.n_leaves,
         n_edges: row.n_edges,
-        root_name: row.root_name,
+        root: row.root,
         is_current: row.is_current,
         created_at: ensureString(row.created_at),
         updated_at: ensureString(row.updated_at),

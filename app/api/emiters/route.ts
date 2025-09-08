@@ -4,7 +4,7 @@ import { query } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-type MethodName = "Parsimony" | "Dirichlet" | "SSH";
+type MethodName = "Parsimony" | "Dirichlet" | "HSS";
 
 type DBRow = {
   root: string;
@@ -25,7 +25,7 @@ function normalizeMethod(s: string): MethodName | null {
   const m = s.trim().toLowerCase();
   if (m.includes("pars")) return "Parsimony";
   if (m.startsWith("dir") || m.includes("dirich")) return "Dirichlet";
-  if (m.includes("ssh")) return "SSH";
+  if (m.includes("hss")) return "HSS";
   return null;
 }
 
@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
       if (!meth) continue;
 
       rootsSet.add(root);
-      stats[root] ||= { Parsimony: { n: 0, avg: NaN, max: NaN }, Dirichlet: { n: 0, avg: NaN, max: NaN }, SSH: { n: 0, avg: NaN, max: NaN } };
+      stats[root] ||= { Parsimony: { n: 0, avg: NaN, max: NaN }, Dirichlet: { n: 0, avg: NaN, max: NaN }, HSS: { n: 0, avg: NaN, max: NaN } };
       stats[root][meth] = {
         n: Number(r.n) || 0,
         avg: Number(r.avg_iter),

@@ -39,8 +39,8 @@ export default function WilcoxonPage() {
             <tr className="bg-gray-800">
               <th className="p-2 text-left">Root</th>
               <th className="p-2 text-left">Parsimony vs Dirichlet</th>
-              <th className="p-2 text-left">Parsimony vs SSH</th>
-              <th className="p-2 text-left">Dirichlet vs SSH</th>
+              <th className="p-2 text-left">Parsimony vs HSS</th>
+              <th className="p-2 text-left">Dirichlet vs HSS</th>
             </tr>
           </thead>
           <tbody>

@@ -14,7 +14,28 @@
 #include <stdexcept>
 #include <cstdio>
 #include <tuple>
+#include "third_party/json/single_include/nlohmann/json.hpp"
 
+using json = nlohmann::json;
+
+void flatten_json(const json& j,
+                  std::map<std::string, std::string>& out,
+                  const std::string& prefix = "") {
+    if (j.is_object()) {
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            std::string new_prefix = prefix.empty() ? it.key() : prefix + "." + it.key();
+            flatten_json(it.value(), out, new_prefix);
+        }
+    } else if (j.is_array()) {
+        for (size_t i = 0; i < j.size(); i++) {
+            std::string new_prefix = prefix + "[" + std::to_string(i) + "]";
+            flatten_json(j[i], out, new_prefix);
+        }
+    } else {
+        // Leaf value: stringify
+        out[prefix] = j.dump(); // or j.get<std::string>() if you want only strings
+    }
+}
 
 namespace emtr {
     // Escape a string for JSON (handles quotes, backslashes, control chars)

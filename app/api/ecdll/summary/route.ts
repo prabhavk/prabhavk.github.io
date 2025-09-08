@@ -7,7 +7,7 @@ export const runtime = "edge";
 type DbRow = {
   method: string;
   rep: number | null;
-  root_name: string | null;
+  root: string | null;
   root_prob_final: string | number[] | null;
   initial_ll: number | null; // aliased from ll_init
   final_ll: number | null;   // aliased from ll_final
@@ -109,7 +109,7 @@ export async function GET(req: NextRequest) {
       SELECT
         method,
         rep,
-        root_name,
+        root,
         root_prob_final,
         ll_init  AS initial_ll,
         ll_final AS final_ll,
@@ -131,15 +131,13 @@ export async function GET(req: NextRequest) {
       if (!latestByMethod.has(r.method)) latestByMethod.set(r.method, r);
     }
 
-    const methods = ["dirichlet", "parsimony", "ssh"] as const;
+    const methods = ["dirichlet", "parsimony", "hss"] as const;
     const out = methods.map((m) => {
       const row = latestByMethod.get(m);
       if (!row) {
         return {
           ok: true as const,
-          method: m,
-          // NOTE: for the summary table we return root probs (vector),
-          // not the root_name; your UI may pull root_name from another endpoint.
+          method: m,                    
           root: null as number[] | null,
           initial_ll: null as number | null,
           final_ll: null as number | null,
