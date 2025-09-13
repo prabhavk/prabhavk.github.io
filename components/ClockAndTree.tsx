@@ -10,6 +10,8 @@ type Props = {
   clockHeight?: number;
   treeHeight?: number;
   className?: string;
+  /** How many global passes of the daylight algorithm to run (default 1) */
+  daylightPasses?: number;
 };
 
 type EdgeInput =
@@ -20,7 +22,7 @@ function toTuple(e: EdgeInput): [string, string] {
   if (Array.isArray(e)) {
     const [u, v] = e;
     return [u, v];
-    }
+  }
   return [e.source, e.target];
 }
 
@@ -28,6 +30,7 @@ export default function ClockAndTree({
   clockHeight = 520,
   treeHeight = 340,
   className = "",
+  daylightPasses = 32,
 }: Props) {
   // Progress state
   const edges = useProgressStore((s) => s.edges) as EdgeInput[] | undefined;
@@ -98,7 +101,8 @@ export default function ClockAndTree({
               completedByNode={completedByNode}
               activeNode={activeNode}
               padding={14}
-              showLabels={false}
+              showLabels={true}
+              daylightPasses={daylightPasses}
             />
           </>
         ) : (

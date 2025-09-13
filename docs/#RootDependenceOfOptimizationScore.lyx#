@@ -141,8 +141,9 @@ literal "false"
  I also became aware of proofs showing that the location of the root is not identifiable because BH models at alternate root locations exist yielding identical log likelihood scores.
  I did not address the non-identifiability of the root location,
  instead getting angry at the reviewers.
- I had convinced myself that the recall values reporwere supportive of realistic rooting.
- eand the preprint was rejected.
+ I had convinced myself that the recall values reported in the preprint were supportive of realistic rooting,
+ and I did not make changes to the preprint indicating the non-identificability of the root using the BH model.
+ The preprint was rejected.
  
 \end_layout
 
@@ -196,6 +197,15 @@ literal "false"
 
 ,
  in reverse order).
+ An argument is sketched suggesting that the recall values reported in 
+\begin_inset CommandInset citation
+LatexCommand cite
+key "Kalaghatgi2020"
+literal "false"
+
+\end_inset
+
+ should not be trusted due to lack of significance.
 \end_layout
 
 \begin_layout Standard
@@ -208,6 +218,15 @@ In an attempt to make model optimization less absolutist and more exploratory,
  and the complete set of site patterns,
  respectively.
  Results are displayed as three-layered cakes presented in front of an English landscape.
+ Progress of optimization tasks is indicated using a clock and a tree layed out using the daylight algorithm 
+\begin_inset CommandInset citation
+LatexCommand citep
+key "Felsenstein2004"
+literal "false"
+
+\end_inset
+
+.
 \end_layout
 
 \begin_layout Section
@@ -13911,7 +13930,7 @@ Acknowledgements
 \begin_layout Standard
 This paper is dedicated to my English teacher Mrs.
  Ruth Woodman,
- and my colleagues are thanked for their support.
+ and to all my colleagues who have supported me.
 \end_layout
 
 \begin_layout Standard

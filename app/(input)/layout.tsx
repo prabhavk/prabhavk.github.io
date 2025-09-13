@@ -61,7 +61,7 @@ export default function InputLayout({ children }: { children: React.ReactNode })
             {showDebug ? (
               <DebugProgressPane height={550} />
             ) : (
-              <ClockAndTree clockHeight={550} treeHeight={380} />
+              <ClockAndTree clockHeight={500} treeHeight={400} />
             )}
           </aside>
         </div>

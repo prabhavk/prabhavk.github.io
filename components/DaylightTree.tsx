@@ -21,7 +21,12 @@ type Props = {
   /** exactly one internal node that is currently active (running) */
   activeNode?: string | null;
   padding?: number;
+  /** Show both leaf and internal-node labels */
   showLabels?: boolean;
+  /** Number of global passes for the daylight algorithm (default 1) */
+  daylightPasses?: number;
+  /** Visual magnification (applied around canvas center). Default 1.5x for readability */
+  zoom?: number;
 };
 
 /* ===== Colors ===== */
@@ -78,6 +83,10 @@ function degrees(adj: Adj): Map<string, number> {
     deg.set(u, set.size);
   }
   return deg;
+}
+function getEdgeWeight(adj: Adj, u: string, v: string): number {
+  const hit = adj.get(u)?.find((e) => e.to === v);
+  return hit ? hit.w : 1;
 }
 
 /* ---------- diameter midpoint -> choose real node root ---------- */
@@ -164,9 +173,10 @@ type Rooted = {
   parent: Map<string, string | null>;
   children: Map<string, string[]>;
   deg: Map<string, number>;
+  adj: Adj;
 };
 function rootAtNode(adj: Adj, rootId: string): Rooted {
-  if (!rootId) return { root: "", nodes: [], parent: new Map(), children: new Map(), deg: new Map() };
+  if (!rootId) return { root: "", nodes: [], parent: new Map(), children: new Map(), deg: new Map(), adj };
 
   const parent = new Map<string, string | null>();
   const children = new Map<string, string[]>();
@@ -185,7 +195,7 @@ function rootAtNode(adj: Adj, rootId: string): Rooted {
     }
   }
   const deg = degrees(adj);
-  return { root: rootId, nodes: Array.from(children.keys()), parent, children, deg };
+  return { root: rootId, nodes: Array.from(children.keys()), parent, children, deg, adj };
 }
 
 /* ---------- equal-angle layout ---------- */
@@ -200,7 +210,6 @@ function buildEqualAngleLayout(
   children: Map<string, string[]>,
   deg: Map<string, number>
 ): LayoutEA {
-  // collect leaves in DFS order
   const leaves: string[] = [];
   (function dfsLeaves(u: string) {
     const kids = children.get(u) || [];
@@ -251,7 +260,7 @@ function buildEqualAngleLayout(
   return { angle, depth, maxDepth: Math.max(1, maxDepth), leaves };
 }
 
-/* ---------- Euler tour helpers (for subtree membership) ---------- */
+/* ---------- Euler tour helpers ---------- */
 type EulerInfo = {
   tin: Map<string, number>;
   tout: Map<string, number>;
@@ -282,78 +291,74 @@ function isInSubtree(tin: Map<string, number>, tout: Map<string, number>, a: str
   return tb <= ta && ta < te;
 }
 
-/* ================================================================
-   =======  PUBLIC HELPERS YOU ASKED FOR (exported)  ==============
-   ================================================================ */
+/* =================== preorder =================== */
+export function buildPreorderInternalList(
+  root: string,
+  children: Map<string, string[]>,
+  deg: Map<string, number>
+): string[] {
+  const out: string[] = [];
+  if (!root) return out;
+  const stack: string[] = [root];
+  while (stack.length) {
+    const u = stack.pop()!;
+    if ((deg.get(u) || 0) > 1) out.push(u);
+    const kids = children.get(u);
+    if (kids && kids.length) {
+      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+    }
+  }
+  return out;
+}
 
-/** Wedge of a subtree adjacent to node p, described by left/right rays (angles at p). */
-export type SubtreeWedge = {
-  /** "child" for a child subtree, "parent" for the complement of subtree(p) */
-  kind: "child" | "parent";
-  /** id of the child root if kind === "child" */
-  id?: string;
-  /** leftmost and rightmost rays from p to leaves of this component (angles in [0, 2π)) */
-  left: number;
-  right: number;
-  /** derived convenience values */
-  center: number;
-  width: number;
-};
-
-/**
- * Compute wedges (left/right rays) for all components attached to node `p`.
- * - Uses **equal-angle** node positions (passed via `angle` and `depth` + `radiusOfDepth`).
- * - Children components are each child subtree of `p`.
- * - If `p` has a parent, includes one "parent" wedge for all leaves **outside** subtree(p).
- *
- * NOTE: This function requires Euler tin/tout so it can test subtree membership.
- */
 export function computeSubtreeWedgesAtNode(
   p: string,
   params: {
     parent: Map<string, string | null>;
     children: Map<string, string[]>;
-    leaves: string[];                         // leaves of the whole tree
-    angle: Map<string, number>;               // equal-angle angles for nodes
-    depth: Map<string, number>;               // topological depths
-    radiusOfDepth: (d: number) => number;     // converts depth -> radial distance
+    leaves: string[];
+    angle: Map<string, number>;
+    depth: Map<string, number>;
+    radiusOfDepth: (d: number) => number;
     cx: number;
     cy: number;
     tin: Map<string, number>;
     tout: Map<string, number>;
   }
-): SubtreeWedge[] {
+) {
   const { parent, children, leaves, angle, depth, radiusOfDepth, cx, cy, tin, tout } = params;
 
-  // position helper under equal-angle geometry
   const nodePos = (u: string) => {
     const a = angle.get(u) ?? 0;
     const d = depth.get(u) ?? 0;
     return polar(cx, cy, radiusOfDepth(d), a);
   };
 
-  // direction (angle) of ray from p to q
   const rayAngleFromP = (q: string) => {
     const P = nodePos(p);
     const Q = nodePos(q);
     return as01Angle(Math.atan2(Q.y - P.y, Q.x - P.x));
   };
 
-  // Collect neighbor components: each child, and the "parent side" if any
   const nbrs: Array<{ kind: "child" | "parent"; id?: string; dir: number }> = [];
   for (const c of (children.get(p) || [])) {
     nbrs.push({ kind: "child", id: c, dir: rayAngleFromP(c) });
   }
   const par = parent.get(p);
   if (par !== null && par !== undefined) {
-    nbrs.push({ kind: "parent", dir: rayAngleFromP(par!) });
+    nbrs.push({ kind: "parent", id: par, dir: rayAngleFromP(par) });
   }
 
-  // Sort neighbors by the direction of their connecting edge (cyclic order around p)
   nbrs.sort((a, b) => a.dir - b.dir);
 
-  // For each neighbor component, gather the angles of rays from p to its leaves.
-  const wedges: SubtreeWedge[] = [];
+  const wedges: Array<{
+    kind: "child" | "parent";
+    id?: string;
+    left: number;
+    right: number;
+    center: number;
+    width: number;
+  }> = [];
   const P = nodePos(p);
 
   const raysToLeaves = (leafIds: string[]) => {
@@ -368,19 +373,15 @@ export function computeSubtreeWedgesAtNode(
   for (const nb of nbrs) {
     let leafAngles: number[] = [];
     if (nb.kind === "child" && nb.id) {
-      // leaves inside child subtree
       const ls = leaves.filter((L) => isInSubtree(tin, tout, L, nb.id!));
       leafAngles = raysToLeaves(ls);
     } else {
-      // "parent" = all leaves outside subtree(p)
       const ls = leaves.filter((L) => !isInSubtree(tin, tout, L, p));
       leafAngles = raysToLeaves(ls);
     }
 
-    // If none (degenerate), fall back to the neighbor edge direction
     if (!leafAngles.length) leafAngles = [nb.dir];
 
-    // Shift each angle to lie near the neighbor direction (prevents 0/2π wrap from splitting the wedge)
     const shifted = leafAngles
       .map((a) => {
         let d = a - nb.dir;
@@ -408,26 +409,131 @@ export function computeSubtreeWedgesAtNode(
   return wedges;
 }
 
-/** Minimal circular distance between two angles (in [0, 2π)), result in [0, π]. */
+/* ==================== daylight helpers & rotations ==================== */
+
+export function applyDeltaToSubtree(
+  subRoot: string,
+  delta: number,
+  angle: Map<string, number>,
+  tin: Map<string, number>,
+  tout: Map<string, number>
+) {
+  if (!Number.isFinite(delta) || delta === 0) return;
+  const t0 = tin.get(subRoot)!;
+  const t1 = tout.get(subRoot)!;
+  for (const [id, a] of angle.entries()) {
+    const ti = tin.get(id);
+    if (ti != null && ti >= t0 && ti < t1) {
+      let v = a + delta;
+      v = ((v % TAU) + TAU) % TAU;
+      angle.set(id, v);
+    }
+  }
+}
+
+function unwrapTriple(
+  a: { left: number; right: number },
+  b: { left: number; right: number },
+  c: { left: number; right: number }
+) {
+  const rA = 0;
+  const lA = ((a.left - a.right + TAU) + TAU) % TAU;
+
+  const lB = ((b.left - a.right + TAU) + TAU) % TAU;
+  let rB = ((b.right - a.right + TAU) + TAU) % TAU;
+  let lC = ((c.left - a.right + TAU) + TAU) % TAU;
+  let rC = ((c.right - a.right + TAU) + TAU) % TAU;
+
+  if (rB < lB) rB += TAU;
+  if (lC < rB) { lC += TAU; rC += TAU; }
+  if (rC < lC) rC += TAU;
+
+  return { rA, lA, lB, rB, lC, rC };
+}
+
+export function equalizeDaylightAtNode_Generic(
+  u: string,
+  visitedInternals: Set<string>,
+  params: {
+    parent: Map<string, string | null>;
+    children: Map<string, string[]>;
+    leaves: string[];
+    angle: Map<string, number>;
+    depth: Map<string, number>;
+    radiusOfDepth: (d: number) => number;
+    cx: number;
+    cy: number;
+    tin: Map<string, number>;
+    tout: Map<string, number>;
+  }
+): { deltaB: number; deltaC: number } | null {
+  const { children, angle, tin, tout } = params;
+
+  const wedges = computeSubtreeWedgesAtNode(u, params);
+  if (wedges.length < 3) return null;
+
+  const three =
+    wedges.length === 3 ? wedges : [...wedges].sort((x, y) => y.width - x.width).slice(0, 3);
+
+  const isLeafChild = (w: { kind: "child" | "parent"; id?: string }) =>
+    w.kind === "child" && w.id ? (children.get(w.id!)?.length ?? 0) === 0 : false;
+
+  const visitedIdxs = three
+    .map((w, i) => (w.id && visitedInternals.has(w.id) ? i : -1))
+    .filter((i) => i >= 0);
+
+  let fixedIdx: number;
+  if (visitedIdxs.length) {
+    fixedIdx = visitedIdxs[0]!;
+  } else {
+    const nonLeafIdxs = [0, 1, 2].filter((i) => !isLeafChild(three[i]!));
+    fixedIdx = nonLeafIdxs.length
+      ? nonLeafIdxs.reduce(
+          (best, i) => (three[i]!.width > three[best]!.width ? i : best),
+          nonLeafIdxs[0]!
+        )
+      : 0;
+  }
+
+  const a = three[fixedIdx]!;
+  const b = three[(fixedIdx + 1) % 3]!;
+  const c = three[(fixedIdx + 2) % 3]!;
+
+  console.debug(
+    `[Daylight] Node=${u} fixed=${a.id ?? a.kind} rotated=[${b.id ?? b.kind}, ${c.id ?? c.kind}]`
+  );
+
+  const Wa = ((a.right - a.left + TAU) + TAU) % TAU;
+  const Wb = ((b.right - b.left + TAU) + TAU) % TAU;
+  const Wc = ((c.right - c.left + TAU) + TAU) % TAU;
+  const G = (TAU - (Wa + Wb + Wc)) / 3;
+
+  const { rA, lA, lB, rB, lC, rC } = unwrapTriple(a, b, c);
+  const gap_ab = lB - rA;
+  const gap_ca = (lA + TAU) - rC;
+
+  const deltaB = G - gap_ab;
+  const deltaC = gap_ca - G;
+
+  if (b.id) applyDeltaToSubtree(b.id, deltaB, angle, tin, tout);
+  if (c.id) applyDeltaToSubtree(c.id, deltaC, angle, tin, tout);
+
+  return { deltaB, deltaC };
+}
+
 function angleDistance(a: number, b: number): number {
   const d = Math.abs(as01Angle(a) - as01Angle(b));
   return Math.min(d, TAU - d);
 }
 
-/**
- * Daylight angle between two wedges attached to the same node.
- * Defined as the smaller of:
- *   1) distance(left_A, right_B)
- *   2) distance(right_A, left_B)
- */
-export function daylightAngleBetween(A: SubtreeWedge, B: SubtreeWedge): number {
+export function daylightAngleBetween(A: { left: number; right: number }, B: { left: number; right: number }) {
   const d1 = angleDistance(A.left, B.right);
   const d2 = angleDistance(A.right, B.left);
   return Math.min(d1, d2);
 }
 
 /* ================================================================
-   =====================  COMPONENT (EA ONLY)  =====================
+   =====================  COMPONENT (Daylight)  ====================
    ================================================================ */
 
 export default function DaylightTree({
@@ -437,7 +543,9 @@ export default function DaylightTree({
   completedByNode,
   activeNode = null,
   padding = 12,
-  showLabels = false,
+  showLabels = true,
+  daylightPasses = 1,
+  zoom = 1.0,                  // magnify 1.5x by default
 }: Props) {
   const ref = React.useRef<HTMLDivElement>(null);
   const [size, setSize] = React.useState({ w: 0, h: 0 });
@@ -460,6 +568,7 @@ export default function DaylightTree({
         parent: new Map<string, string | null>(),
         children: new Map<string, string[]>(),
         deg: new Map<string, number>(),
+        adj: new Map() as Adj,
       };
     }
     const adj = buildAdj(edges);
@@ -472,10 +581,11 @@ export default function DaylightTree({
       parent: rooted.parent,
       children: rooted.children,
       deg: rooted.deg,
+      adj: rooted.adj,
     };
   }, [edges]);
 
-  /* ---------- Equal-angle starting angles (no daylight refinement) ---------- */
+  /* ---------- Equal-angle baseline ---------- */
   const equalAngle = React.useMemo(() => {
     if (!core.root) {
       return {
@@ -488,6 +598,28 @@ export default function DaylightTree({
     return buildEqualAngleLayout(core.root, core.children, core.deg);
   }, [core.root, core.children, core.deg]);
 
+  /* ---------- Weighted radii (preserve branch lengths) ---------- */
+  const { weightedDepth, weightedMaxDepth } = React.useMemo(() => {
+    const dist = new Map<string, number>();
+    if (!core.root) return { weightedDepth: dist, weightedMaxDepth: 1 };
+
+    const stack: string[] = [core.root];
+    dist.set(core.root, 0);
+    while (stack.length) {
+      const u = stack.pop()!;
+      const base = dist.get(u)!;
+      for (const v of core.children.get(u) || []) {
+        const w = getEdgeWeight(core.adj, u, v);
+        dist.set(v, base + (Number.isFinite(w) ? w : 1));
+        stack.push(v);
+      }
+    }
+    let max = 0;
+    for (const d of dist.values()) max = Math.max(max, d);
+    return { weightedDepth: dist, weightedMaxDepth: Math.max(1e-6, max) };
+  }, [core.root, core.children, core.adj]);
+
+  /* ---------- Radii / canvas ---------- */
   const w = Math.max(0, size.w);
   const h = Math.max(0, size.h);
   const cx = w / 2;
@@ -500,9 +632,124 @@ export default function DaylightTree({
 
   const radiusOfDepth = React.useCallback(
     (d: number) =>
-      d === 0 ? 0 : ringInner + (ringOuter - ringInner) * (d / Math.max(1, equalAngle.maxDepth)),
-    [ringInner, ringOuter, equalAngle.maxDepth]
+      d === 0 ? 0 : ringInner + (ringOuter - ringInner) * (d / weightedMaxDepth),
+    [ringInner, ringOuter, weightedMaxDepth]
   );
+
+  // Euler tour (for subtree rotations)
+  const { tin, tout } = React.useMemo(
+    () => (core.root ? eulerize(core.root, core.children) : { tin: new Map(), tout: new Map() }),
+    [core.root, core.children]
+  );
+
+  // Internal nodes in preorder (pass order)
+  const internalPre = React.useMemo(
+    () => (core.root ? buildPreorderInternalList(core.root, core.children, core.deg) : []),
+    [core.root, core.children, core.deg]
+  );
+
+  /* ---------- Daylight-adjusted angles + visited internals (N PASSES) ---------- */
+  const daylight = React.useMemo(() => {
+    const angle = new Map(equalAngle.angle);
+    const visitedForColor = new Set<string>();
+
+    if (!core.root || internalPre.length === 0) {
+      return { angle, visitedInternals: visitedForColor };
+    }
+
+    const passes = Math.max(1, Math.floor(daylightPasses));
+    for (let pass = 0; pass < passes; pass++) {
+      const visitedThisPass = new Set<string>();
+      for (const u of internalPre) {
+        equalizeDaylightAtNode_Generic(u, visitedThisPass, {
+          parent: core.parent,
+          children: core.children,
+          leaves: equalAngle.leaves,
+          angle,
+          depth: weightedDepth,
+          radiusOfDepth,
+          cx,
+          cy,
+          tin,
+          tout,
+        });
+        visitedThisPass.add(u);
+        visitedForColor.add(u);
+      }
+      console.debug(`[Daylight] Completed pass ${pass + 1}/${passes}`);
+    }
+
+    return { angle, visitedInternals: visitedForColor };
+  }, [
+    core.root,
+    core.parent,
+    core.children,
+    core.deg,
+    equalAngle.leaves,
+    internalPre,
+    radiusOfDepth,
+    cx,
+    cy,
+    tin,
+    tout,
+    equalAngle.angle,
+    daylightPasses,
+    weightedDepth,
+  ]);
+
+  // ===== Daylight imbalance per internal node =====
+  const daylightImbalance = React.useMemo(() => {
+    if (!core.root) return [] as Array<{ id: string; imbalanceRad: number }>;
+    const out: Array<{ id: string; imbalanceRad: number }> = [];
+
+    for (const u of core.nodes) {
+      if ((core.deg.get(u) || 0) <= 1) continue; // leaves only
+      const wedgesAll = computeSubtreeWedgesAtNode(u, {
+        parent: core.parent,
+        children: core.children,
+        leaves: equalAngle.leaves,
+        angle: daylight.angle,
+        depth: weightedDepth,
+        radiusOfDepth,
+        cx,
+        cy,
+        tin,
+        tout,
+      });
+
+      if (wedgesAll.length < 3) continue;
+
+      const three =
+        wedgesAll.length === 3 ? wedgesAll : [...wedgesAll].sort((a, b) => b.width - a.width).slice(0, 3);
+
+      const ordered = [...three].sort((a, b) => a.center - b.center);
+      const gaps = [
+        daylightAngleBetween(ordered[0], ordered[1]),
+        daylightAngleBetween(ordered[1], ordered[2]),
+        daylightAngleBetween(ordered[2], ordered[0]),
+      ];
+      const maxGap = Math.max(...gaps);
+      const minGap = Math.min(...gaps);
+      out.push({ id: u, imbalanceRad: maxGap - minGap });
+    }
+
+    out.sort((a, b) => b.imbalanceRad - a.imbalanceRad);
+    return out;
+  }, [
+    core.root,
+    core.nodes,
+    core.deg,
+    core.parent,
+    core.children,
+    equalAngle.leaves,
+    daylight.angle,
+    weightedDepth,
+    radiusOfDepth,
+    cx,
+    cy,
+    tin,
+    tout,
+  ]);
 
   // Live color always follows the active method (or neutral).
   const liveColor = React.useMemo(
@@ -510,24 +757,25 @@ export default function DaylightTree({
     [activeMethod]
   );
 
-  // Links
+  // Links — now rendered from DAYLIGHT angles (with weighted radii)
   const links = React.useMemo(() => {
     const out: Array<{ x1: number; y1: number; x2: number; y2: number; key: string }> = [];
     for (const [v, p] of core.parent.entries()) {
       if (p === null) continue;
-      const av = equalAngle.angle.get(v) ?? 0;
-      const ap = equalAngle.angle.get(p) ?? 0;
-      const dv = equalAngle.depth.get(v) ?? 0;
-      const dp = equalAngle.depth.get(p) ?? 0;
+      const av = daylight.angle.get(v) ?? 0;
+      const ap = daylight.angle.get(p) ?? 0;
+
+      const dv = (weightedDepth.get(v) ?? 0);
+      const dp = (weightedDepth.get(p) ?? 0);
+
       const pv = polar(cx, cy, radiusOfDepth(dv), av);
       const pp = polar(cx, cy, radiusOfDepth(dp), ap);
       out.push({ x1: pv.x, y1: pv.y, x2: pp.x, y2: pp.y, key: `${p}->${v}` });
     }
     return out;
-  }, [core.parent, equalAngle.angle, equalAngle.depth, cx, cy, radiusOfDepth]);
+  }, [core.parent, daylight.angle, cx, cy, radiusOfDepth, weightedDepth]);
 
-  // Nodes: base colored circle for all; leaves solid; internal nodes white-cap until completed;
-  // show "+" only on the active internal node while incomplete.
+
   const nodesViz = React.useMemo(() => {
     const out: Array<{
       id: string;
@@ -541,18 +789,20 @@ export default function DaylightTree({
     }> = [];
 
     for (const u of core.nodes) {
-      const a = equalAngle.angle.get(u) ?? 0;
-      const d = equalAngle.depth.get(u) ?? 0;
+      const a = daylight.angle.get(u) ?? 0;
+      const d = weightedDepth.get(u) ?? 0;
       const { x, y } = polar(cx, cy, radiusOfDepth(d), a);
 
       const isLeaf = (core.deg.get(u) || 0) <= 1;
-      const isActiveInternal = !isLeaf && activeNode === u;
+      const isInternal = !isLeaf;
+      const isActiveInternal = isInternal && activeNode === u;
 
       const mark = completedByNode[u]; // true | Method | undefined
-      const markMethod = typeof mark === "string" ? (mark as Method) : null;
+      const isCompletedForCurrent =
+        mark === true || (!!activeMethod && mark === activeMethod);
 
-      const isCompleteForCurrent =
-        mark === true || (!!activeMethod && markMethod === activeMethod && !isActiveInternal);
+      const showPlus = isActiveInternal;
+      const showWhiteCap = isInternal && (isActiveInternal || !isCompletedForCurrent);
 
       const rOuter = isLeaf ? 3.75 : 3.25;
 
@@ -562,8 +812,8 @@ export default function DaylightTree({
         y,
         rOuter,
         color: liveColor,
-        showWhiteCap: !isLeaf && !isCompleteForCurrent,
-        showPlus: isActiveInternal && !isCompleteForCurrent,
+        showWhiteCap,
+        showPlus,
         isLeaf,
       });
     }
@@ -571,8 +821,7 @@ export default function DaylightTree({
   }, [
     core.nodes,
     core.deg,
-    equalAngle.angle,
-    equalAngle.depth,
+    daylight.angle,
     cx,
     cy,
     radiusOfDepth,
@@ -580,100 +829,186 @@ export default function DaylightTree({
     activeMethod,
     activeNode,
     liveColor,
-  ]);
+    weightedDepth,
+]);
+
+
+  // Total rendered edge length
+  const totalRenderedLength = React.useMemo(() => {
+    let sum = 0;
+    for (const [v, p] of core.parent.entries()) {
+      if (p === null) continue;
+      const av = daylight.angle.get(v) ?? 0;
+      const ap = daylight.angle.get(p) ?? 0;
+      const dv = (weightedDepth.get(v) ?? 0);
+      const dp = (weightedDepth.get(p) ?? 0);
+      const pv = polar(cx, cy, radiusOfDepth(dv), av);
+      const pp = polar(cx, cy, radiusOfDepth(dp), ap);
+      sum += Math.hypot(pv.x - pp.x, pv.y - pp.y);
+    }
+    return sum;
+  }, [core.parent, daylight.angle, weightedDepth, cx, cy, radiusOfDepth]);
+
+  // Build the center-scaling transform string
+  const contentTransform = React.useMemo(
+    () => `translate(${cx},${cy}) scale(${zoom}) translate(${-cx},${-cy})`,
+    [cx, cy, zoom]
+  );
 
   const wsvg = Math.max(0, size.w);
   const hsvg = Math.max(0, size.h);
 
   return (
-    <div ref={ref} className={`w-full h-full ${className}`}>
+    <div ref={ref} className={`w-full h-full relative ${className}`}>
       <svg
         width={wsvg}
         height={hsvg}
         viewBox={`0 0 ${wsvg} ${hsvg}`}
         role="img"
-        aria-label="Equal-angle unrooted tree"
+        aria-label="Daylight-adjusted unrooted tree"
       >
-        {/* Links */}
-        <g stroke="#334155" strokeOpacity={0.25} strokeWidth={1}>
-          {links.map((L) => (
-            <line key={L.key} x1={L.x1} y1={L.y1} x2={L.x2} y2={L.y2} />
-          ))}
-        </g>
-
-        {/* Nodes: base solid for all */}
-        <g>
-          {nodesViz.map((n) => (
-            <circle
-              key={`base-${n.id}`}
-              cx={n.x}
-              cy={n.y}
-              r={n.rOuter}
-              fill={n.color}
-              stroke={n.color}
-              strokeWidth={1.2}
-            />
-          ))}
-
-          {/* White cap only for internal, incomplete nodes */}
-          {nodesViz.map((n) =>
-            n.showWhiteCap ? (
-              <circle
-                key={`cap-${n.id}`}
-                cx={n.x}
-                cy={n.y}
-                r={Math.max(1.6, n.rOuter * 0.8)}
-                fill="#ffffff"
-                stroke="#ffffff"
-                strokeWidth={0.6}
-              />
-            ) : null
-          )}
-
-          {/* Plus symbol only for the active internal node while incomplete */}
-          {nodesViz.map((n) =>
-            n.showPlus ? (
-              <g key={`plus-${n.id}`}>
-                <line
-                  x1={n.x - n.rOuter * 0.6}
-                  y1={n.y}
-                  x2={n.x + n.rOuter * 0.6}
-                  y2={n.y}
-                  stroke={liveColor}
-                  strokeWidth={1.6}
-                  strokeLinecap="round"
-                />
-                <line
-                  x1={n.x}
-                  y1={n.y - n.rOuter * 0.6}
-                  x2={n.x}
-                  y2={n.y + n.rOuter * 0.6}
-                  stroke={liveColor}
-                  strokeWidth={1.6}
-                  strokeLinecap="round"
-                />
-              </g>
-            ) : null
-          )}
-        </g>
-
-        {/* Labels (optional) */}
-        {showLabels ? (
-          <g fontSize={11} fill="#111827" fillOpacity={0.85}>
-            {nodesViz.map((n) => (
-              <text
-                key={`label-${n.id}`}
-                x={n.x}
-                y={n.y - (n.rOuter + 4)}
-                textAnchor="middle"
-                dominantBaseline="ideographic"
-              >
-                {n.id}
-              </text>
+        <g transform={contentTransform}>
+          {/* Links */}
+          <g stroke="#334155" strokeOpacity={0.25} strokeWidth={1}>
+            {links.map((L) => (
+              <line key={L.key} x1={L.x1} y1={L.y1} x2={L.x2} y2={L.y2} />
             ))}
           </g>
-        ) : null}
+
+          {/* Nodes */}
+          <g>
+            {nodesViz.map((n) => (
+              <circle
+                key={`base-${n.id}`}
+                cx={n.x}
+                cy={n.y}
+                r={n.rOuter}
+                fill={n.color}
+                stroke={n.color}
+                strokeWidth={1.2}
+              />
+            ))}
+
+            {/* White cap for internal nodes that were NOT visited in any pass */}
+            {nodesViz.map((n) =>
+              n.showWhiteCap ? (
+                <circle
+                  key={`cap-${n.id}`}
+                  cx={n.x}
+                  cy={n.y}
+                  r={Math.max(1.6, n.rOuter * 0.8)}
+                  fill="#ffffff"
+                  stroke="#ffffff"
+                  strokeWidth={0.6}
+                />
+              ) : null
+            )}
+
+            {/* Plus symbol only for the active internal node while incomplete */}
+            {nodesViz.map((n) =>
+              n.showPlus ? (
+                <g key={`plus-${n.id}`}>
+                  <line
+                    x1={n.x - n.rOuter * 0.6}
+                    y1={n.y}
+                    x2={n.x + n.rOuter * 0.6}
+                    y2={n.y}
+                    stroke={n.color}
+                    strokeWidth={1.6}
+                    strokeLinecap="round"
+                  />
+                  <line
+                    x1={n.x}
+                    y1={n.y - n.rOuter * 0.6}
+                    x2={n.x}
+                    y2={n.y + n.rOuter * 0.6}
+                    stroke={n.color}
+                    strokeWidth={1.6}
+                    strokeLinecap="round"
+                  />
+                </g>
+              ) : null
+            )}
+          </g>
+
+          {/* Labels (both leaves and internal nodes) */}
+          {showLabels ? (
+            <>
+              {/* Leaf labels: pushed outward along the ray */}
+              <g fontSize={12} fill="#000">
+                {nodesViz
+                  .filter((n) => n.isLeaf)
+                  .map((n) => {
+                    const theta = daylight.angle.get(n.id) ?? 0;
+                    const dv = (weightedDepth.get(n.id) ?? 0);
+                    const R = radiusOfDepth(dv);
+                    const dirX = Math.cos(theta - PI / 2);
+                    const dirY = Math.sin(theta - PI / 2);
+                    const offset = n.rOuter + 12;
+                    const tx = n.x + dirX * offset;
+                    const ty = n.y + dirY * offset;
+                    const anchor =
+                      dirX > 0.15 ? "start" : dirX < -0.15 ? "end" : "middle";
+                    return (
+                      <text
+                        key={`leaf-label-${n.id}`}
+                        x={tx}
+                        y={ty}
+                        textAnchor={anchor}
+                        dominantBaseline="middle"
+                      >
+                        {n.id}
+                      </text>
+                    );
+                  })}
+              </g>
+
+              {/* Internal node labels: centered just above each node */}
+              <g fontSize={11} fill="#000">
+                {nodesViz
+                  .filter((n) => !n.isLeaf)
+                  .map((n) => (
+                    <text
+                      key={`internal-label-${n.id}`}
+                      x={n.x}
+                      y={n.y - (n.rOuter + 6)}
+                      textAnchor="middle"
+                      dominantBaseline="ideographic"
+                    >
+                      {n.id}
+                    </text>
+                  ))}
+              </g>
+            </>
+          ) : null}
+        </g>
       </svg>
+
+      {/* Side panel with diagnostics (not scaled) */}
+      <div className="absolute top-2 right-2 bg-white/85 backdrop-blur-sm border border-black/10 shadow-sm rounded-xl p-3 max-w-[280px] text-[12px] text-black leading-tight">
+        <div className="font-semibold mb-1">Tree diagnostics</div>
+        <div className="mb-1">
+          <span className="opacity-70">Daylight passes:</span>{" "}
+          <span>{Math.max(1, Math.floor(daylightPasses))}</span>
+        </div>
+        <div className="mb-2">
+          <span className="opacity-70">Rendered total edge length:</span>{" "}
+          <span>{totalRenderedLength.toFixed(2)}</span>
+        </div>
+        <div className="font-medium mb-1">Daylight imbalance (max−min gap)</div>
+        <ul className="space-y-0.5 max-h-56 overflow-auto pr-1">
+          {daylightImbalance.length === 0 ? (
+            <li className="opacity-60">No internal nodes</li>
+          ) : (
+            daylightImbalance.map(({ id, imbalanceRad }) => (
+              <li key={id} className="flex justify-between gap-2">
+                <span className="opacity-80">{id}</span>
+                <span>{(imbalanceRad * 180 / Math.PI).toFixed(1)}°</span>
+              </li>
+            ))
+          )}
+        </ul>
+      </div>
     </div>
   );
 }

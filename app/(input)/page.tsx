@@ -208,8 +208,8 @@ export default function InputPage() {
   const [includeHSS, setincludeHSS] = useState<boolean>(true);
 
   // Three-stage site-pattern counts
-  const [patCoarse, setPatCoarse] = useState<string>("26");
-  const [patMedium, setPatMedium] = useState<string>("42");
+  const [patCoarse, setPatCoarse] = useState<string>("28");
+  const [patMedium, setPatMedium] = useState<string>("49");
   const patFine = String(FINE_FIXED); // fixed
 
   // Worker flags
@@ -221,7 +221,7 @@ export default function InputPage() {
     setM((prev) => {
       const next = [...prev];
       if (index === 0) next[0] = value;
-      else next[1] = next[2] = next[3] = value; // lock α2–α4
+      else next[1] = next[2] = next[3] = value;
       return next;
     });
   }
