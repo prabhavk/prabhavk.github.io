@@ -288,17 +288,9 @@ Module.expectedDataFileDownloads++;
    "filename": "/data/RAxML_DNA_test.fa",
    "start": 0,
    "end": 5789
-  }, {
-   "filename": "/data/Dayhoff.dat",
-   "start": 5789,
-   "end": 7491
-  }, {
-   "filename": "/data/RAxML_AA_test.fa",
-   "start": 7491,
-   "end": 9433
   } ],
-  "remote_package_size": 9433,
-  "package_uuid": "e3df962b-cb28-4616-8fec-e2da770b1428"
+  "remote_package_size": 5789,
+  "package_uuid": "5f7d2fed-48ea-482c-816a-13d87bcb2b59"
  });
 })();
 
@@ -5934,6 +5926,10 @@ function _environ_sizes_get(penviron_count, penviron_buf_size) {
  return 0;
 }
 
+function _exit(status) {
+ exit(status);
+}
+
 function _fd_close(fd) {
  try {
   var stream = SYSCALLS.getStreamFromFD(fd);
@@ -6599,6 +6595,7 @@ var asmLibraryArg = {
  "emscripten_resize_heap": _emscripten_resize_heap,
  "environ_get": _environ_get,
  "environ_sizes_get": _environ_sizes_get,
+ "exit": _exit,
  "fd_close": _fd_close,
  "fd_read": _fd_read,
  "fd_seek": _fd_seek,

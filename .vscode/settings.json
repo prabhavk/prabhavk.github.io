@@ -82,6 +82,9 @@
         "csignal": "cpp",
         "regex": "cpp",
         "ranges": "cpp",
-        "valarray": "cpp"
+        "valarray": "cpp",
+        "core": "cpp",
+        "matrixfunctions": "cpp",
+        "*.def": "cpp"
     }
 }

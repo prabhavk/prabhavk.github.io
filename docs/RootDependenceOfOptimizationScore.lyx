@@ -104,7 +104,7 @@
 \begin_body
 
 \begin_layout Title
-Variability of Maximum Log-Likelihood Scores Across Root Placements Obtained With the Barry–Hartigan Model Optimized Using EMDNA Initialized with Parsimony,
+Examining the Dependence of Log-Likelihood on Placement of the root for the Barry–Hartigan Model Optimized with EMDNA Initialized Using Parsimony,
  Dirichlet,
  and HSS
 \end_layout
@@ -121,7 +121,7 @@ Independent Researcher,
 \end_layout
 
 \begin_layout Standard
-In 
+I lied in the preprint 
 \begin_inset CommandInset citation
 LatexCommand cite
 key "Kalaghatgi2020"
@@ -129,14 +129,27 @@ literal "false"
 
 \end_inset
 
- I lied that it is possible to obtain realistically rooted trees using the Barry–Hartigan model (BH).
+ that it is possible to obtain realistically rooted trees using the Barry–Hartigan model (BH).
+ I took a conflicting stance.
+ On the one hand,
+ I had transformed generally labeled trees to leaf-labeled bifurcating trees,
+ repositioning the root and reparameterizing the BH model such that log-likelihood score remained the same.
+ On the other hand,
+ I had implemented a procedure for optimizing the location of the root by maximizing expected complete-data log likelihood.
  As part of the review process at OUP Bioinformatics,
- I was asked to account for the reparameterization property of BH,
- according to which,
- identical log likelihood scores can be obtained for any placement of the root.
- I did not respond to the reviewers in a satisfactory manner.
- In work presented here,
- visual and statistical tools incorporating the suggestions made by the reviewers have been developed based on the EM algorithm by 
+ I found out that there was prior work using EM to optimize the BH model where the location of the root is kept fixed.
+ I also became aware of proofs showing that the location of the root is not identifiable because BH models at alternate root locations exist yielding identical log likelihood scores.
+ I did not address the non-identifiability of the root location,
+ instead getting angry at the reviewers.
+ I had convinced myself that the recall values reported in the preprint were supportive of realistic rooting,
+ and I did not make changes to the preprint indicating the non-identificability of the root using the BH model.
+ The preprint was rejected.
+ 
+\end_layout
+
+\begin_layout Standard
+In work presented here,
+ the non-identifiability of root has been examined using the fixed-root EM algorithm by 
 \begin_inset CommandInset citation
 LatexCommand cite
 key "IbanezMarcelo2014"
@@ -145,34 +158,46 @@ literal "false"
 \end_inset
 
 ,
- which has been implemented for gap-inclusive DNA alignments.
- The tools developed in this paper are available as a web application at 
-\begin_inset CommandInset href
-LatexCommand href
-name "https://qrep.vercel.app/"
-target "https://qrep.vercel.app/"
+ which has been implemented for gap-inclusive DNA alignments using a topology computed with Family-Joining using LogDet distances 
+\begin_inset CommandInset citation
+LatexCommand citep
+key "Kalaghatgi2016"
 literal "false"
 
 \end_inset
 
 .
+ The EM method is named EMDNA,
+ with the root placed,
+ in turn,
+ at each internal node,
+ and BH parameters initialized using parsimony,
+ Dirichlet and equilikelihood parameterizations of BH (referred to as the HSS method,
+ which stands for the authors Steel,
+ Sz
+\begin_inset ERT
+status open
+
+\begin_layout Plain Layout
+
+
+\backslash
+'{e}
 \end_layout
 
-\begin_layout Standard
-The reparameterization property of BH is computationally verified for the test DNA alignment taken from RAxML-NG.
- This result alone suggests that one should not attempt to infer the location of the root by maximizing the log likelihood score.
- Results from one-sided Wilcoxon-Mann-Whitney 1-WMW tests are at odds with this result.
- Each initialization criterion prefers one location of root compared to others based on log likelihood scores.
- In comparison between Parsimony and Dirichlet,
- Parsimony scores significantly better than Dirichlet at half of the locations of root whereas Dirichlet scores significantly better in the other half.
- HSS initialized parameters yield significantly larger log likelihood scores at each location of root.
- Overall,
- this suggests that the log likelihood surface for BH model is rugged and prone to local optima.
- 
-\end_layout
+\end_inset
 
-\begin_layout Standard
-I apologize to the reviewers of 
+kely and Hendy 
+\begin_inset CommandInset citation
+LatexCommand citep
+key "SSH_1994"
+literal "false"
+
+\end_inset
+
+,
+ in reverse order).
+ An argument is sketched suggesting that the recall values reported in 
 \begin_inset CommandInset citation
 LatexCommand cite
 key "Kalaghatgi2020"
@@ -180,8 +205,20 @@ literal "false"
 
 \end_inset
 
- for not clarifying the ability to root trees using BH as part of the original review process,
- and thank them for their suggestions.
+ should not be trusted due to lack of significance.
+\end_layout
+
+\begin_layout Standard
+In an attempt to make model optimization less absolutist and more exploratory,
+ a dessert-themed optimization procedure is implemented in which optimization time is split into three regimes —
+ coarse,
+ medium and fine grained —
+ which are characterized by the use of a few heaviest,
+ heavy-to-medium range,
+ and the complete set of site patterns,
+ respectively.
+ Results are displayed as three-layered cakes presented in front of an English landscape.
+ The progress of optimization tasks are indicated using a clock and three trees.
 \end_layout
 
 \begin_layout Section
@@ -189,18 +226,10 @@ Introduction
 \end_layout
 
 \begin_layout Standard
-I implemented an optimization program called rSEM-GM in 
-\begin_inset CommandInset citation
-LatexCommand cite
-key "Kalaghatgi2020"
-literal "false"
-
-\end_inset
-
- in order to optimize the root location by maximizing the expected complete-data log likelihood score.
- At the time I was prone to believe that it was possible to obtain rooted trees using the Barry-Hartigan model,
- and I was not aware of prior work,
- especially the optimization method by 
+I implemented a method to optimize the location of the root using the BH model,
+ and convinced myself that it was possible to realistically root trees using the BH model.
+ At the time,
+ I was not aware of the EM algorithm by 
 \begin_inset CommandInset citation
 LatexCommand cite
 key "IbanezMarcelo2014"
@@ -208,10 +237,8 @@ literal "false"
 
 \end_inset
 
- which is an EM algorithm where,
- given a topology (unrooted tree),
- an internal node is selected as the root and is kept fixed for the iterations of EM.
- Other papers that I did not take into account include (i) a proof by 
+ which optimizes the BH model for a given topology (unrooted tree) at an internal node that is selected as a fixed root for the iterations of EM.
+ Other papers that I was not aware of include (i) a proof by 
 \begin_inset CommandInset citation
 LatexCommand citet
 key "allman_rhodes_2003"
@@ -220,8 +247,8 @@ literal "false"
 \end_inset
 
  showing that given a BH model defined at some node,
- it is possible to obtain a BH model with root defined at an alternate node,
- such that expected frequency of site patterns (unique columns in alignment) at any node is the same and does not depend on the location of the root,
+ it is possible to obtain a BH model with root defined at alternate nodes,
+ such that expected frequency of site patterns (unique columns in an alignment) at any node do not depend on the location of the root,
  and (ii) a proof by 
 \begin_inset CommandInset citation
 LatexCommand citet
@@ -232,13 +259,13 @@ literal "false"
 
  where the authors show that,
  given a BH model defined with the root placed at some node,
- it is possible to place the root at alternate node,
+ it is possible to place the root at an adjacent node,
  reparameterizing model parameters using Bayes rule,
  such that the log likelihood score remains the same.
 \end_layout
 
 \begin_layout Standard
-In work presented here,
+With respect to the literature stating that the location of the root is not identifiable using the BH model,
  the EM algorithm by 
 \begin_inset CommandInset citation
 LatexCommand cite
@@ -247,17 +274,8 @@ literal "false"
 
 \end_inset
 
- is implemented for gap-inclusive DNA alignments,
- and is referred to as EMDNA,
- whose parameters are initialized using parsimony-based characters as was done in the preprint 
-\begin_inset CommandInset citation
-LatexCommand cite
-key "Kalaghatgi2020"
-literal "false"
-
-\end_inset
-
-,
+ is implemented and referred to as EMDNA.
+ The parameters of EMDNA are initialized using parsimony-based characters,
  and two novel ways of parameter initialization using Dirichlet distributed parameters,
  and the reparameterization method by 
 \begin_inset CommandInset citation
@@ -284,20 +302,6 @@ status open
 
 kely and Hendy,
  in reverse order.
- 
-\end_layout
-
-\begin_layout Standard
-The results included in this paper are obtained by applying EMDNA to the gap-inclusive test DNA alignment made available at the github page of RAxML-NG v1.2.2 
-\begin_inset CommandInset citation
-LatexCommand citep
-key "Kozlov2019"
-literal "false"
-
-\end_inset
-
-.
- The alignment includes 705 columns for 8 sequences.
  
 \end_layout
 
@@ -2926,6 +2930,29 @@ HSS
 Wilcoxon-Mann-Whitney tests comparing root location
 \end_layout
 
+\begin_layout Standard
+At the time,
+ I was teaching a master's program on the use of phylogenetic models.
+ I used the BH model,
+ presented as the general Markov model,
+ as means to present the connection between continuous-time models and conditional probabilities,
+ and the specializations that explain how widely used models such as the general time-reversible model are nested within the BH model.
+ I did not teach my students any EM algorithm.
+ I also did not present the non-identifiabilty property of the BH method.
+ My teaching material about optimization was based on literature from Felsenstein's Inferring Phylogenies and Yang's Molecular Evolution:
+ A statistical approach,
+ covering rate matrix optimization,
+ tree search,
+ branch length optimization,
+ and MCMC techniques used for Bayesian inference.
+ Overlapping with the time-interval when I was teaching,
+ and when the preprint was in the review process,
+ I involved myself in an exciting collaboration where we were developing a method for incremental construction of likelihood-based phylogenies adapting some of the techniques introduced in UShER,
+ a software that was widely used during the covid-19 pandemic.
+ I did not manage my priorities properly,
+ and did not respond to the reviewers criticism about my stance taken in the preprint on rooting trees using the BH model.
+\end_layout
+
 \begin_layout Subsection
 Convergence of ECDLL
 \end_layout
@@ -3279,7 +3306,11 @@ name "ecdll_convergence"
 \end_layout
 
 \begin_layout Subsection
-Availability of results
+Site pattern weights
+\end_layout
+
+\begin_layout Subsection
+Visualizing trees estimated using FamilyJoining
 \end_layout
 
 \begin_layout Subsubsection
@@ -13435,6 +13466,48 @@ column sum (p<0.05 & z>0)
 
 \end_layout
 
+\begin_layout Subsection
+Warhol plot showcasing scalability of SEM-GMM
+\end_layout
+
+\begin_layout Standard
+\begin_inset Float figure
+placement document
+alignment document
+wide false
+sideways false
+status open
+
+\begin_layout Plain Layout
+\align center
+\begin_inset Graphics
+	filename /home/pk/Downloads/SEM-GMM_cropped.svg
+	lyxscale 70
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Plain Layout
+\begin_inset Caption Standard
+
+\begin_layout Plain Layout
+Each plot is the elapsed CPU time taken by SEM-GMM which is Structural EM for the Barry-Hartigan model,
+ referred to in contemporary mathematical literature as the general Markov model.
+ 
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
 \begin_layout Section
 Materials and Methods
 \end_layout
@@ -13778,23 +13851,45 @@ literal "false"
 The topology and DNA sequences associated with leaves have been made available on the github page https://github.com/prabhavk/prabhavk.github.io/tree/main/analysis to enable reproducibility of the analysis performed here.
 \end_layout
 
+\begin_layout Subsection
+Making Optimization a Process of Discovery
+\end_layout
+
+\begin_layout Standard
+The techniques implemented in this application are meant to firstly clarify the mistake that I made regarding estimating the root location by maximizing the log likelihood score using the Barry Hartigan model.
+ The long-term goal of this project is to make parameter optimization an exploratory process,
+ especially one that is less absolutist in terms of determining hyperparameters.
+ One aspect that I would like to implement is the partitioning of total optimization into coarse,
+ medium and fine-grained methods of parameter optimization.
+ Site patterns readily lends itself to a form of coarse-graining.
+ In the optimization procedure I have compressed alignments into unique columns,
+ and used number of repeated patterns as a weight when computing the log likelihood score.
+ A multi-regime (three for the sake of discussion) procedure would utilize a few heavy patterns in the 
+\end_layout
+
 \begin_layout Section
 Discussion
 \end_layout
 
 \begin_layout Standard
-We present here a web application to test the impact of initial parameters on the optimum obtained using an EM method applied to the general Markov model that takes as input an unrooted topology and sequences associated with leaves of the topology.
- The method has been tested on the experimental phylogeny dataset generated by Randall and colleagues.
- The reparameterization property of BH appear to hold for most locations of the root,
- and the discrepancy in initial log-likelihood values obtained at alternate root locations may be due to loss of precision in storing parameter values.
- Final log likelihood scores obtained with root placed at node 32 is significantly larger than scores obtained at alternate root locations for each of the initialization criteria tested,
- suggesting that EM tends to get trapped in root-specific local optima.
- It should not be possible to identify the location of the root by maximizing the log likelihood score using BH.
- However,
- one-sided Wilcoxon-Mann-Whitney tests show that EM initialized at some locations of the root,
- such as,
- node 32 tend to yield significantly larger log likelihood scores.
- 
+The methods developed here are applied to the test DNA alignment from RAXML-NG with a common topology inferred using FamilyJoining.
+ Results from one-sided Wilcoxon-Mann-Whitney suggest that between Parsimony and Dirichlet,
+ Parsimony scores better than Dirichlet at half of the root locations whereas Dirichlet scores better in the other half.
+ HSS initialized parameters yield significantly larger log likelihood scores at each location of root.
+ There appears a local attractor in that all methods obtain higher log likelihood at one node compared to others.
+ Overall,
+ this suggests that the log likelihood surface for BH model is rugged and prone to local optima.
+ The observation that optimizing log likelihood score misleadingly picks one root location over others should not be trusted as BH parameters can be reparameterized to obtain identical log likelihood scores at any root location.
+ I apologize to the reviewers of 
+\begin_inset CommandInset citation
+LatexCommand cite
+key "Kalaghatgi2020"
+literal "false"
+
+\end_inset
+
+,
+ and thank them for their suggestions.
 \end_layout
 
 \begin_layout Standard
@@ -13818,6 +13913,16 @@ literal "false"
 In conclusion,
  one should not trust rooted trees obtained by optimizing the general Markov model.
  If one is interested in optimizing the parameters of BH then results suggest that it is preferable to draw initial values from the Dirichlet distribution and not use initial parameters obtained with ancestral states inferred using the maximum parsimony criterion.
+\end_layout
+
+\begin_layout Section
+Acknowledgements
+\end_layout
+
+\begin_layout Standard
+This paper is dedicated to my English teacher Mrs.
+ Ruth Woodman,
+ and my colleagues are thanked for their support.
 \end_layout
 
 \begin_layout Standard

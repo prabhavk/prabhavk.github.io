@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 type MethodName = "Parsimony" | "Dirichlet" | "HSS";
 type PairKey = "parsimony_vs_dirichlet" | "parsimony_vs_hss" | "dirichlet_vs_hss";
 
-type DBRow = { method: string; val: number };
+type DBRow = { method: string; val: unknown };
 
 type PairResult = {
   winner: MethodName | "none";
@@ -33,6 +33,11 @@ function normalizeMethod(s: string): MethodName | null {
   // accept both legacy "ssh" and new "hss"
   if (m.includes("hss") || m.includes("ssh")) return "HSS";
   return null;
+}
+
+function toFiniteNumber(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 function erf(x: number): number {
@@ -61,12 +66,16 @@ function median(xs: number[]): number {
   return n % 2 ? a[mid] : 0.5 * (a[mid - 1] + a[mid]);
 }
 
-// safe MWU import
+// safe MWU import without implicit any
 async function safeMWU(A: number[], B: number[]): Promise<{ z: number }> {
   try {
-    const mod = await import("@bunchmark/stats");
-    const { z } = mod.mwu(A, B);
-    return { z: Number.isFinite(z) ? z : 0 };
+    const mod: unknown = await import("@bunchmark/stats");
+    const mwu = (mod as { mwu?: (a: number[], b: number[]) => { z: number } }).mwu;
+    if (typeof mwu === "function") {
+      const { z } = mwu(A, B);
+      return { z: Number.isFinite(z) ? z : 0 };
+    }
+    return { z: 0 };
   } catch {
     return { z: 0 };
   }
@@ -133,8 +142,8 @@ export async function GET(req: NextRequest) {
     const groups: Record<MethodName, number[]> = { Parsimony: [], Dirichlet: [], HSS: [] };
     for (const r of rows) {
       const m = normalizeMethod(r.method);
-      const v = Number((r as any).val);
-      if (!m || !Number.isFinite(v)) continue;
+      const v = toFiniteNumber(r.val);
+      if (!m || v === null) continue;
       groups[m].push(v);
     }
 

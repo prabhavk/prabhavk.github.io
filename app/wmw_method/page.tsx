@@ -42,7 +42,7 @@ function isApiErr(x: unknown): x is { error: string } {
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { ...init, headers: { accept: "application/json", ...(init?.headers || {}) } });
   const ct = res.headers.get("content-type") || "";
-  const body = await res.text(); // read once for better diagnostics
+  const body = await res.text();
 
   if (!ct.toLowerCase().includes("application/json")) {
     throw new Error(`Expected JSON but got ${ct || "unknown"} (HTTP ${res.status}). ${body.slice(0, 200)}`);
@@ -77,6 +77,33 @@ function fmtWinner(w: MethodName | "none"): string {
 function numericNodeId(s: string): number {
   const m = /^h_(\d+)$/.exec(s);
   return m ? Number(m[1]) : Number.POSITIVE_INFINITY;
+}
+
+/* ---------- Type guards for pairs (to avoid `any`) ---------- */
+
+function isMethodNameOrNone(x: unknown): x is MethodName | "none" {
+  return x === "Parsimony" || x === "Dirichlet" || x === "HSS" || x === "none";
+}
+
+function isPairResult(x: unknown): x is PairResult {
+  return (
+    isRecord(x) &&
+    isMethodNameOrNone(x.winner) &&
+    typeof x.p_value === "number" &&
+    typeof x.z === "number" &&
+    typeof x.nA === "number" &&
+    typeof x.nB === "number"
+  );
+}
+
+/** Safely grab a pair by possible keys (supports legacy aliases). */
+function pickPair(pairs: ApiResp["pairs"], keys: string[]): PairResult | undefined {
+  if (!isRecord(pairs)) return undefined;
+  for (const k of keys) {
+    const v = (pairs as Record<string, unknown>)[k];
+    if (isPairResult(v)) return v;
+  }
+  return undefined;
 }
 
 /* ----------------------- Page Component ----------------------- */
@@ -122,7 +149,6 @@ export default function WmwCompMethodPage() {
         const j = await fetchJSON<RootsResp>(u.toString(), { cache: "no-store" });
 
         if (j.ok) {
-          // unique & numeric sort like h_21, h_22, ...
           const uniqueSorted = Array.from(new Set(j.roots || []))
             .sort((a, b) => numericNodeId(a) - numericNodeId(b));
           setRootOptions(uniqueSorted);
@@ -169,22 +195,21 @@ export default function WmwCompMethodPage() {
 
           const json = await fetchJSON<ApiResp>(u.toString(), { cache: "no-store" });
 
-          const pd = (json.pairs as any).parsimony_vs_dirichlet;
+          const pd = pickPair(json.pairs, ["parsimony_vs_dirichlet"]);
           // tolerate either ..._hss or older ..._ssh keys from backend
-          const ps = (json.pairs as any).parsimony_vs_hss ?? (json.pairs as any).parsimony_vs_ssh;
-          const ds = (json.pairs as any).dirichlet_vs_hss ?? (json.pairs as any).dirichlet_vs_ssh;
+          const ps = pickPair(json.pairs, ["parsimony_vs_hss", "parsimony_vs_ssh"]);
+          const ds = pickPair(json.pairs, ["dirichlet_vs_hss", "dirichlet_vs_ssh"]);
 
           const row: TableRow = {
             node,
             sizes: json.sizes,
-            pdZ: pd?.z ?? NaN, pdP: pd?.p_value ?? NaN, pdWinner: (pd?.winner ?? "none") as any,
-            psZ: ps?.z ?? NaN, psP: ps?.p_value ?? NaN, psWinner: (ps?.winner ?? "none") as any,
-            dsZ: ds?.z ?? NaN, dsP: ds?.p_value ?? NaN, dsWinner: (ds?.winner ?? "none") as any,
+            pdZ: pd?.z ?? NaN, pdP: pd?.p_value ?? NaN, pdWinner: pd?.winner ?? "none",
+            psZ: ps?.z ?? NaN, psP: ps?.p_value ?? NaN, psWinner: ps?.winner ?? "none",
+            dsZ: ds?.z ?? NaN, dsP: ds?.p_value ?? NaN, dsWinner: ds?.winner ?? "none",
           };
           return row;
         })
       );
-      // keep rows in numeric root order
       results.sort((a, b) => numericNodeId(a.node) - numericNodeId(b.node));
       setRows(results);
     } catch (e: unknown) {

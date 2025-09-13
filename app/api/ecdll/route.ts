@@ -116,7 +116,7 @@ export async function GET(req: NextRequest) {
     const conn = db();
 
     // Base WHERE (we’ll append rep/root conditions below as needed)
-    let where = `WHERE job_id = ? AND LOWER(method) = ?`;
+    const where = `WHERE job_id = ? AND LOWER(method) = ?`;
     const baseParams: Array<string | number> = [jobId, methodLc];
 
     // Helper to run the “latest row” query with optional extra WHERE + params

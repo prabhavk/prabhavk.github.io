@@ -160,7 +160,19 @@ export default function WmwCompRootPage() {
     const N = nodes.length;
 
     // build per-method node -> index maps
-    const idx: Record<MethodName, Record<string, number>> = {} as any;
+    // build per-method node -> index maps
+  const idx: Record<MethodName, Record<string, number>> = {
+    Parsimony: {},
+    Dirichlet: {},
+    HSS: {},
+    };
+    for (const m of available) {
+      const resp = byMethod.get(m)!;
+      const map: Record<string, number> = {};
+      resp.nodes.forEach((n, i) => { map[n] = i; });
+      idx[m] = map;
+    }
+
     for (const m of available) {
       const resp = byMethod.get(m)!;
       idx[m] = Object.fromEntries(resp.nodes.map((n, i) => [n, i]));

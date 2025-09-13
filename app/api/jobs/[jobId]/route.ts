@@ -4,7 +4,7 @@ import { db } from "@/lib/pscale";
 
 export const runtime = "edge";
 
-type Status = "started" | "completed" | "failed";
+type Status = "started" | "completed" | "failed" | "blocked";
 
 /* ------------------------ small helpers ------------------------ */
 function isObject(x: unknown): x is Record<string, unknown> {
@@ -42,12 +42,19 @@ function toMysqlTimestampUTC(x: unknown): string | null {
 }
 
 /** Optional gating via EMTR_ALLOWED_SECRETS (comma/space separated) */
-function isAllowedByHeaderSecret(headerValue: string | null): boolean {
+function isAllowedBySecret(secret: string | null): boolean {
   const raw = process.env.EMTR_ALLOWED_SECRETS;
   if (!raw) return true;
   const allow = raw.split(/[,\s]+/g).map(s => s.trim()).filter(Boolean);
   if (allow.length === 0) return true;
-  return !!headerValue && allow.includes(headerValue);
+  return !!secret && allow.includes(secret);
+}
+
+function getSuppliedSecretFromHeaders(req: Request): string | null {
+  const hdr = req.headers.get("x-emtr-secret");
+  const auth = req.headers.get("authorization") || "";
+  const fromAuth = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+  return (hdr && hdr.trim()) || (fromAuth && fromAuth.trim()) || null;
 }
 
 /* ------------------------------- PATCH ------------------------------- */
@@ -59,21 +66,27 @@ export async function PATCH(req: Request, ctx: unknown) {
     }
 
     // Optional secret gating (match /api/jobs behavior)
-    if (!isAllowedByHeaderSecret(req.headers.get("x-emtr-secret"))) {
+    if (!isAllowedBySecret(getSuppliedSecretFromHeaders(req))) {
       return NextResponse.json({ ok: false, error: "Forbidden: invalid or missing secret" }, { status: 403 });
     }
 
     const body = (await req.json().catch(() => null)) as
-      | { status?: Status; finished_at?: string | number | null; dur_minutes?: number | null }
+      | {
+          status?: Status;
+          started_at?: string | number | null;
+          finished_at?: string | number | null;
+          dur_minutes?: number | null;
+          blocked_reason?: string | null;
+        }
       | null;
 
     if (!body) {
       return NextResponse.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
     }
 
-    const { status, finished_at, dur_minutes } = body;
+    const { status, started_at, finished_at, dur_minutes, blocked_reason } = body;
 
-    if (status && !["started", "completed", "failed"].includes(status)) {
+    if (status && !["started", "completed", "failed", "blocked"].includes(status)) {
       return NextResponse.json({ ok: false, error: "Invalid status" }, { status: 400 });
     }
 
@@ -83,6 +96,12 @@ export async function PATCH(req: Request, ctx: unknown) {
     if (status) {
       sets.push("status = ?");
       args.push(status);
+    }
+
+    if (started_at !== undefined) {
+      const startedAtSql = toMysqlTimestampUTC(started_at); // null clears
+      sets.push("started_at = ?");
+      args.push(startedAtSql);
     }
 
     let finishedAtSql: string | null | undefined = undefined;
@@ -105,16 +124,22 @@ export async function PATCH(req: Request, ctx: unknown) {
       args.push(dur);
     }
 
+    if (blocked_reason !== undefined) {
+      // Store as-is or trim if you prefer to enforce a max length
+      const reason = blocked_reason == null ? null : String(blocked_reason).slice(0, 2048);
+      sets.push("blocked_reason = ?");
+      args.push(reason);
+    }
+
     // If finished_at provided and dur_minutes not provided, compute automatically in SQL
     if (finished_at !== undefined && !userSetDuration) {
-      // TIMESTAMPDIFF uses UTC on PlanetScale; created_at should be UTC DATETIME too.
       sets.push("dur_minutes = ROUND(TIMESTAMPDIFF(SECOND, created_at, finished_at) / 60.0, 2)");
-      // no bound arg for this expression
+      // (no bound arg)
     }
 
     if (sets.length === 0) {
       return NextResponse.json(
-        { ok: false, error: "Nothing to update; provide at least one of status, finished_at, dur_minutes" },
+        { ok: false, error: "Nothing to update; provide one of status, started_at, finished_at, dur_minutes, blocked_reason" },
         { status: 400 }
       );
     }
@@ -130,9 +155,10 @@ export async function PATCH(req: Request, ctx: unknown) {
       job_id,
       updated: {
         ...(status !== undefined ? { status } : {}),
+        ...(started_at !== undefined ? { started_at } : {}),
         ...(finished_at !== undefined ? { finished_at } : {}),
         ...(dur_minutes !== undefined ? { dur_minutes } : {}),
-        // when auto-computed, dur_minutes will be visible on GET
+        ...(blocked_reason !== undefined ? { blocked_reason } : {}),
       },
     });
   } catch (e: unknown) {

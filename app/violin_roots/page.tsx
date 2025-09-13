@@ -44,6 +44,11 @@ function median(arr: number[]): number {
   if (!n) return NaN;
   return n % 2 ? a[(n - 1) >> 1] : (a[n / 2 - 1] + a[n / 2]) / 2;
 }
+function errMsg(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try { return JSON.stringify(e); } catch { return "Unknown error"; }
+}
 
 export default function ViolinRootsPage() {
   const [job, setJob] = useState<string>("");
@@ -91,7 +96,9 @@ export default function ViolinRootsPage() {
     try {
       const saved = localStorage.getItem("emtr:selectedJobId") ?? "";
       setJob(saved);
-    } catch {}
+    } catch {
+      // ignore
+    }
   }, []);
 
   // load root list first (final metric is fine just to list roots)
@@ -110,8 +117,8 @@ export default function ViolinRootsPage() {
         if (!res.ok || isErr(j)) throw new Error(isErr(j) ? j.error : `HTTP ${res.status}`);
         const resp = j as SeriesResp;
         setRoots(resp.roots ?? []);
-      } catch (e: any) {
-        setErr(e?.message ?? "Failed to load roots");
+      } catch (e: unknown) {
+        setErr(errMsg(e) || "Failed to load roots");
         setRoots([]);
       }
     })();
@@ -155,8 +162,8 @@ export default function ViolinRootsPage() {
         const [f, i] = await Promise.all([fetchMetricByRoot("final", method), fetchMetricByRoot("init", method)]);
         setFinalByRoot(Object.keys(f).length ? f : null);
         setInitByRoot(Object.keys(i).length ? i : null);
-      } catch (e: any) {
-        setErr(e?.message ?? "Failed to load by-root series");
+      } catch (e: unknown) {
+        setErr(errMsg(e) || "Failed to load by-root series");
         setFinalByRoot(null);
         setInitByRoot(null);
       } finally {
@@ -165,32 +172,27 @@ export default function ViolinRootsPage() {
     })();
   }, [job, roots, method, fetchMetricByRoot]);
 
-  /** Build combined side-by-side violins (init left, final right) + median connectors
-   *  Adds replicate info via `customdata` and `hovertemplate`.
-   */
+  /** Build combined side-by-side violins (init left, final right) + median connectors */
   const buildCombinedTraces = useCallback((): Partial<Data>[] => {
     if (!finalByRoot && !initByRoot) return [];
 
-    // Use the order from `roots`, but only include those with at least one series
     const ordered = roots.filter((r) => finalByRoot?.[r]?.length || initByRoot?.[r]?.length);
 
     const c = COLORS[method];
     const fillInit = hexToRgba(c, 0.16);
     const fillFinal = hexToRgba(c, 0.28);
 
-    // numeric x positions with a small offset for side-by-side placement
     const d = 0.18; // horizontal offset
-
     const traces: Partial<Data>[] = [];
 
     // 1) Violin traces (init left, final right) — include replicate index
     ordered.forEach((r, idx) => {
-      const i = idx + 1; // center position for this root
+      const i = idx + 1;
       const arrInit = initByRoot?.[r] ?? [];
       const arrFinal = finalByRoot?.[r] ?? [];
 
       if (arrInit.length) {
-        const reps = arrInit.map((_, k) => k + 1); // 1-based replicate index
+        const reps = arrInit.map((_, k) => k + 1);
         traces.push({
           type: "violin",
           name: `${r} (init)`,
@@ -198,7 +200,7 @@ export default function ViolinRootsPage() {
           x: new Array(arrInit.length).fill(i - d),
           customdata: reps,
           hovertemplate: `root=${r}<br>metric=init<br>rep=%{customdata}<br>ll=%{y}<extra></extra>`,
-          box: { visible: true }, // median line inside the box
+          box: { visible: true },
           meanline: { visible: true },
           points: "all",
           jitter: 0.3,
@@ -212,7 +214,7 @@ export default function ViolinRootsPage() {
       }
 
       if (arrFinal.length) {
-        const reps = arrFinal.map((_, k) => k + 1); // 1-based replicate index
+        const reps = arrFinal.map((_, k) => k + 1);
         traces.push({
           type: "violin",
           name: `${r} (final)`,
@@ -220,7 +222,7 @@ export default function ViolinRootsPage() {
           x: new Array(arrFinal.length).fill(i + d),
           customdata: reps,
           hovertemplate: `root=${r}<br>metric=final<br>rep=%{customdata}<br>ll=%{y}<extra></extra>`,
-          box: { visible: true }, // median line inside the box
+          box: { visible: true },
           meanline: { visible: true },
           points: "all",
           jitter: 0.3,
@@ -234,7 +236,7 @@ export default function ViolinRootsPage() {
       }
     });
 
-    // 2) Median connectors (short segment from init median to final median)
+    // 2) Median connectors
     const connX: (number | null)[] = [];
     const connY: (number | null)[] = [];
 
@@ -247,7 +249,6 @@ export default function ViolinRootsPage() {
       const mInit = median(arrInit);
       const mFinal = median(arrFinal);
 
-      // segment (i - d, mInit) -> (i + d, mFinal), then a null to break
       connX.push(i - d, i + d, null);
       connY.push(mInit, mFinal, null);
     });
@@ -282,7 +283,7 @@ export default function ViolinRootsPage() {
     },
     yaxis: {
       title: { text: "log-likelihood", font: { color: "black" } },
-      tickfont: { color: "black" },
+      tickfont: { color: "black" } ,
       zerolinecolor: "#e5e7eb",
       gridcolor: "#f3f4f6",
     },

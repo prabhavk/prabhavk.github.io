@@ -18,6 +18,9 @@ const ENDPOINTS = {
   allinfo: () => `${API_BASE}${self.ALL_INFO_PATH || "/api/allinfo"}`,
   trees:   () => `${API_BASE}/api/trees`,
   aa:      () => `${API_BASE}/api/aa-info`,
+  patternWeights: () => `${API_BASE}/api/pattern-weights`,
+  familyjoining: () => `${API_BASE}/api/familyjoining`,
+  trifle: () => `${API_BASE}/api/trifle`,
 };
 
 // ---------- TOGGLES ----------
@@ -79,18 +82,32 @@ let epsilonParam = null;      // captured from params if provided
 const seenTreeHashesByJob = new Map(); // jobId -> Set(hash) for per-job dedupe
 const pendingTreeUploads = new Set();  // in-flight tree uploads to await at end
 
+let PROG = {
+  rep: 0,            // 1-based current repetition
+  totalReps: 0,      // from params/settings
+  method: null,      // 'parsimony' | 'dirichlet' | 'hss'
+  nodeIndex: 0,      // "minute hand" (1..nodeTotal)
+  nodeTotal: 0,      // number of roots to place
+  rootName: "",      // e.g. "h_3"
+};
+
+function emitProgress(kind, ext = {}) {
+  // one channel for the UI store to subscribe to
+  postMessage({ type: "progress", kind, ...PROG, ...ext });
+}
+
 // ---------- generic helpers ----------
 function approxBytesOfRow(r) { return 8 + JSON.stringify(r).length + 1; }
 function approxBytesOfJson(obj) { return JSON.stringify(obj).length; }
 function canUseBeacon() { try { return typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function"; } catch { return false; } }
 function tryBeacon(url, obj) { try { const blob = new Blob([JSON.stringify(obj)], { type: "application/json" }); return navigator.sendBeacon(url, blob); } catch { return false; } }
-async function postJSON(url, obj, { preferBeacon = false, keepalive = false } = {}) {
+async function postJSON(url, obj, { preferBeacon = false, keepalive = false, extraHeaders = {} } = {}) {
   if (preferBeacon && canUseBeacon() && approxBytesOfJson(obj) <= BEACON_MAX_BYTES) {
     const ok = tryBeacon(url, obj); if (ok) return { ok: true, via: "beacon" };
   }
   const res = await fetch(url, {
     method: "POST",
-    headers: buildAuthHeaders(),
+    headers: { ...buildAuthHeaders(), ...extraHeaders },
     body: JSON.stringify(obj),
     keepalive,
     cache: "no-store",
@@ -267,6 +284,102 @@ function estimateCountsFromNewick(nw) {
   return { n_leaves, n_edges };
 }
 
+function normalizeEdgeList(raw) {
+  let x = raw;
+  if (typeof x === "string") { try { x = JSON.parse(x); } catch { return null; } }
+  if (!Array.isArray(x)) return null;
+  const out = [];
+  for (const e of x) {
+    if (!Array.isArray(e) || e.length !== 3) return null;
+    const a = e[0], b = e[1], w = Number(e[2]);
+    if (typeof a !== "string" || typeof b !== "string" || !Number.isFinite(w)) return null;
+    out.push([a, b, w]);
+  }
+  return out;
+}
+
+function inferLeafCountFromEdges(edges) {
+  const names = new Set();
+  for (const [u, v] of edges) { names.add(u); names.add(v); }
+  let number_of_leaves = 0;
+  for (const n of names) {
+    if (!/^h_/.test(n)) number_of_leaves++;
+  }
+  return number_of_leaves;
+}
+
+function countInternalNodesFromEdges(edges) {
+  const s = new Set();
+  for (const [u, v] of edges) {
+    if (/^h_/.test(u)) s.add(u);
+    if (/^h_/.test(v)) s.add(v);
+  }
+  return s.size;
+}
+
+async function postFamilyjoining(jobId, edges, meta = {}) {
+  const list = normalizeEdgeList(edges);
+  if (!list || !list.length) return false;
+
+  // optional: also provide named-edge objects for backends that want {u,v,w}
+  const edgeObjects = list.map(([u, v, w]) => ({ u, v, w }));
+
+  // Let the UI know how many internal nodes (tick marks) we expect
+  const internalCount = countInternalNodesFromEdges(list);
+  if (internalCount) {
+    PROG.nodeTotal = internalCount;
+    emitProgress("setup:edges", { nodeTotal: internalCount });
+  }
+
+  const payload = {
+    // IDs (send both names)
+    job_id: jobId,
+    run_id: jobId,
+
+    // Meta (with sensible defaults)
+    source: meta.source ?? "familyjoining",
+    method: meta.method ?? "na",
+    label:  meta.label  ?? "final",
+    rep:    safeNumber(meta.rep),
+    iter:   safeNumber(meta.iter),
+    epsilon: safeNumber(meta.epsilon),
+
+    // Root: avoid null (some validators reject null)
+    root:   (meta.root != null ? String(meta.root) : ""),
+
+    // Counts (compute here if not supplied)
+    n_leaves: Number.isFinite(meta.n_leaves) ? meta.n_leaves : inferLeafCountFromEdges(list),
+    n_edges:  Number.isFinite(meta.n_edges)  ? meta.n_edges  : list.length,
+
+    // Edges (send multiple shapes/keys)
+    edge_list: list,        // [[u,v,w], ...]
+    edges:     list,        // alias some servers expect
+    edge_objects: edgeObjects
+  };
+
+  try {
+    upLog(`↗ upsert /api/familyjoining (edges=${list.length})`);
+    const res = await postJSON(ENDPOINTS.familyjoining(), payload, {
+      keepalive: true,
+      extraHeaders: {
+        "x-job-id": jobId,
+        "x-run-id": jobId
+      }
+    });
+    dbLog(`[familyjoining] saved via ${res.via ?? "db"}`);
+    upLog(`✔ upsert /api/familyjoining ok ${res.via ? `(via ${res.via})` : ""}`);
+    return true;
+  } catch (e) {
+    const keys = Object.keys(payload).join(",");
+    postMessage({
+      type: "log",
+      line: `⚠️ familyjoining upload failed: ${String(e)} · keys=[${keys}] · edges=${list.length}`
+    });
+    return false;
+  }
+}
+
+
 // Robustly parse [FJ_TREE] {json or raw} / [TREE] ... / NEWICK:
 function maybeParseTreeLine(lineStr, jobId) {
   let line = stripAnsi(String(lineStr)).trim();
@@ -314,13 +427,14 @@ function maybeParseTreeLine(lineStr, jobId) {
       const iter = Number(obj.iter);               if (Number.isFinite(iter)) meta.iter = iter;
       const eps  = Number(obj.epsilon ?? obj.eps); if (Number.isFinite(eps))  meta.epsilon = eps;
 
-      return { newick: ensureSemicolon(newick), meta };
+      const edges = (obj.edge_list !== undefined ? obj.edge_list : null);
+      return { newick: ensureSemicolon(newick), meta, edges };
     } catch {}
   }
 
   const meta = {}; const jid2 = String(jobId ?? "").trim();
   if (jid2) meta.job_id = jid2;
-  return { newick: ensureSemicolon(payload), meta };
+  return { newick: ensureSemicolon(payload), meta, edges: null };
 }
 
 async function postTree(jobId, newick, meta = {}) {
@@ -478,6 +592,108 @@ function normalizeAAObject(raw) {
   return out;
 }
 
+function normalizeTrifleBody(raw) {
+  if (!raw || typeof raw !== "object") return null;
+
+  const num   = (v) => (v == null || v === "" ? NaN : Number(v));
+  const toInt = (v) => (v == null || v === "" ? NaN : parseInt(v, 10));
+
+  const out = {};  
+  out.method = String(raw.method || "dirichlet").toLowerCase();
+  out.rep    = Number.isFinite(raw.rep) ? raw.rep : toInt(raw.rep);
+  out.root   = raw.root != null ? String(raw.root) : "";
+
+  const llInit = num(raw.ll_init);
+  out.ll_init = Number.isFinite(llInit) ? llInit : null;
+  if (raw.root_prob_init  != null) out.root_prob_init  = raw.root_prob_init;
+  if (raw.trans_prob_init != null) out.trans_prob_init = raw.trans_prob_init;
+
+  
+  if (Array.isArray(raw.layers)) {
+    const layers = [];
+    for (const L of raw.layers) {
+      if (!L || typeof L !== "object") continue;
+      const layerId = Number(L.layer);
+      if (!(layerId === 0 || layerId === 1 || layerId === 2)) continue;
+
+      const iter = num(L.iter);
+      const lli  = num(L.ll_initial);
+      const llf  = num(L.ll_final);
+
+      layers.push({
+        layer: layerId,
+        iter: Number.isFinite(iter) ? iter : null,
+        ll_initial: Number.isFinite(lli) ? lli : null,
+        ll_final:   Number.isFinite(llf) ? llf : null,
+        root_prob_final: L.root_prob_final ?? null,
+        trans_prob_final: L.trans_prob_final ?? null,
+        ecd_ll_per_iter:  L.ecd_ll_per_iter  ?? null,
+      });
+    }
+    if (!layers.length || !out.root || !Number.isFinite(out.rep)) return null;
+    out.layers = layers;
+    return out; 
+  }
+
+  
+  const iterV = Array.isArray(raw.iter_trifle) ? raw.iter_trifle : [];
+  const lliV  = Array.isArray(raw.ll_initial_trifle) ? raw.ll_initial_trifle : [];
+  const llfV  = Array.isArray(raw.ll_final_trifle) ? raw.ll_final_trifle : [];
+  const rpfV  = Array.isArray(raw.root_prob_final_trifle) ? raw.root_prob_final_trifle : [];
+  const tpfV  = Array.isArray(raw.trans_prob_final_trifle) ? raw.trans_prob_final_trifle : [];
+  const ecdV  = Array.isArray(raw.ecd_ll_per_iter_for_trifle) ? raw.ecd_ll_per_iter_for_trifle : [];
+
+  const layers = [];
+  for (let layer = 0; layer < 3; layer++) {
+    const iter = num(iterV[layer]);
+    const lli  = num(lliV[layer]);
+    const llf  = num(llfV[layer]);
+
+    
+    let ecd = ecdV[layer] ?? null;
+    if (Array.isArray(ecd)) {
+      const obj = {};
+      for (const p of ecd) {
+        if (Array.isArray(p) && p.length >= 2) {
+          const k = toInt(p[0]); const v = num(p[1]);
+          if (Number.isFinite(k) && Number.isFinite(v)) obj[k] = v;
+        }
+      }
+      ecd = Object.keys(obj).length ? obj : null;
+    } else if (!ecd || typeof ecd !== "object") {
+      ecd = null;
+    }
+
+    const layerObj = {
+      layer,
+      iter: Number.isFinite(iter) ? iter : null,
+      ll_initial: Number.isFinite(lli) ? lli : null,
+      ll_final:   Number.isFinite(llf) ? llf : null,
+      root_prob_final: rpfV[layer] ?? null,
+      trans_prob_final: tpfV[layer] ?? null,
+      ecd_ll_per_iter: ecd,
+    };
+
+    if (
+      layerObj.iter !== null ||
+      layerObj.ll_initial !== null ||
+      layerObj.ll_final !== null ||
+      layerObj.root_prob_final != null ||
+      layerObj.trans_prob_final != null ||
+      layerObj.ecd_ll_per_iter != null
+    ) {
+      layers.push(layerObj);
+    }
+  }
+
+  if (!layers.length || !out.root || !Number.isFinite(out.rep)) return null;
+  out.layers = layers;
+  return out;
+}
+
+
+
+
 async function uploadAAInfo(jobId, aaObj) {
   if (!jobId || !aaObj) return { ok: false };
 
@@ -523,6 +739,50 @@ async function uploadAAInfo(jobId, aaObj) {
     return { ok: true };
   } catch (e) {
     postMessage({ type: "log", line: `❌ /api/aa-info failed: ${String(e)}` });
+    return { ok: false, error: e };
+  }
+}
+
+async function upsertPatternWeights(jobId, numPatterns, weights, cumWeights) {
+  if (!jobId) return { ok: false, reason: "missing jobId" };
+
+  const payload = {
+    job_id: jobId,
+    num_patterns: Number(numPatterns),
+    weights,
+    cum_weights: cumWeights,
+  };
+
+  try {
+    const size = approxBytesOfJson(payload);
+    upLog(`↗ upsert /api/pattern-weights (job=${jobId}, ~${size}B)`);
+    const res = await postJSON(ENDPOINTS.patternWeights(), payload, { keepalive: true });
+    dbLog(`[PATTERN_WEIGHTS] saved via ${res.via}`);
+    upLog(`✔ upsert /api/pattern-weights ok (via ${res.via})`);
+    return { ok: true };
+  } catch (e) {
+    postMessage({ type: "log", line: `❌ /api/pattern-weights failed: ${String(e)}` });
+    return { ok: false, error: e };
+  }
+}
+
+async function uploadTrifle(jobId, shaped) {
+  if (!jobId) {
+    postMessage({ type: "log", line: "⚠️ EM_Trifle upload skipped: missing jobId" });
+    return { ok: false };
+  }
+  try {
+    const size = approxBytesOfJson(shaped);
+    upLog(`↗ upsert /api/trifle (job=${jobId}, ~${size}B)`);
+    const res = await postJSON(ENDPOINTS.trifle(), shaped, {
+      keepalive: true,
+      extraHeaders: { "x-job-id": jobId }
+    });
+    dbLog(`[EM_Trifle] saved via ${res.via}`);
+    upLog(`✔ upsert /api/trifle ok (via ${res.via})`);
+    return { ok: true };
+  } catch (e) {
+    postMessage({ type: "log", line: `❌ /api/trifle failed: ${String(e)}` });
     return { ok: false, error: e };
   }
 }
@@ -674,12 +934,100 @@ function handlePrint(txt) {
     }
   }
 
+  // repetition line: "rep 1"
+  {
+    const m = line.match(/^rep\s+(\d+)/i);
+    if (m) {
+      PROG.rep = Number(m[1]);
+      emitProgress("rep");
+      return;
+    }
+  }
+
+  // per-root progress: "node 1 of 6:h_1"
+  {
+    const m = line.match(/^node\s+(\d+)\s+of\s+(\d+):\s*([A-Za-z0-9_.-]+)/i);
+    if (m) {
+      PROG.nodeIndex = Math.max(1, Math.min(Number(m[1]), Number(m[2])));
+      PROG.nodeTotal = Number(m[2]);
+      PROG.rootName  = m[3];
+      emitProgress("node");
+      return;
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // NEW: parse C++ progress emitters:  [EM_Method] { json }
+  // Accepts both {type:"progress", kind:"..."} and legacy {event:"..."}.
+  // Maps legacy -> store kinds and updates PROG fields before emitProgress.
+  // --------------------------------------------------------------------------
+  if (line.startsWith("[EM_Method]")) {
+    const brace = line.indexOf("{");
+    if (brace !== -1) {
+      try {
+        const obj = JSON.parse(line.slice(brace));
+
+        // Figure out the event "kind"
+        let kind = obj.kind;
+        if (!kind && obj.event) {
+          const ev = String(obj.event).toLowerCase();
+          if (ev === "method_start") kind = "method:start";
+          else if (ev === "rep_end") kind = "rep";
+          else if (ev === "layer_done") kind = "layer:done";
+          else if (ev === "setup_reps") kind = "setup:reps";
+          else if (ev === "setup_edges") kind = "setup:edges";
+        }
+
+        // Update progress context + payload extension
+        const ext = {};
+
+        if (obj.method) {
+          PROG.method = String(obj.method).toLowerCase();
+          ext.method = PROG.method;
+        }
+
+        if (Number.isFinite(obj.rep)) { PROG.rep = Number(obj.rep); ext.rep = PROG.rep; }
+        if (Number.isFinite(obj.totalReps)) PROG.totalReps = Number(obj.totalReps);
+        if (Number.isFinite(obj.total_reps)) PROG.totalReps = Number(obj.total_reps);
+
+        if (Number.isFinite(obj.nodeIndex)) { PROG.nodeIndex = Number(obj.nodeIndex); ext.nodeIndex = PROG.nodeIndex; }
+        if (Number.isFinite(obj.node_index)) { PROG.nodeIndex = Number(obj.node_index); ext.nodeIndex = PROG.nodeIndex; }
+
+        if (Number.isFinite(obj.nodeTotal)) { PROG.nodeTotal = Number(obj.nodeTotal); ext.nodeTotal = PROG.nodeTotal; }
+        if (Number.isFinite(obj.total_nodes)) { PROG.nodeTotal = Number(obj.total_nodes); ext.nodeTotal = PROG.nodeTotal; }
+
+        if (obj.rootName) { PROG.rootName = String(obj.rootName); ext.rootName = PROG.rootName; }
+        if (obj.root_name) { PROG.rootName = String(obj.root_name); ext.rootName = PROG.rootName; }
+
+        // Layer index (0|1|2) to drive the long hand
+        if (Number.isFinite(obj.layer)) ext.layer = Number(obj.layer);
+
+        // If this is a setup message, ensure PROG has the counts
+        if (kind === "setup:reps") {
+          if (Number.isFinite(obj.totalReps)) PROG.totalReps = Number(obj.totalReps);
+          if (Number.isFinite(obj.total_reps)) PROG.totalReps = Number(obj.total_reps);
+          ext.totalReps = PROG.totalReps;
+        }
+        if (kind === "setup:edges") {
+          if (Number.isFinite(obj.nodeTotal)) PROG.nodeTotal = Number(obj.nodeTotal);
+          if (Number.isFinite(obj.total_nodes)) PROG.nodeTotal = Number(obj.total_nodes);
+          ext.nodeTotal = PROG.nodeTotal;
+        }
+
+        if (kind) emitProgress(kind, ext);
+      } catch (e) {
+        postMessage({ type: "log", line: `EM_Method parse error: ${String(e)} :: ${line.slice(0,200)}` });
+      }
+    }
+    return; // handled
+  }
+  // --------------------------------------------------------------------------
+
   if (jobIdForThisRun && line.startsWith("[EM_AllInfo]")) {
     const brace = line.indexOf("{");
     if (brace !== -1) { handleBestLine(line.slice(brace)); return; }
   }
 
-  // NEW: handle AA optimization bundles
   if (jobIdForThisRun && line.startsWith("[AA_All_info]")) {
     const brace = line.indexOf("{");
     if (brace !== -1) {
@@ -694,16 +1042,94 @@ function handlePrint(txt) {
     }
   }
 
+  if (jobIdForThisRun && (line.startsWith("[EM_Trifle]") || line.startsWith("[EMTrifle]"))) {
+    const brace = line.indexOf("{");
+    if (brace !== -1) {
+      try {
+        const obj = JSON.parse(line.slice(brace));
+        const shaped = normalizeTrifleBody(obj);
+        if (shaped) {
+          shaped.job_id = jobIdForThisRun; // attach the current job id          
+          // Upload directly from the worker
+          void uploadTrifle(jobIdForThisRun, shaped);
+          // Optional: still forward to UI for logs/inspection
+          postMessage({ type: "emtrifle", payload: shaped });
+          emitProgress("root:done", {
+            method: shaped.method,
+            rep: shaped.rep,
+            rootName: shaped.root,
+            layers: shaped.layers,        // UI can read ll_initial/ll_final/iter, etc.
+          });
+        } else {
+          postMessage({ type: "log", line: "EM_Trifle: payload missing required fields (root/rep/layers)" });
+        }
+      } catch (e) {
+        postMessage({ type: "log", line: `EM_Trifle parse error: ${String(e)} :: ${line.slice(0,200)}` });
+      }
+    }
+    return;
+  }
+  
+  // FAMILYJOINING edge uploads (accept both new and old tags)
+  if (jobIdForThisRun && (line.startsWith("[FAMILYJOINING]") || line.startsWith("[FJ_EDGES]"))) {
+    const brace = line.indexOf("{");
+    if (brace !== -1) {
+      try {
+        const obj = JSON.parse(line.slice(brace));
+        // Accept either full object with edge_list or a bare array payload
+        const edges = Array.isArray(obj) ? obj : (obj.edge_list ?? obj.edges ?? obj.data);
+        if (!edges) throw new Error("missing edge_list");
+        postMessage({ type: "edges", edges });
+        void postFamilyjoining(jobIdForThisRun, edges, obj);
+      } catch (e) {
+        postMessage({ type: "log", line: `FAMILYJOINING parse error: ${String(e)} :: ${line.slice(0,200)}` });
+      }
+    }
+    return;
+  }
+
+  if (jobIdForThisRun && line.startsWith("[PATTERN_WEIGHTS]")) {
+    const brace = line.indexOf("{");
+    if (brace !== -1) {
+      try {
+        const obj = JSON.parse(line.slice(brace));
+        const n = Number(obj?.num_patterns ?? obj?.numPatterns);
+        const weights = Array.isArray(obj?.weights) ? obj.weights : null;
+        const cum     = Array.isArray(obj?.cum_weights ?? obj?.cumWeights)
+                        ? (obj.cum_weights ?? obj.cumWeights)
+                        : null;
+
+        if (!Number.isFinite(n) || !weights || !cum) {
+          postMessage({ type: "log", line: "PATTERN_WEIGHTS: invalid fields; expected {num_patterns, weights[], cum_weights[]}" });
+        } else {
+          // fire-and-forget (like AA uploader)
+          void upsertPatternWeights(jobIdForThisRun, n, weights, cum);
+        }
+      } catch (e) {
+        postMessage({ type: "log", line: `PATTERN_WEIGHTS parse error: ${String(e)} :: ${line.slice(0,200)}` });
+      }
+    }
+    return;
+  }
+
   if (jobIdForThisRun) {
     const parsed = maybeParseTreeLine(line, jobIdForThisRun);
-    if (parsed && parsed.newick) {
-      const p = postTree(jobIdForThisRun, parsed.newick, parsed.meta || {});
-      pendingTreeUploads.add(p);
-      p.finally(() => pendingTreeUploads.delete(p));
+    if (parsed) {
+      if (parsed.newick) {
+        const p = postTree(jobIdForThisRun, parsed.newick, parsed.meta || {});
+        pendingTreeUploads.add(p);
+        p.finally(() => pendingTreeUploads.delete(p));
+      }
+      if (parsed.edges) {
+        const jid = (parsed.meta && parsed.meta.job_id) ? parsed.meta.job_id : jobIdForThisRun;
+        void postFamilyjoining(jid, parsed.edges, parsed.meta || {});
+      }
     }
   }
-  postMessage ({ type: "log", line: line});
+
+  postMessage({ type: "log", line: line });
 }
+
 
 /* ---------------- worker entry + runtime toggle handler ---------------- */
 
@@ -738,9 +1164,12 @@ self.onmessage = async (e) => {
 
   startedAtMs = Date.now();
   jobIdForThisRun = jobId || `job-${Date.now()}`;
+  PROG = { rep: 0, totalReps: 0, method: null, nodeIndex: 0, nodeTotal: 0, rootName: "" };
+  emitProgress("setup:reset");
   rowsEndpointDisabled = false;
   rowsEndpointErrorReason = "";
   treesUploadedCount = 0;
+  epsilonParam = null;
 
   // reset per-run state
   lastRepSeen = null;
@@ -778,6 +1207,11 @@ self.onmessage = async (e) => {
         };
       }
     } catch {}
+
+    if (cfg && Number.isFinite(cfg.reps)) {
+      PROG.totalReps = Number(cfg.reps);
+      emitProgress("setup:reps", { totalReps: PROG.totalReps });
+    }
 
     // ---- Ensure the job exists BEFORE any PATCH/rows
     if (cfg && Number.isFinite(cfg.thr) && Number.isFinite(cfg.reps) && Number.isFinite(cfg.maxIter)) {
@@ -898,6 +1332,7 @@ self.onmessage = async (e) => {
   return;
 }
 
+  if (!(e?.data && e.data.params)) return;
   const { params, dnaSeqBytes, aaSeqBytes, jobId, fileNames } = e.data;
 
   startedAtMs = Date.now();
@@ -989,13 +1424,18 @@ self.onmessage = async (e) => {
     // Params
     const thr = Number(params.thr);
     const reps = params.reps | 0;
+    PROG.totalReps = Number(reps) || 0;
+    emitProgress("setup:reps", { totalReps: PROG.totalReps });
     const maxIter = params.maxIter | 0;
     const D_pi = Array.isArray(params?.D_pi) && params.D_pi.length === 4 ? params.D_pi.map(Number) : [100,100,100,100];
     const D_M  = Array.isArray(params?.D_M)  && params.D_M.length  === 4 ? params.D_M.map(Number)  : [100,2,2,2];
 
-    await upsertJobMetadata(jobIdForThisRun, { thr, reps, maxIter, D_pi, D_M });
-
-    postMessage({ type: "log", line: `WASM dispatch: EM_main (reps=${reps}, maxIter=${maxIter}, thr=${thr})` });
+    if ([thr, reps, maxIter].every(Number.isFinite)) {
+      await upsertJobMetadata(jobIdForThisRun, { thr, reps, maxIter, D_pi, D_M });
+    } else {
+      postMessage({ type: "log", line: "⚠️ params missing or invalid; skipping /api/jobs upsert" });
+    }
+      postMessage({ type: "log", line: `WASM dispatch: EM_main (reps=${reps}, maxIter=${maxIter}, thr=${thr})` });
 
     // Run EM and stream rows
     let rc = 0;

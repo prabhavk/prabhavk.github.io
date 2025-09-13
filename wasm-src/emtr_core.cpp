@@ -30,6 +30,55 @@ int ll_precision = 14;
 #include "third_party/eigen3/unsupported/Eigen/MatrixFunctions"
 #include <tuple>
 
+
+static inline void emit_progress(const char* kind,
+                                 const char* method = nullptr,
+                                 int rep = -1,
+                                 int nodeIndex = -1,
+                                 int nodeTotal = -1,
+                                 int layer = -1,
+                                 const char* rootName = nullptr,
+                                 int totalReps = -1) {
+  nlohmann::json j{
+    {"type", "progress"},
+    {"kind", kind}
+  };
+  if (method)     j["method"]     = method;
+  if (rep >= 0)   j["rep"]        = rep;
+  if (nodeIndex>=0) j["nodeIndex"]= nodeIndex;
+  if (nodeTotal>=0) j["nodeTotal"]= nodeTotal;
+  if (layer >= 0) j["layer"]      = layer;
+  if (rootName)   j["rootName"]   = rootName;
+  if (totalReps>=0) j["totalReps"]= totalReps;
+
+  std::cout << "[EM_Method] " << j.dump() << "\n";
+  std::fflush(stdout);
+}
+
+static inline void emit_layer_done(const char* method,
+                                   int rep1,
+                                   int nodeIndex1,
+                                   int nodeTotal,
+                                   int layerIdx,
+                                   const std::string& rootName,
+                                   double ll = NAN) {
+  nlohmann::json j{
+    {"type", "progress"},
+    {"kind", "layer:done"},
+    {"method", method},
+    {"rep", rep1},
+    {"nodeIndex", nodeIndex1},
+    {"nodeTotal", nodeTotal},
+    {"layer", layerIdx},
+    {"rootName", rootName}
+  };
+  if (!std::isnan(ll)) j["ll"] = ll;
+  std::cout << "[EM_Method] " << j.dump() << "\n";
+  std::fflush(stdout);
+}
+
+
+
 using Matrix20d  = Eigen::Matrix<double,20,20>;
 using Matrix20cd = Eigen::Matrix<std::complex<double>,20,20>;
 using Vector20cd = Eigen::Matrix<std::complex<double>,20,1>;
@@ -40,8 +89,6 @@ struct Spectrum {
     Vector20cd lambda;
     bool ok = false;
 };
-
-
 
 
 namespace fj {
@@ -155,34 +202,8 @@ public:
 		// vector <tuple <string, string, double>> edge_vector = this->GetEdgeVector();
 		if (striphidden_node) nwk = strip_hidden_node_labels_(nwk);
 		newick_ = std::move(nwk);
-	}
-
-	void EmitNewickJSON(const std::string& job_id = "", const std::string& label  = "familyjoining", const std::string& method  = "epsilon_zero") const {
-		if (newick_.empty()) {
-			throw std::runtime_error("EmitNewickJSON: Newick not set. Call SetNewick() first.");
-			}
-
-  				// const std::string  edge_json = edge_list_to_json(edge_vector);
-
-				std::cout << "[FJ_TREE]{"
-				<< "\"job_id\":\"" << json_escape_(job_id) << "\","
-				<< "\"label\":\""  << json_escape_(label)  << "\","
-				<< "\"method\":\"" << json_escape_(method)   << "\","
-				<< "\"epsilon\":"  << std::setprecision(6) << epsilon_ << ","
-				<< "\"newick\":\"" << json_escape_(newick_) << "\""
-				// << "\"edge_list\":\"" <<  edge_json << "\""
-				<< "}" << std::endl;
-	}
+	}	
   // ------------------------ Public data types ------------------------
-//   struct PairHash {
-//     template <class T1, class T2>
-//     std::size_t operator()(const std::pair<T1,T2>& p) const noexcept {
-//       std::size_t h1 = std::hash<T1>{}(p.first);
-//       std::size_t h2 = std::hash<T2>{}(p.second);
-//       return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1<<6) + (h1>>2));
-//     }
-//   };
-
   const Graph& GetTree() const { return T; }
 
   // ------------------------ Construction ------------------------
@@ -190,14 +211,11 @@ public:
     ReadAlignment(alignment_path, alignment_);
 
     // dm_ = ComputeNHDistances(alignment_);
-	cout << "here 1 \n" << endl;
+	// cout << "here 1 \n" << endl;
 	int k = 5;
 	int repeats = 2;
 	dm_ = ComputeLogDetDistances(alignment_);
-	SetFJTree(epsilon);
-	SetNewick();	
-	EmitNewickJSON();
-	
+	SetFJTree(epsilon);	
   }
 
   // Build FJ tree from distances computed in constructor
@@ -822,7 +840,7 @@ ComputeKFoldCVDistances(const std::unordered_map<std::string, std::string>& aln,
     // Use min length across all sequences (robust if some lengths differ)
     std::size_t NAC = std::numeric_limits<std::size_t>::max();
     for (const auto& nm : names) NAC = std::min(NAC, aln.at(nm).size());
-	cout << "alignment length is " << NAC << endl;
+	// cout << "alignment length is " << NAC << endl;
     if (NAC == 0) throw std::runtime_error("Alignment length is zero.");
 
     // Base index 0..NAC-1
@@ -857,27 +875,27 @@ ComputeKFoldCVDistances(const std::unordered_map<std::string, std::string>& aln,
         // Debug print only for first repetition
         if (r == 0) {
             for (int k = 0; k < K; ++k) {
-                std::cout << "Fold " << k 
-                          << " -> test size: " << testFolds[k].size()
-                          << ", train size: " << trainFolds[k].size() << "\n";
+                // std::cout << "Fold " << k 
+                        //   << " -> test size: " << testFolds[k].size()
+                        //   << ", train size: " << trainFolds[k].size() << "\n";
             }
             // Print positions in test data for first fold
             if (!testFolds.empty()) {
-                std::cout << "Test positions (fold 0): ";
-                for (auto pos : testFolds[0]) std::cout << pos << " ";
-                std::cout << "\n";
-				std::cout << "Train positions (fold 0): ";
-                for (auto pos : trainFolds[0]) std::cout << pos << " ";
-                std::cout << "\n";
+                // std::cout << "Test positions (fold 0): ";
+                // for (auto pos : testFolds[0]) std::cout << pos << " ";
+                // std::cout << "\n";
+				// std::cout << "Train positions (fold 0): ";
+                // for (auto pos : trainFolds[0]) std::cout << pos << " ";
+                // std::cout << "\n";
             }
             // Print positions in train data for fifth fold (index 4)
             if (K >= 5) {
-				std::cout << "Test positions (fold 4): ";
-                for (auto pos : testFolds[4]) std::cout << pos << " ";
-                std::cout << "\n";
-                std::cout << "Train positions (fold 4): ";
-                for (auto pos : trainFolds[4]) std::cout << pos << " ";
-                std::cout << "\n";
+				// std::cout << "Test positions (fold 4): ";
+                // for (auto pos : testFolds[4]) std::cout << pos << " ";
+                // std::cout << "\n";
+                // std::cout << "Train positions (fold 4): ";
+                // for (auto pos : trainFolds[4]) std::cout << pos << " ";
+                // std::cout << "\n";
             }
         }
 
@@ -2324,11 +2342,9 @@ int MST::ConvertDNAToChar(char dna) {
 	int dna_char = 4;
 	if (this->mapDNAtoInteger.find(dna_upper) != this->mapDNAtoInteger.end()) {
 		dna_char = this->mapDNAtoInteger[dna_upper];
-	} else {
-		if (isspace(dna)) {
-			cout << "DNA character is a whitespace" << endl;
-		}
-		cout << "DNA character " << dna_upper << " is not in dictionary keys" << endl;
+	} else {		
+		cout << "DNA character " << dna_upper << " not recognized" << endl;
+		throw mt_error("DNA character not recognized");
 	}	
 	return (dna_char);
 }
@@ -2343,7 +2359,7 @@ void MST::ReadPhyx(string sequenceFileNameToSet) {
     vector <string> splitLine = emtr::split_ws(line);
     this->numberOfInputSequences = stoi(splitLine[0]);
     this->sequence_length = stoi(splitLine[1]);
-    cout << "sequence file contains " << this->numberOfInputSequences << " sequences of length " << this->sequence_length << endl;
+    // cout << "sequence file contains " << this->numberOfInputSequences << " sequences of length " << this->sequence_length << endl;
     while(getline(inputFile,line)) {
         vector <string> splitLine = emtr::split_ws(line);
         seqName = splitLine[0];
@@ -2731,6 +2747,13 @@ void clique::ComputeBelief() {
 			this->belief[dna_x][dna_y] = factor[dna_x][dna_y]/scalingFactor;
 		}
 	}
+	for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
+		for (int dna_y = 0 ; dna_y < 4; dna_y ++) {			
+			if (isnan(this->belief[dna_x][dna_y])){
+				throw mt_error("belief has nan");
+			}
+		}
+	}
 	// cout << "6e" << endl;
 	this->logScalingFactorForClique += log(scalingFactor);
 }
@@ -2745,7 +2768,7 @@ void clique::AddChild(clique * C) {
 	this->outDegree += 1;
 }
 
-void clique::SetInitialPotentialAndBelief(int site) {	
+void clique::SetInitialPotentialAndBelief(int site) {
 	// Initialize psi
 	// V = (X,Y) X->Y (wlog), X is always an unobserved vertex
 	int matchingCase;
@@ -2761,8 +2784,10 @@ void clique::SetInitialPotentialAndBelief(int site) {
 		this->initialPotential = y->transitionMatrix;
 		int dna_y = y->DNAcompressed[site];
 		if (dna_y == -1) {
+			// cout << "case 1" << endl;
 			matchingCase = 1; // gap
 		} else {
+			// cout << "case 2" << endl;
 			matchingCase = 2;			
 			for (int dna_p = 0; dna_p < 4; dna_p++) {
 				for (int dna_c = 0; dna_c < 4; dna_c++) {
@@ -2775,11 +2800,11 @@ void clique::SetInitialPotentialAndBelief(int site) {
 			}	
 		}
 	}
-
 	
 	// Case 2. X and Y are hidden and X is not the root
 	// psi = P(Y|X)
 	if (!y->observed) {
+		// cout << "case 3" << endl;
 		matchingCase = 3;
 		this->initialPotential = y->transitionMatrix;		
 	}	
@@ -2787,6 +2812,7 @@ void clique::SetInitialPotentialAndBelief(int site) {
 	// Case 3. X and Y are hidden and X is the root and "this" is not the root clique
 	// psi = P(Y|X)
 	if (!y->observed and (x->parent == x) and (this->parent != this)) {
+		// cout << "case 4" << endl;
 		matchingCase = 4;
 		this->initialPotential = y->transitionMatrix;
 	}
@@ -2794,6 +2820,7 @@ void clique::SetInitialPotentialAndBelief(int site) {
 	// Case 4. X and Y are hidden and X is the root and "this" is the root clique
 	// psi = P(X) * P(Y|X) 
 	if (!y->observed and (x->parent == x) and (this->parent == this)) {	
+		// cout << "case 5" << endl;
 		matchingCase = 5;
 		this->initialPotential = y->transitionMatrix;
 		for (int dna_p = 0; dna_p < 4; dna_p++) {
@@ -2802,14 +2829,45 @@ void clique::SetInitialPotentialAndBelief(int site) {
 			}
 		}
 	}
-	double maxValue = 0;
+
+	bool all_zero_initial_potential = 1;
+	bool all_zero_transition = 1;
+	for(int i = 0; i < 4; i ++) {
+		for (int j = 0; j < 4; j ++) {
+			if(this->initialPotential[i][j] != 0) all_zero_initial_potential = 0;
+			if(y->transitionMatrix[i][j] != 0) all_zero_transition = 0;
+		}
+	}
+
+	if (all_zero_transition) {
+		cout  << "all zero transition" << endl;
+		exit(-1);
+	}
+	
+	if (all_zero_initial_potential) {
+		cout << y->name << endl;
+		cout << "site " << site << endl;
+		int dna_y = y->DNAcompressed[site];		
+		cout << dna_y << endl;
+		cout  << "all_zero_initial_potential" << endl;
+		for (int i = 0; i < 4; i ++) {
+			for (int j = 0; j < 4; j ++) {
+				cout << i << "\t" << j << "\t" << y->transitionMatrix[i][j] << endl;
+			}
+		}
+		exit(-1);
+	}
+
+	// double maxValue = 0;
 	for (int i = 0; i < 4; i ++) {
 		for (int j = 0; j < 4; j ++) {
-			if (this->initialPotential[i][j] > maxValue) {
-				maxValue = this->initialPotential[i][j];
+			if(isnan(this->initialPotential[i][j])){
+				cout << "initial potential has nan" << endl;
+				throw mt_error("initial potential has nan");
 			}
 		}
 	}
+	
 	this->belief = this->initialPotential;
 	this->logScalingFactorForClique = 0;
 	this->logScalingFactorForMessages.clear();
@@ -2831,7 +2889,7 @@ public:
 	vector <clique *> leaves;
 	vector <clique *> cliques;
 	void CalibrateTree();
-	void ComputeMarginalProbabilitesForEachEdge();
+	void SetMarginalProbabilitesForEachEdgeAsBelief();
 	void ComputeMarginalProbabilitesForEachVariablePair();
 	void ComputePosteriorProbabilitesForVariable();
 	void ConstructSortedListOfAllCliquePairs();
@@ -3086,7 +3144,7 @@ clique * cliqueTree::GetLCA(clique * C_1, clique * C_2) {
 	return (lca);	
 }
 
-void cliqueTree::ComputeMarginalProbabilitesForEachEdge() {
+void cliqueTree::SetMarginalProbabilitesForEachEdgeAsBelief() {
 	this->marginalizedProbabilitiesForVariablePair.clear();
 	//	Store P(X,Y) for each clique
 	for (clique * C: this->cliques) {
@@ -3203,7 +3261,7 @@ void cliqueTree::SetLeaves() {
 }
 
 
-void cliqueTree::SendMessage(clique * C_from, clique * C_to) {		
+void cliqueTree::SendMessage(clique * C_from, clique * C_to) {	
 	double logScalingFactor;
 	double largestElement;	
 	array <double, 4> messageFromNeighbor;
@@ -3246,17 +3304,18 @@ void cliqueTree::SendMessage(clique * C_from, clique * C_to) {
 	for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
 		for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
 			if (factor[dna_x][dna_y] != 0) allZero = 0;
-			// cout << "factor for " << dna_x << "," << dna_y << " " << factor[dna_x][dna_y] << endl;
+			// cout << "initial factor for " << dna_x << "," << dna_y << " " << factor[dna_x][dna_y] << endl;
 			
 		}
 	}
 	if (allZero) {
 		cout << "initial potential is all zero";
 		throw mt_error("all zero in factor");
-		}
+	}
 
 	for (clique * C_neighbor : neighbors) {
 		messageFromNeighbor = C_from->messagesFromNeighbors[C_neighbor];
+		// for (int i = 0; i < 4; i ++) isnan(messageFromNeighbor)
 		if (C_from->y == C_neighbor->x or C_from->y == C_neighbor->y) {
 		// factor_row_i = factor_row_i (dot) message
 			for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
@@ -3286,7 +3345,9 @@ void cliqueTree::SendMessage(clique * C_from, clique * C_to) {
 				}
 			}
 		}
-		if (allZero) throw mt_error("all zero in factor");		
+		if (allZero) {
+			cout << "all zero in factor" << endl;
+			throw mt_error("all zero in factor");}		
 		// Rescale factor
 		largestElement = 0;
 		for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
@@ -3313,7 +3374,9 @@ void cliqueTree::SendMessage(clique * C_from, clique * C_to) {
 		}
 	}
 
-	if (allZero) throw mt_error ("all zero in factor");
+	if (allZero) {
+			cout << "all zero in factor" << endl;
+			throw mt_error("all zero in factor");};
 	// B. SUM
 		// Marginalize factor by summing over common variable
 	largestElement = 0;
@@ -3332,7 +3395,7 @@ void cliqueTree::SendMessage(clique * C_from, clique * C_to) {
 		// Sum over C_from->y		
 		for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
 			messageToNeighbor[dna_x] = 0;
-			for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
+			for (int dna_y = 0 ; dna_y < 4; dna_y ++) {				
 				messageToNeighbor[dna_x] += factor[dna_x][dna_y];
 			}
 		}
@@ -3350,25 +3413,38 @@ void cliqueTree::SendMessage(clique * C_from, clique * C_to) {
 			largestElement = messageToNeighbor[dna_x];
 		}
 	}
-	if (largestElement == 0) throw mt_error("Division by zero");
+	if (largestElement == 0) {
+		cout << "Division by zero" << endl;
+		throw mt_error("Division by zero");
+	}
 	for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
 		messageToNeighbor[dna_x] /= largestElement;
 	}
 	logScalingFactor += log(largestElement);
+	// cout << "check point 1" << endl;
 	if (verbose) {
-		cout << "Sending the following message from " << C_from->name << " to " ;
-		cout << C_to->name << endl;
+		cout << "Sending the following message from " << C_from->name << " to " << C_to->name << endl;
 		for (int dna = 0; dna < 4; dna ++) {
-			cout << messageToNeighbor[dna] << "\t";
-			if(isnan(messageToNeighbor[dna])){
+			cout << "dna " << dna << endl;
+			cout << to_string(messageToNeighbor[dna]) << endl;			
+			cout << isnan(messageToNeighbor[dna]) << endl;
+			if(isnan(messageToNeighbor[dna])) {
+				cout << "messageToNeighbor[" << dna << "] is not a number";
 				throw mt_error("Check message to neighbor");
+			} else {
+				cout << messageToNeighbor[dna] << endl;
 			}
 		}
 	}
+	// cout << "check point 2" << endl;
 	// cout << endl;
 	
 	// cout << "C step" << endl;
 	// C. TRANSMIT
+	if(isnan(logScalingFactor)) {
+		cout << "logScalingFactor is nan" << endl;
+		throw mt_error("logScalingFactor is nan");
+	}
 	C_to->logScalingFactorForMessages.insert(make_pair(C_from,logScalingFactor));
 	C_to->messagesFromNeighbors.insert(make_pair(C_from,messageToNeighbor));
 }
@@ -3422,6 +3498,31 @@ struct EM_struct {
 	map <string, Md> trans_prob_init;	
 	// init trans_prob - store transition probability for each child node for each rep when params are initialized
 	map <string, Md> trans_prob_final;
+};
+
+struct EMTrifle_struct {
+	vector <int> iter_trifle;
+	vector <map <int,double>> ecd_ll_per_iter_for_trifle;
+	vector <double> ll_initial_trifle;
+	vector <double> ll_final_trifle;
+	vector <map <string, Md>> trans_prob_final_trifle;
+	vector <array <double, 4>> root_prob_final_trifle;
+	vector <map <string, Md>> trans_prob_initial_trifle;
+	vector <array <double, 4>> root_prob_initial_trifle;	
+	string method;
+	
+	int rep;
+	string root;
+	EMTrifle_struct()
+	: ecd_ll_per_iter_for_trifle(3),
+	  iter_trifle(3),
+	  ll_initial_trifle(3, numeric_limits<double>::quiet_NaN()),
+	  ll_final_trifle(3, numeric_limits<double>::quiet_NaN()),
+	  trans_prob_final_trifle(3),
+	  root_prob_final_trifle(3),
+	  trans_prob_initial_trifle(3),
+	  root_prob_initial_trifle(3)
+	{}
 };
 
 struct AA_opt_struct {
@@ -3524,7 +3625,7 @@ public:
 	Eigen::Matrix <double,20,20> Vc, Vc_inv;	
     Eigen::Matrix <std::complex<double>,20,1> lambda;
 	Eigen::Matrix <double,20,20> S_D;
-	array <int,3> siteidx_for_regime;
+	array <int,3> num_patterns_for_layer;
 	vector <int> DNASitesByWeightDesc;
 	vector <int> DNACumulativePatternWeight;
 	vector <size_t> DNAPatternOrderByWeightDesc;
@@ -3552,14 +3653,17 @@ public:
 	vector <int> gaplesscompressedDNAsites;
 	vector <bool> gapLessDNAFlag;
 	vector <bool> gapLessAAFlag;
+	int rep;	
+	void addToZeroEntriesOfTransitionMatrix(emtr::Md& P);
+	void addToZeroEntriesOfRootProbability(array<double,4>& p);
 	int num_aa_patterns;
 	int num_repetitions;	
 	double thrCoarse = 50.0;
 	double thrMedium = 30.0;
-	double thrFine = 20.0;
+	double thrFine = 20.0;	
 	double cum_pattern_weight_coarse;
 	double cum_pattern_weight_medium;
-	double cum_pattern_weight_fine = 100;
+	double cum_pattern_weight_fine = 100.0;
 	vector<pair<int,int>> AAsite_and_weight;
 	vector <double> cum_fractional_weight_AA;
 	vector <vector <int> > sitePatternRepetitions;
@@ -3577,6 +3681,7 @@ public:
 	double frac_iter_medium;
 	double frac_iter_fine;
 	double ecdllConvergenceThreshold = 0.1;	
+	vector <double> ecdllConvergenceThresholdForTrifle;
 	double sumOfExpectedLogLikelihoods = 0;
 	double maxSumOfExpectedLogLikelihoods = 0;
 	int node_ind = 1;
@@ -3591,6 +3696,7 @@ public:
 	map <pair <SEM_vertex *, SEM_vertex *>, double> edgeLengths;
 	vector < SEM_vertex *> leaves;
 	vector < SEM_vertex *> preOrderVerticesWithoutLeaves;
+	vector < SEM_vertex *> postOrderVertices;
 	map < pair <SEM_vertex * , SEM_vertex *>, emtr::Md > expectedCountsForVertexPair;
 	map < pair <SEM_vertex * , SEM_vertex *>, emtr::Md > posteriorProbabilityForVertexPair;
 	map < SEM_vertex *, array <double,4>> expectedCountsForVertex; 
@@ -3603,6 +3709,7 @@ public:
 	double maximumLogLikelihood;
 	double max_log_likelihood_diri;
 	double max_log_likelihood_pars;
+	double max_log_likelihood_rep;
 	double max_log_likelihood_hss;
 	double max_log_likelihood_best;
 	emtr::Md I4by4;	
@@ -3647,6 +3754,7 @@ public:
 	vector <int> idsOfExternalVertices;	
 	vector < tuple <int, string, vector <int> > > idAndNameAndSeqTuple;
 	vector<tuple <string,string,int,int,double,double,double,double>> EMTR_results;
+	vector<tuple <string,string,int,int,int,double,double,double,double>> EMTrifle_results;
 	// Used for updating global phylogenetic tree
 	vector < pair <int, int> > edgesOfInterest_ind;	
 	vector < pair < vector <int>, vector <int> > > edgesOfInterest_seq;
@@ -3694,17 +3802,23 @@ public:
 	void RootedTreeAlongAnEdgeIncidentToCentralVertex();
 	void RootTreeAlongAnEdgePickedAtRandom();
 	void RootTreeAtAVertexPickedAtRandom();
-	void SetParsimonySites();
-	tuple<int,double,double,double,double> EM_started_with_HSS_parameters_rooted_at(SEM_vertex *v);
+	void SetParsimonySites();	
+	void EMTrifle_started_with_parsimony_rooted_at(SEM_vertex *v, int layer);
+	void EMTrifle_started_with_dirichlet_rooted_at(SEM_vertex *v, int layer);
+	void EMTrifle_started_with_HSS_rooted_at(SEM_vertex *v, int layer);
 	tuple<int,double,double,double,double> EM_started_with_parsimony_rooted_at(SEM_vertex *v);
 	tuple<int,double,double,double,double> EM_started_with_dirichlet_rooted_at(SEM_vertex *v);	
+	tuple<int,double,double,double,double> EM_started_with_HSS_parameters_rooted_at(SEM_vertex *v);
 	void StoreParamsInEMCurrent(string init_or_final);
+	// void StoreParamsInEMTrifleCurrent(int layer);
+	void StoreInitialParamsInEMTrifleCurrent(int layer);
+	void StoreFinalParamsInEMTrifleCurrent(int layer);
 	void ComputeSumOfExpectedLogLikelihoods();
 	void RootTreeAlongEdge(SEM_vertex * u, SEM_vertex * v);
-	void SelectEdgeIncidentToVertexViaMLUnderGMModel(SEM_vertex * v);
+	void SelectEdgeIncidentToVertexViaMLForBH(SEM_vertex * v);
 	void InitializeTransitionMatricesAndRootProbability();
 	void ComputeMPEstimateOfAncestralSequences();
-	void ComputeMPEstimateOfAncestralSequencesForThreeRegime(int regime);
+	void ComputeMPEstimateOfAncestralSequencesForTrifle(int layer);
 	void ComputeMAPEstimateOfAncestralSequences();
 	void ComputeMAPEstimateOfAncestralSequencesUsingCliques();
 	void SetEdgesForPreOrderTraversal();
@@ -3712,16 +3826,17 @@ public:
 	void SetEdgesForTreeTraversalOperations();
 	void SetLeaves();
 	void SetVerticesForPreOrderTraversalWithoutLeaves();
+	void SetVerticesForPostOrderTraversal();
 	void SetObservedUnobservedStatus();
 	void OptimizeParametersUsingMAPEstimates();
 	void ComputeMLEOfRootProbability();
 	void ComputeMLEOfTransitionMatrices();	
-	void ComputePosteriorProbabilitiesUsingExpectedCounts();
+	void ComputeMarginalProbabilitiesUsingExpectedCounts();
 	void ComputePosteriorProbabilitiesUsingMAPEstimates();
 	void SetInfoForVerticesToAddToMST();
 	void SetIdsOfExternalVertices();
 	void ResetAncestralSequences();
-	void WriteParametersOfGMM(string GMMparametersFileName);
+	void WriteParametersOfBH(string BHparametersFileName);
 	void RemoveEdgeLength(SEM_vertex * u, SEM_vertex * v);
 	void AddEdgeLength(SEM_vertex * u, SEM_vertex * v, double t);
 	double GetEdgeLength(SEM_vertex * u, SEM_vertex * v);
@@ -3734,8 +3849,8 @@ public:
 	void ComputeChowLiuTree();
 	void AddSubforestOfInterest(SEM * localPhylogeneticTree);
 	void ReadRootedTree(string treeFileName);
-	void SetGMMparameters();
-	void ReparameterizeGMM();
+	void SetBHparameters();
+	void ReparameterizeBH();
 	void Set_pi_for_neighbors_of_root();
 	array<double,4> get_pi_child();
 	void ReadProbabilities();
@@ -3747,7 +3862,9 @@ public:
 	int GetEdgeIndex (int vertexIndex1, int vertexIndex2, int numberOfVertices);
 	emtr::Md GetP_yGivenx(emtr::Md P_xy);
 	emtr::Md ComputeTransitionMatrixUsingAncestralStates(SEM_vertex * p, SEM_vertex * c);
+	emtr::Md ComputeTransitionMatrixUsingAncestralStatesForTrifle(SEM_vertex * p, SEM_vertex * c, int layer);
 	array <double, 4> GetBaseComposition(SEM_vertex * v);
+	array <double, 4> GetBaseCompositionForTrifle(SEM_vertex * v, int layer);
 	array <double, 4> GetObservedCountsForVariable(SEM_vertex * v);
 	string modelSelectionCriterion;
 	string distance_measure_for_NJ = "log-det";
@@ -3761,7 +3878,7 @@ public:
 	void StoreRootAndRootProbability();
 	void RestoreRootAndRootProbability();
 	void StoreTransitionMatrices();	
-	void RestoreTransitionMatrices();
+	void RestoreTransitionMatrices();	
 	void RestoreBestProbability();
 	void StoreRateMatricesAndScalingFactors();
 	void RestoreRateMatricesAndScalingFactors();
@@ -3771,14 +3888,16 @@ public:
 	void SetNumberOfInputSequences(int numOfInputSeqsToSet);
 	void ComputeMLRootedTreeForFullStructureSearch();
 	void SetNeighborsBasedOnParentChildRelationships();
-	void ComputeMLRootedTreeForRootSearchUnderGMM();	
-	void ComputeMLEstimateOfGMMGivenExpectedDataCompletion();		
+	void ComputeMLRootedTreeForRootSearchUnderBH();	
+	void ComputeMLEstimateOfBHGivenExpectedDataCompletion();		
 	void SetMinLengthOfEdges();
 	void SetParametersForRateMatrixForNelderMead(double x[], int rateCat);
 	void NelderMeadForOptimizingParametersForRateCat(int rateCat, int n, double start[], double xmin[], 
 		 double *ynewlo, double reqmin, double step[], int konvge,
 		 int kcount, int *icount, int *numres, int *ifault);	
 	void ComputeInitialEstimateOfModelParameters();
+	void ComputeInitialEstimateOfModelParametersForTrifle(int layer);
+	void BumpZeroEntriesOfModelParametersForNextLayer();
 	void SetInitialEstimateOfModelParametersUsingDirichlet();
 	void SetInitialEstimateOfModelParametersUsingHSS();
 	void TransformRootedTreeToBifurcatingTree();
@@ -3793,6 +3912,7 @@ public:
 	void ComputeAALogLikelihood();
 	void ComputeAALogLikelihood_maps();
 	void ComputeLogLikelihood();
+	void ComputeTrifleLogLikelihood(int layer);
 	int siteIdx;
 	std::tuple<double,double,double>
     LL_Grad_Hess_Counts_Reversible_Tuple(const Eigen::Matrix<double,20,20>& N, const Eigen::VectorXd& pis, const Eigen::VectorXd& invpis, const Eigen::MatrixXd& U, const Eigen::VectorXd& lambdas, double t) const;
@@ -3819,6 +3939,7 @@ public:
 	void ResetExpectedCounts();
 	void ConstructCliqueTree();	
 	void ComputeExpectedCounts();
+	void ComputeExpectedCountsForTrifle(int layer);
 	emtr::Md GetObservedCounts(SEM_vertex * u, SEM_vertex * v);
 	void AddToExpectedCounts();
 	void AddToExpectedCountsForEachVariable();
@@ -3886,16 +4007,20 @@ public:
 	void ComputeMLDistancesForAAsequences();
 	void GetOLSBranchLengths();
 	void OptimizeQ_D();
-	void SetSitePatternsAndWeights(); // account for gaps
-	void SetParameterFile();	
-	void initialize_GMM(string init_criterion);	
+	void SetSitePatternsAndWeights();
+	void SetParameterFile();
+	void initialize_BH(string init_criterion);
 	void EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(int num_repetitions);
-	void EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results(int num_repetitions);	
-	void EM_DNA_rooted_at_each_internal_vertex_started_with_HSS_store_results(int num_repetitions);	
+	void EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results(int num_repetitions);
+	void EM_DNA_rooted_at_each_internal_vertex_started_with_HSS_store_results(int num_repetitions);
+	void EMTrifle_DNA_for_replicate(int replicate);
+	void EMTrifle_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results();
+	void EMtrifle_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_results();
+	void EMtrifle_DNA_rooted_at_each_internal_vertex_started_with_HSS_store_results();
 	void Optimize_AA_RateMatrix_rooted_at_each_internal_vertex(int num_repetitions);
 	void EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
 	void EM_rooted_at_each_internal_vertex_started_with_parsimony(int num_repetitions);
-	void EM_rooted_at_each_internal_vertex_started_with_HSS_par(int num_repetitions);	
+	void EM_rooted_at_each_internal_vertex_started_with_HSS_par(int num_repetitions);
 	void EM_root_search_at_each_internal_vertex_started_with_dirichlet(int num_repetitions);
 	void EM_root_search_at_each_internal_vertex_started_with_HSS_par(int num_repetitions);
 	void set_alpha_PI(double a1, double a2, double a3, double a4);
@@ -3904,12 +4029,17 @@ public:
 	array <double, 4> sample_pi();
     array <double, 4> sample_M_row();
 	vector <EM_struct> EM_DNA_runs_pars;
+	vector <EMTrifle_struct> EMTrifle_DNA_runs_pars;
 	vector <EM_struct> EM_DNA_runs_diri;
+	vector <EMTrifle_struct> EMTrifle_DNA_runs_diri;
 	vector <EM_struct> EM_DNA_runs_hss;
+	vector <EMTrifle_struct> EMTrifle_DNA_runs_hss;
 	vector <AA_opt_struct> AA_opt_runs;
-	EM_struct EM_current{};	
+	EM_struct EM_current{};
+	EMTrifle_struct EMTrifle_current{};
 	AA_opt_struct AA_struct{};
 	string em_to_json(const EM_struct& em) const;
+	string emtrifle_to_json(const EMTrifle_struct& em) const;
 	string aa_struct_to_json(const AA_opt_struct& aa_struct) const;
 	int first_index_gt(const std::vector<double>& cum, double thr);
 	// Select vertex for rooting Chow-Liu tree and update edges in T
@@ -3954,6 +4084,45 @@ public:
 		delete this->M_hss;
 	}
 };
+
+void SEM::addToZeroEntriesOfRootProbability(array <double,4> & baseComposition) {
+	double sum = 0.0;
+
+    for (size_t i = 0; i < 4; ++i) {
+        if (baseComposition[i] == 0.0) {
+            baseComposition[i] = 0.1;
+        }
+        sum += baseComposition[i];
+    }
+
+	for (size_t i = 0; i < 4; ++i) {
+		baseComposition[i] /= sum;
+	}
+    
+}
+
+void SEM::addToZeroEntriesOfTransitionMatrix(array<array<double,4>,4>& P) {
+	
+	for (int i = 0; i < 4; ++i) {
+		for (int j = 0; j < 4; ++j) {
+			if (P[i][j] == 0.0) {
+				P[i][j] = (i == j) ? 0.97 : 0.01;
+			}
+		}
+	}
+	
+	for (int i = 0; i < 4; ++i) {
+		double rowSum = 0.0;
+		for (int j = 0; j < 4; ++j) rowSum += P[i][j];
+
+		if (rowSum == 0.0 || !isfinite(rowSum)) {		
+			for (int j = 0; j < 4; ++j) P[i][j] = 0.01;
+			P[i][i] = 0.97;
+		} else {
+			for (int j = 0; j < 4; ++j) P[i][j] /= rowSum;
+		}
+	}
+}
 
 int SEM::first_index_gt(const std::vector<double>& cum, double thr) {    
     constexpr double EPS = 1e-12;
@@ -4004,9 +4173,9 @@ void SEM::SetParameters(string parameters_json) {
 			this->thrMedium = stod(value);
 		} else if (key.find("dna.thrPerRegime.fine") != string::npos) {
 			this->thrFine = stod(value);
-		} else if (key.find("dna.patWRegime.coarse") != string::npos) {
+		} else if (key.find("dna.patternCounts.coarse") != string::npos) {
 			this->cum_pattern_weight_coarse = stod(value);
-		} else if (key.find("dna.patWRegime.medium") != string::npos) {
+		} else if (key.find("dna.patternCounts.medium") != string::npos) {
 			this->cum_pattern_weight_medium = stod(value);
 		} 
 	}
@@ -4836,7 +5005,7 @@ double SEM::GetNewtonRaphsonDistance(SEM_vertex * u, SEM_vertex * v) {
 	int max_iter = 100;
 	int iter = 2;
 	// compute initial estimate of evolutionary distance using Jukes-Cantor estimate
-	cout << u->name << "\t" << v->name << endl;
+	// cout << u->name << "\t" << v->name << endl;
 	for (int site = 0; site < num_aa_patterns; site++) {
 		aa_u = u->AAcompressed[site];
 		aa_v = v->AAcompressed[site];
@@ -4982,217 +5151,6 @@ void SEM::SetRateMatrixParameters() {
 
 }
 
-// using Mat20 = Eigen::Matrix<double,20,20>;
-// using Vec20 = Eigen::Matrix<double,20,1>;
-
-// static inline std::tuple<double,double,double>
-// ll_grad_hess(const Mat20& Q, const Mat20& N, const Vec20& pi_in, double t)
-// {
-//     // Normalize pi (tolerate small drift)
-//     Vec20 pi = pi_in;
-//     double s = pi.sum();
-//     if (!(s > 0.0)) throw std::runtime_error("pi has non-positive sum");
-//     pi /= s;
-
-//     const double epsP  = 1e-300;  // floor for P entries
-//     const double epsPi = 1e-300;  // floor for pi entries
-
-//     // P = exp(Q t), QP = Q*P, Q2P = Q*(Q*P)
-//     Mat20 P   = (Q * t).exp();
-//     Mat20 QP  = Q * P;
-//     Mat20 Q2P = Q * QP;
-
-//     double ll = 0.0, g = 0.0, H = 0.0;
-
-//     for (int x = 0; x < 20; ++x) {
-//         const double pix = std::max(pi(x), epsPi);
-//         for (int y = 0; y < 20; ++y) {
-//             const double nxy = N(x,y);
-//             if (nxy == 0.0) continue;
-
-//             const double Pxy   = std::max(P(x,y), epsP);
-//             const double QPxy  = QP(x,y);
-//             const double Q2Pxy = Q2P(x,y);
-
-//             const double r = QPxy / Pxy;  // d/dt log Pxy
-
-//             // include pi in the log-likelihood
-//             ll += nxy * (std::log(pix) + std::log(Pxy));
-//             g  += nxy * r;
-//             H  += nxy * (Q2Pxy / Pxy - r*r);
-//         }
-//     }
-//     return {ll, g, H};
-// }
-
-// struct NRResult {
-//     double t, ll, grad, hess;
-//     int iters;
-//     bool converged;
-// };
-
-// inline NRResult newton_branch_length(const Mat20& Q, const Mat20& N, const Vec20& pi, double t0, int max_iters = 50, double tol_step = 1e-8, double tol_grad = 1e-8) {
-//     if (!(t0 > 0.0)) t0 = 0.1;
-	
-//     double t = t0, ll, g, H;
-//     std::tie(ll, g, H) = ll_grad_hess(Q, N, pi, t);
-
-//     for (int it = 1; it <= max_iters; ++it) {
-//         if (!std::isfinite(H) || H >= 0.0) {
-//             return {t, ll, g, H, it-1, std::fabs(g) < tol_grad};
-//         }
-//         const double step = g / H;
-//         if (std::fabs(step) < tol_step || std::fabs(g) < tol_grad) {
-//             return {t, ll, g, H, it-1, true};
-//         }
-        
-//         double alpha = 1.0, t_new = t - step;
-//         double ll_new, g_new, H_new;
-// 		// try NR step, reduce step size if proposed changes lead to negative branch lengths
-//         for (int bt = 0; bt < 60; ++bt) {
-//             if (!(t_new > 0.0)) { alpha *= 0.5; t_new = t - alpha*step; continue; }
-//             std::tie(ll_new, g_new, H_new) = ll_grad_hess(Q, N, pi, t_new);
-//             if (ll_new >= ll || alpha < 1e-6) break;
-//             alpha *= 0.5; t_new = t - alpha*step;
-//         }
-
-//         if (alpha < 1e-6 && ll_new < ll) {
-//             return {t, ll, g, H, it-1, std::fabs(g) < tol_grad};
-//         }
-
-//         t = t_new; ll = ll_new; g = g_new; H = H_new;
-
-//         if (std::fabs(g) < tol_grad) return {t, ll, g, H, it, true};
-//         if (std::fabs(alpha*step) < tol_step) return {t, ll, g, H, it, true};
-//     }
-//     return {t, ll, g, H, max_iters, false};
-// }
-
-
-// 	// cout << this->Q_D << endl;
-// 	constexpr int K = 20;
-// 	const std::string path = this->dayhoff_rate_matrix_file_name.empty()
-// 							? std::string("/data/Dayhoff.dat")
-// 							: this->dayhoff_rate_matrix_file_name;
-
-// 	ifstream Dayhoff_path(path);
-
-
-// 	Eigen::Matrix<double,K,K> S;
-// 	cout << path << endl;
-// 	int row = 0;
-// 	int lines_parsed = 0;
-// 	while (lines_parsed < 20){}k
-// 	string line; getline(Dayhoff_path, line)		
-// 	vector<string> splitLine = emtr::split_ws(line);
-// 		cout <<  splitLine.size() << "\t" << line << endl;
-// 		row += 1;
-// 	//  row = splitLine.size();
-// 		for (int col = 0; col < row; row++) {
-// 		// S(row,col) = stod(splitLine[col]);
-// 		// S(col,row) = S(row,col);
-// 		}
-
-// 	}
-	// Dayhoff_path.close();
-	// cout << S << endl;
-
-	// std::ifstream in(path);
-	// if (!in) {
-	// 	throw std::runtime_error("SetDayhoffRateMatrix: cannot open file: " + path);
-	// }
-
-	// auto line_to_numbers = [](const std::string& line) -> std::vector<double> {
-	// 	std::string s = line;
-	// 	auto cut = s.find('#'); if (cut != std::string::npos) s.resize(cut);
-	// 	cut = s.find(';');      if (cut != std::string::npos) s.resize(cut);
-	// 	auto c2 = s.find("//");
-	// 	if (c2 != std::string::npos) {
-	// 	if (c2 == 0 || std::isspace(static_cast<unsigned char>(s[c2-1])) || s[c2-1] == ',') {
-	// 		s.resize(c2);
-	// 	}
-	// 	}
-	// 	std::vector<double> out;
-	// 	std::istringstream iss(s);
-	// 	double x;
-	// 	while (iss >> x) out.push_back(x);
-	// 	return out;
-	// };
-
-	// std::vector<double> nums;
-	// nums.reserve(512);
-	// std::string line;
-	// while (std::getline(in, line)) {
-	// 	auto vec = line_to_numbers(line);
-	// 	nums.insert(nums.end(), vec.begin(), vec.end());
-	// }
-
-	// const std::size_t need_tri = static_cast<std::size_t>(K) * (K + 1) / 2; // 210
-	// const std::size_t need_tot = need_tri + K;                               // 230
-
-	// if (nums.size() < need_tot) {
-	// 	throw std::runtime_error(
-	// 	"SetDayhoffRateMatrix: file '" + path +
-	// 	"' has too few numeric entries; expected at least " + std::to_string(need_tot) +
-	// 	" but found " + std::to_string(nums.size())
-	// 	);
-	// }
-
-	// // Split triangular S (including diagonal tokens) and frequencies
-	// const std::vector<double> tri(nums.begin(), nums.begin() + need_tri);
-	// std::vector<double> pi(nums.begin() + need_tri, nums.begin() + need_tri + K);
-
-	// // Normalize pi to sum 1 (robust if file was not normalized)
-	// double pisum = std::accumulate(pi.begin(), pi.end(), 0.0);
-	// if (!(pisum > 0.0)) {
-	// 	throw std::runtime_error("SetDayhoffRateMatrix: non-positive sum of Dayhoff frequencies");
-	// }
-	// for (double& v : pi) v /= pisum;
-
-	// // Rebuild symmetric exchangeability matrix S from lower-triangular listing
-	// Eigen::Matrix<double, K, K> S;
-	// S.setZero();
-	// std::size_t k = 0;
-	// for (int i = 0; i < K; ++i) {
-	// 	for (int j = 0; j <= i; ++j, ++k) {
-	// 	const double v = tri[k];
-	// 	if (i != j) {
-	// 		S(i, j) = v;
-	// 		S(j, i) = v;
-	// 	}
-	// 	// ignore diagonal tri entries
-	// 	}
-	// }
-
-	// // Build Q: Q_ij = S_ij * pi_j for i != j; diag makes rows sum to zero
-	// Eigen::Matrix<double, K, K> Q;
-	// for (int i = 0; i < K; ++i) {
-	// 	double rowsum = 0.0;
-	// 	for (int j = 0; j < K; ++j) {
-	// 	if (i == j) continue;
-	// 	const double qij = S(i, j) * pi[j];
-	// 	Q(i, j) = qij;
-	// 	rowsum += qij;
-	// 	}
-	// 	Q(i, i) = -rowsum;
-	// }
-
-	// // Scale so that the mean rate is 1: -sum_i pi_i * Q_ii = 1
-	// double mean_rate = 0.0;
-	// for (int i = 0; i < K; ++i) mean_rate += pi[i] * (-Q(i, i));
-	// if (!(mean_rate > 0.0)) {
-	// 	throw std::runtime_error("SetDayhoffRateMatrix: non-positive mean rate; check input file");
-	// }
-	// Q /= mean_rate;
-
-	// // ---- Assign to your members ----
-	// // If your SEM has members named differently, adjust these two lines.
-	// this->Q_D = Q;  // Eigen::Matrix<double,20,20> member
-	// for (int i = 0; i < K; ++i) this->pi_D[i] = pi[i]; // e.g., std::array<double,20> pi
-	// cout << this->Q_D << endl;
-	// Optional: log a quick sanity message
-	// std::cout << "Dayhoff matrix loaded from " << path << " (mean rate scaled to 1)\n";
-// }
 
 array <double, 4> SEM::sample_pi() {
 	return sample_dirichlet(this->alpha_pi, rng());
@@ -5227,6 +5185,83 @@ void SEM::set_alpha_M_row(double a1, double a2, double a3, double a4) {
 	this->alpha_M_row[2] = a3;
 	this->alpha_M_row[3] = a4;
 }
+
+inline std::string SEM::emtrifle_to_json(const EMTrifle_struct& em) const {
+  std::ostringstream os;
+
+  // map<int,double> -> {"1":-1.23,"2":-0.98,...}
+  auto dump_iter_ll_obj = [&](const std::map<int,double>& m) {
+    os << "{";
+    bool first = true;
+    for (const auto& kv : m) {
+      if (!first) os << ",";
+      first = false;
+      os << "\"" << kv.first << "\":" << jnum(kv.second);
+    }
+    os << "}";
+  };
+
+  auto jnum_or_null = [&](double x) -> std::string {
+    return std::isfinite(x) ? jnum(x) : std::string("null");
+  };
+  auto jint_or_null = [&](int x) -> std::string {
+    return (x > 0) ? std::to_string(x) : std::string("null");
+  };
+
+  // Top-level init values from layer 0 if present
+  const bool has_ll_init0 = (!em.ll_initial_trifle.empty() &&
+                             std::isfinite(em.ll_initial_trifle[0]));
+  const bool has_rpi0 = (!em.root_prob_initial_trifle.empty());
+  const bool has_tpi0 = (!em.trans_prob_initial_trifle.empty() &&
+                         !em.trans_prob_initial_trifle[0].empty());
+
+  os << "{"
+     << "\"method\":"           << jstr(em.method) << ","
+     << "\"rep\":"              << em.rep << ","
+     << "\"root\":"             << jstr(em.root) << ","
+     << "\"ll_init\":"          << (has_ll_init0 ? jnum(em.ll_initial_trifle[0]) : "null") << ","
+     << "\"root_prob_init\":"   << (has_rpi0 ? jvec4(em.root_prob_initial_trifle[0]) : "null") << ","
+     << "\"trans_prob_init\":"  << (has_tpi0 ? jmap_mat4(em.trans_prob_initial_trifle[0]) : "null") << ","
+     << "\"layers\":[";
+
+  bool firstLayer = true;
+  for (int layer = 0; layer < 3; ++layer) {
+    const size_t L = static_cast<size_t>(layer);
+
+    const bool has_iter = (L < em.iter_trifle.size());
+    const bool has_ll_initial = (L < em.ll_initial_trifle.size() &&
+                                 std::isfinite(em.ll_initial_trifle[layer]));
+    const bool has_ll_final = (L < em.ll_final_trifle.size() &&
+                               std::isfinite(em.ll_final_trifle[layer]));
+    const bool has_rpf = (L < em.root_prob_final_trifle.size());
+    const bool has_tpf = (L < em.trans_prob_final_trifle.size() &&
+                          !em.trans_prob_final_trifle[layer].empty());
+    const bool has_ecd = (L < em.ecd_ll_per_iter_for_trifle.size() &&
+                          !em.ecd_ll_per_iter_for_trifle[layer].empty());
+
+    // Skip fully empty layers
+    if (!(has_iter || has_ll_initial || has_ll_final || has_rpf || has_tpf || has_ecd)) continue;
+
+    if (!firstLayer) os << ",";
+    firstLayer = false;
+
+    os << "{"
+       << "\"layer\":"            << layer << ","
+       << "\"iter\":"             << (has_iter ? jint_or_null(em.iter_trifle[layer]) : "null") << ","
+       << "\"ll_initial\":"       << (has_ll_initial ? jnum(em.ll_initial_trifle[layer]) : "null") << ","
+       << "\"ll_final\":"         << (has_ll_final ? jnum(em.ll_final_trifle[layer]) : "null") << ","
+       << "\"root_prob_final\":"  << (has_rpf ? jvec4(em.root_prob_final_trifle[layer]) : "null") << ","
+       << "\"trans_prob_final\":" << (has_tpf ? jmap_mat4(em.trans_prob_final_trifle[layer]) : "null") << ","
+       << "\"ecd_ll_per_iter\":";
+    if (has_ecd) dump_iter_ll_obj(em.ecd_ll_per_iter_for_trifle[layer]); else os << "null";
+    os << "}";
+  }
+
+  os << "]}";
+  return os.str();
+}
+
+
 
 inline string SEM::em_to_json(const EM_struct& em) const {  
   ostringstream os;
@@ -5765,35 +5800,29 @@ void SEM::SetVertexVector(){
 }
 
 
-void SEM::SetGMMparameters() {
+void SEM::SetBHparameters() {
 	this->ReadProbabilities();	
 }
 
-void SEM::ReparameterizeGMM() {
+void SEM::ReparameterizeBH() {
 	
 	// Compute pi, P(u,v) and P(v,u) for each vertex and edge using the method described in hss paper	
 	
-	// 1. Set pi for root
-	
+	// 1. Set pi for root	
 	for (int p_id = 0; p_id < 4; ++p_id) {
-		if(this->rootProbability[p_id] == 0) {throw mt_error("invalid probability");}
+		if(this->rootProbability[p_id] == 0) {cout << "invalid probability"; throw mt_error("invalid probability");}
 		this->root->root_prob_hss[p_id] = this->rootProbability[p_id];
 	}
-
 	// Store transition matrices in transition_prob_hss map, store root prob in node as root_prob_hss
 	SEM_vertex * p; SEM_vertex * c; array <double,4> pi_p; array <double,4> pi_c;
+	M_hss->clear();
 	for (pair<SEM_vertex*, SEM_vertex*> edge : this->edgesForPreOrderTreeTraversal) {
 		p = edge.first;
 		c = edge.second;
 		
-		emtr::Md M_pc = c->transitionMatrix; // transition matrix of orig GMM parameters 
-		emtr::Md M_cp; 					     // transition matrix of reparameterized GMM
-		
-
-		// 1. Store M_pc
-		if(M_hss->find(edge) != M_hss->end()){
-            throw mt_error("Check edges in preorder traversal");
-        }
+		emtr::Md M_pc = c->transitionMatrix; // transition matrix of orig BH parameters 
+		emtr::Md M_cp; 					     // transition matrix of reparameterized BH
+						
 		(*this->M_hss)[{p,c}] = M_pc;
 
 		// 2. Initialize pi_p and pi_c
@@ -6036,81 +6065,6 @@ bool SEM::IsTreeInCanonicalForm() {
 	return (valueToReturn);
 }
 
-// int SEM::ConvertDNAToChar(char dna) {
-// 	string dna_upper = string(1,toupper(dna));
-// 	int dna_char = 4;
-// 	if (this->mapDNAtoInteger.find(dna_upper) != this->mapDNAtoInteger.end()) {
-// 		dna_char = this->mapDNAtoInteger[dna_upper];
-// 	} else {
-// 		if (isspace(dna)) {
-// 			cout << "DNA character is a whitespace" << endl;
-// 		}
-// 		cout << "DNA character " << dna_upper << " is not in dictionary keys" << endl;
-// 	}	
-// 	return (dna_char);
-// }
-
-// void SEM::SetDNASequencesFromFile(string fileName) {
-// 	this->sequenceFileName = fileName;
-// 	vector <int> recodedSequence;
-// 	recodedSequence.clear();
-// 	unsigned int site = 0;
-//     unsigned int seq_len = 0;
-// 	int dna_char;
-// 	int num_amb = 0;
-// 	int num_non_amb = 0;
-// 	ifstream inputFile(this->sequenceFileName.c_str());
-// 	string seqName;
-// 	string seq = "";
-// 	for(string line; getline(inputFile, line );) {
-// 		if (line[0]=='>') {
-// 			if (seq != "") {
-// 				for (char const dna: seq) {
-// 					if (!isspace(dna)) {
-// 						dna_char = this->ConvertDNAtoIndex(dna);
-// 						if (dna_char > 3) {
-// 							num_amb += 1;
-// 						} else {
-// 							num_non_amb += 1;
-// 						}
-// 						recodedSequence.push_back(dna_char);					
-// 						site += 1;							
-// 						}						
-// 				}
-// 				this->AddVertex(seqName,recodedSequence);				
-// 				recodedSequence.clear();
-// 			} 
-// 			seqName = line.substr(1,line.length());
-// 			seq = "";
-// 			site = 0;			
-// 		}
-// 		else {
-// 			seq += line ;
-// 		}		
-// 	}		
-// 	for (char const dna: seq) {
-// 		if (!isspace(dna)) {
-// 			dna_char = this->ConvertDNAToChar(dna);
-// 			if (dna_char > 3) { // FIX_AMB
-// 				num_amb += 1;
-// 			} else {
-// 				num_non_amb += 1;
-// 			}
-// 			recodedSequence.push_back(dna_char);
-// 			site += 1;
-// 		}
-// 	}
-// 	if (this->IsSequenceDuplicated(recodedSequence)) {
-// 		this->AddDuplicatedSequenceName(seqName,recodedSequence);
-// 	} else {
-// 		this->AddVertex(seqName,recodedSequence);
-// 	}
-//     seq_len = recodedSequence.size();
-// 	recodedSequence.clear();
-// 	inputFile.close();
-//     cout << "Number of sequences in fasta file is " << this->vertexMap->size() << endl;
-//     cout << "Sequence length is " << seq_len << endl;
-// }
 
 void SEM::AddAllSequences(string fileName) {
 	vector <int> recodedSequence;
@@ -6157,7 +6111,7 @@ void SEM::AddAllSequences(string fileName) {
 	}	
 }
 
-void SEM::ResetAncestralSequences() {	
+void SEM::ResetAncestralSequences() {
 	vector<int> gappedSequence ;
 	for (int i = 0; i < this->num_dna_patterns; i++) gappedSequence.push_back(-1);
 	for (pair <int,SEM_vertex*> idPtrPair : *this->vertexMap) {
@@ -6277,6 +6231,66 @@ void SEM::StoreEdgeListAndSeqToAdd() {
 	}	
 }
 
+
+
+emtr::Md SEM::ComputeTransitionMatrixUsingAncestralStatesForTrifle(SEM_vertex * p, SEM_vertex * c, int layer) {	
+	emtr::Md P = emtr::Md{};
+	// for (int i = 0; i < 4; i ++) {		
+	// 	P[i][i] = 1.0;
+	// }			
+	int dna_p; int dna_c;
+	
+	for (int site = 0; site < this->num_patterns_for_layer[layer]; site ++) {
+		dna_p = p->DNAcompressed[site];
+		dna_c = c->DNAcompressed[site];
+		if (dna_p > -1 && dna_c > -1) {
+			P[dna_p][dna_c] += this->DNAPatternWeights[site];
+		}
+	}
+
+	double rowSum;
+	for (int i = 0; i < 4; i ++) {
+		rowSum = 0;
+		for (int j = 0; j < 4; j ++) {
+			rowSum += P[i][j];
+		}
+		if (rowSum > 0) {
+			for (int j = 0; j < 4; j ++) {
+				 P[i][j] /= rowSum;
+			}
+		}		
+	}
+
+	// add 0.01 to off diagonal zero entries
+	// add 0.97 to diagonal zero entries
+
+	for (int i = 0; i < 4; i ++) {
+		for (int j = 0; j < 4; j ++) {
+			if (P[i][j] == 0) {
+				if (i == j) {
+					P[i][j] = 0.97;
+				} else {
+					P[i][j] = 0.01;
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < 4; i ++) {
+		for (int j = 0; j < 4; j ++) {
+			rowSum = 0;
+			for (int j = 0; j < 4; j ++) {
+				rowSum += P[i][j];
+			}
+			for (int j = 0; j < 4; j ++) {
+				P[i][j] /= rowSum;
+			}
+		}
+	}
+
+	return P;
+}
+
 emtr::Md SEM::ComputeTransitionMatrixUsingAncestralStates(SEM_vertex * p, SEM_vertex * c) {	
 	emtr::Md P = emtr::Md{};			
 	int dna_p; int dna_c;
@@ -6390,7 +6404,7 @@ void SEM::WriteUnrootedTreeAsEdgeList(string fileName) {
 }
 
 
-void SEM::WriteParametersOfGMM(string fileName) {
+void SEM::WriteParametersOfBH(string fileName) {
 	ofstream parameterFile;
 	parameterFile.open(fileName);		
 	
@@ -6752,15 +6766,51 @@ emtr::Md SEM::GetObservedCounts(SEM_vertex * u, SEM_vertex * v) {
 	return (countMatrix);
 }
 
-void SEM::ComputeExpectedCounts() {
-//	cout << "Initializing expected counts" << endl;
+void SEM::ComputeExpectedCountsForTrifle(int layer) {
+    // cout << "Initializing expected counts" << endl;
 	// cout << "11a" << endl;
 	this->InitializeExpectedCountsForEachVariable();
 	// cout << "11b" << endl;
 	this->InitializeExpectedCountsForEachEdge();
 	// cout << "11c" << endl;
-//	this->ResetExpectedCounts();
-//	SEM_vertex * x; SEM_vertex * y; 
+    //	this->ResetExpectedCounts();
+    //	SEM_vertex * x; SEM_vertex * y;
+	emtr::Md P_XY;
+	//	int dna_x; int dna_y;
+	bool debug = 0;
+	if (debug) {
+		cout << "Debug computing expected counts" << endl;
+	}
+	// Iterate over sites	
+    // cout << "number of sites for layer " << layer << " is " << this->num_patterns_for_layer[layer] << endl;
+	for (int site = 0; site < this->num_patterns_for_layer[layer]; site++) {
+		// cout << "12a site" << site << " layer " << layer << " root " << this->root->name << endl;
+		// cout << "computing expected counts for site " << site << endl;
+		this->cliqueT->SetSite(site);		
+		// cout << "12b" << endl;
+		this->cliqueT->InitializePotentialAndBeliefs();	// set min root prob to 0.2 and min trans prob to 0.01
+		// cout << "12c" << endl;
+		this->cliqueT->CalibrateTree();
+		// cout << "12d" << endl;
+		this->cliqueT->SetMarginalProbabilitesForEachEdgeAsBelief(); // set min root prob to 0.2 and min trans prob to 0.01
+		// cout << "12e" << endl;
+		this->AddToExpectedCountsForEachVariable();
+		// cout << "12f" << endl;
+		this->AddToExpectedCountsForEachEdge();		
+		// cout << "12g" << endl;
+	}
+	// cout << "11d" << endl;
+}
+
+void SEM::ComputeExpectedCounts() {
+    // cout << "Initializing expected counts" << endl;
+	// cout << "11a" << endl;
+	this->InitializeExpectedCountsForEachVariable();
+	// cout << "11b" << endl;
+	this->InitializeExpectedCountsForEachEdge();
+	// cout << "11c" << endl;
+    //	this->ResetExpectedCounts();
+    //	SEM_vertex * x; SEM_vertex * y; 
 	emtr::Md P_XY;
 //	int dna_x; int dna_y;
 	bool debug = 0;
@@ -6778,7 +6828,7 @@ void SEM::ComputeExpectedCounts() {
 		// cout << "12c" << endl;
 		this->cliqueT->CalibrateTree();
 		// cout << "12d" << endl;
-		this->cliqueT->ComputeMarginalProbabilitesForEachEdge();
+		this->cliqueT->SetMarginalProbabilitesForEachEdgeAsBelief();
 		// cout << "12e" << endl;
 		this->AddToExpectedCountsForEachVariable();
 		// cout << "12f" << endl;
@@ -6832,7 +6882,7 @@ void SEM::ComputeMAPEstimateOfAncestralSequencesUsingCliques() {
 }
 
 
-void SEM::ComputePosteriorProbabilitiesUsingExpectedCounts() {	
+void SEM::ComputeMarginalProbabilitiesUsingExpectedCounts() {	
 	SEM_vertex * v;
 	double sum;
 	// Compute posterior probability for vertex
@@ -6845,8 +6895,16 @@ void SEM::ComputePosteriorProbabilitiesUsingExpectedCounts() {
 		for (int i = 0; i < 4; i++) {
 			sum += P_X[i];
 		}
-		for (int i = 0; i < 4; i++) {
-			P_X[i] /= sum;
+		if (sum > 0) {
+			for (int i = 0; i < 4; i++) {
+				P_X[i] /= sum;
+			}
+		}
+		for (int i = 0; i < 4; i++) { 
+			if(isnan(P_X[i])) {
+				cout << "P_X[i] is nan" << endl;
+				throw mt_error("P_X[i] is nan");
+			}
 		}
 		this->posteriorProbabilityForVertex.insert(pair<SEM_vertex * , array <double, 4>>(v,P_X));
 	}
@@ -6863,9 +6921,20 @@ void SEM::ComputePosteriorProbabilitiesUsingExpectedCounts() {
 				sum += P_XY[i][j];
 			}
 		}
+		if (sum > 0) {
+			for (int i = 0; i < 4; i++) {
+				for (int j = 0; j < 4; j++) {
+					P_XY[i][j] /= sum;
+				}
+			}
+		}
+
 		for (int i = 0; i < 4; i++) {
 			for (int j = 0; j < 4; j++) {
-				P_XY[i][j] /= sum;
+				if(isnan(P_XY[i][j])) {
+					cout << "P_XY" << i << j << "is nan" << endl;
+					throw mt_error("P_XY[i][j] is nan");
+				}
 			}
 		}
 		this->posteriorProbabilityForVertexPair.insert(pair<pair<SEM_vertex *, SEM_vertex *>,emtr::Md>(vertexPair,P_XY));
@@ -7424,6 +7493,103 @@ void SEM::ComputeAALogLikelihood() {
 	}
 }
 
+// Case 1: Observed vertices may have out degree > 0
+// Case 2: Root may have out degree = one
+// Case 3: Directed tree (rooted) with vertices with outdegree 2 or 0.
+// layers 0, 1 and 2
+// coarse: 0, coarse: 1, coarse: 2 
+void SEM::ComputeTrifleLogLikelihood(int layer) {
+	this->logLikelihood = 0;
+	map <SEM_vertex*,array<double,4>> conditionalLikelihoodMap;
+	std::array <double,4> conditionalLikelihood;
+	double partialLikelihood;
+	double siteLikelihood;	
+	double largestConditionalLikelihood = 0;
+	double currentProb;			
+	vector <SEM_vertex *> verticesToVisit;	
+	SEM_vertex * p;
+	SEM_vertex * c;
+	emtr::Md P;
+	// cout << "14a" << endl;
+	for (int site = 0; site < this->num_patterns_for_layer[layer]; site++) {
+		// cout << "14b" << endl;
+    	conditionalLikelihoodMap.clear();
+		// cout << "14c" << endl;
+    	this->ResetLogScalingFactors();
+		// cout << "14d" << endl;
+		for (auto& edge : this->edgesForPostOrderTreeTraversal) {
+			// cout << "15a" << endl;
+			tie(p, c) = edge;
+			P = c->transitionMatrix;			
+			p->logScalingFactors += c->logScalingFactors;
+
+			// Initialize leaf child
+			if (c->outDegree == 0) {
+				if (c->DNAcompressed[site] > -1) {
+					conditionalLikelihood.fill(0.0);
+					conditionalLikelihood[c->DNAcompressed[site]] = 1.0;
+				} else {
+					conditionalLikelihood.fill(1.0);
+				}
+				conditionalLikelihoodMap.insert({c, conditionalLikelihood});
+			}
+			// cout << "15b" << endl;
+
+			// Initialize parent p if absent
+			if (conditionalLikelihoodMap.find(p) == conditionalLikelihoodMap.end()) {
+				if (p->id > this->numberOfObservedVertices - 1) {
+					conditionalLikelihood.fill(1.0);      // latent
+				} else {
+					conditionalLikelihood.fill(0.0);      // observed
+					conditionalLikelihood[p->DNAcompressed[site]] = 1.0;
+				}
+				conditionalLikelihoodMap.insert({p, conditionalLikelihood});
+			}
+			// cout << "15c" << endl;
+			
+			double largestConditionalLikelihood = 0.0;
+			const auto& childCL = conditionalLikelihoodMap.at(c);
+			// cout << "15d" << endl;
+			for (int dna_p = 0; dna_p < 4; ++dna_p) {
+				double partialLikelihood = 0.0;
+				for (int dna_c = 0; dna_c < 4; ++dna_c) {
+					partialLikelihood += P[dna_p][dna_c] * childCL[dna_c];
+				}
+				conditionalLikelihoodMap[p][dna_p] *= partialLikelihood;
+				largestConditionalLikelihood = std::max(largestConditionalLikelihood, conditionalLikelihoodMap[p][dna_p]);
+			}
+			// cout << "15e" << endl;						
+			if (largestConditionalLikelihood > 0.0) {
+				for (int dna_p = 0; dna_p < 4; ++dna_p) {
+					conditionalLikelihoodMap[p][dna_p] /= largestConditionalLikelihood;
+				}
+				p->logScalingFactors += log(largestConditionalLikelihood);
+			} else {
+				cout << "conditional likelihood is zero " << largestConditionalLikelihood << endl;
+				cout << "p dna " << p->DNAcompressed[site] << endl;
+				cout << "c dna " << c->DNAcompressed[site] << endl;
+				for (int i = 0; i < 4; i ++) {
+					for (int j = 0; j < 4; j ++) {
+						cout << "c->transitionMatrix[" << i << "," << j << "] = " << c->transitionMatrix[i][j] << endl;
+					}
+				}
+				throw mt_error("Largest conditional likelihood value is zero");
+			}
+			// cout << "15f" << endl;
+		}
+		// cout << "14e" << endl;
+		double siteLikelihood = 0.0;
+		const auto& rootCL = conditionalLikelihoodMap.at(this->root);
+		for (int dna = 0; dna < 4; ++dna) {
+			siteLikelihood += this->rootProbability[dna] * rootCL[dna];
+		}
+		// cout << "14f" << endl;
+		if (siteLikelihood <= 0.0) throw mt_error("siteLikelihood <= 0");
+		// cout << "14g" << endl;
+		this->logLikelihood += (this->root->logScalingFactors + log(siteLikelihood)) * this->DNAPatternWeights[site];
+		// cout << "14h" << endl;
+	}
+}
 
 // Case 1: Observed vertices may have out degree > 0
 // Case 2: Root may have out degree = one
@@ -7443,7 +7609,6 @@ void SEM::ComputeLogLikelihood() {
 	for (int site = 0; site < this->num_dna_patterns; site++) {
     conditionalLikelihoodMap.clear();
     this->ResetLogScalingFactors();
-
 		for (auto& edge : this->edgesForPostOrderTreeTraversal) {
 			tie(p, c) = edge;
 			P = c->transitionMatrix;
@@ -7545,7 +7710,7 @@ void SEM::Optimize_AA_RateMatrix_rooted_at_each_internal_vertex(int num_repetiti
     mt19937 rng(seed);
 
     // Shuffle the vector
-	cout << "randomizing the order in which nodes will be visited" << endl;
+	// cout << "randomizing the order in which nodes will be visited" << endl;
     shuffle(vertex_indices_to_visit.begin(), vertex_indices_to_visit.end(), rng);
     int num_vertices_to_visit = vertex_indices_to_visit.size();
 	int v_ind;
@@ -7556,7 +7721,7 @@ void SEM::Optimize_AA_RateMatrix_rooted_at_each_internal_vertex(int num_repetiti
 	for (int v_i = 0; v_i < num_vertices_to_visit; v_i++) {		
 		v_ind = vertex_indices_to_visit[v_i];
 		v = (*this->vertexMap)[v_ind];
-		cout << "node " << v_i+1 << " of " << num_vertices_to_visit << ":" << v->name << endl;
+		// cout << "node " << v_i+1 << " of " << num_vertices_to_visit << ":" << v->name << endl;
 		this->RootTreeAtVertex(v);		
 		double aa_ll_previous;
 		double aa_ll_current;
@@ -7576,7 +7741,7 @@ void SEM::Optimize_AA_RateMatrix_rooted_at_each_internal_vertex(int num_repetiti
 			this->AA_struct.root_prob_init = this->pi_D;
 			this->AA_struct.rep = rep;
 			aa_ll_previous = this->AAlogLikelihood;
-			cout << "AA log likelihood for Dayhoff is " << this->AA_struct.aa_ll_init << endl;				
+			// cout << "AA log likelihood for Dayhoff is " << this->AA_struct.aa_ll_init << endl;				
 			for (iter = 0; iter < max_iter; iter++) {
 				this->OptimizeRateMatrixNelderMead();
 				this->ComputeNRDistanceMatrix();
@@ -7590,8 +7755,8 @@ void SEM::Optimize_AA_RateMatrix_rooted_at_each_internal_vertex(int num_repetiti
 				if (fabs(diff_ll) < conv_threshold) {
 					break;
 				} else {
-					cout << "AA log likelihood for iter " << iter+1 << " is " << setprecision(8) << aa_ll_current << endl;
-					cout << "Change in AA log likelihood for iter " << iter+1 << " is " << setprecision(8) << (diff_ll) << endl;
+					// cout << "AA log likelihood for iter " << iter+1 << " is " << setprecision(8) << aa_ll_current << endl;
+					// cout << "Change in AA log likelihood for iter " << iter+1 << " is " << setprecision(8) << (diff_ll) << endl;
 					aa_ll_previous = aa_ll_current;
 				}				
 			}
@@ -7619,14 +7784,14 @@ void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_res
     mt19937 rng(seed);
 
     // Shuffle the vector
-	cout << "randomizing the order in which nodes will be visited" << endl;
+	// cout << "randomizing the order in which nodes will be visited" << endl;
     shuffle(vertex_indices_to_visit.begin(), vertex_indices_to_visit.end(), rng);
 
     int num_vertices_to_visit = vertex_indices_to_visit.size();
 	for (int v_i = 0; v_i < num_vertices_to_visit; v_i++) {
         const int v_ind = vertex_indices_to_visit[v_i];
 		SEM_vertex * v = (*this->vertexMap)[v_ind];
-		cout << "node " << v_i+1 << " of " << num_vertices_to_visit << ":" << v->name << endl;
+		// cout << "node " << v_i+1 << " of " << num_vertices_to_visit << ":" << v->name << endl;
 		if(v->degree != 3) throw mt_error("Expect internal nodes to have degree three");
 		
 		for (int rep = 0; rep < num_repetitions; rep++) {
@@ -7668,6 +7833,77 @@ void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_res
 	cout << "max log likelihood obtained using Dirichlet parameters is " << setprecision(10) << this->max_log_likelihood_diri << endl;
 }
 
+void SEM::EMtrifle_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_results() {
+  int n = this->numberOfObservedVertices;
+  int num_vertices = this->vertexMap->size();
+  this->max_log_likelihood_diri = -1 * std::pow(10.0, 5.0);
+
+  std::vector<int> vertex_indices_to_visit;
+  vertex_indices_to_visit.reserve(std::max(0, num_vertices - n));
+  for (int v_ind = n; v_ind < num_vertices; ++v_ind) vertex_indices_to_visit.push_back(v_ind);
+
+  unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
+  std::mt19937 rng(seed);
+
+  const int nodeTotal = static_cast<int>(vertex_indices_to_visit.size());
+
+  auto emit_layer_done = [&](int rep1, int nodeIndex1, int layerIdx, const std::string& rootName, double ll_val) {
+    nlohmann::json j{
+      {"type", "progress"},
+      {"kind", "layer:done"},
+      {"method", "dirichlet"},
+      {"rep", rep1},
+      {"nodeIndex", nodeIndex1},
+      {"nodeTotal", nodeTotal},
+      {"layer", layerIdx},
+      {"rootName", rootName},
+      {"ll", ll_val}
+    };
+    std::cout << "[EM_Method] " << j.dump() << "\n";
+    std::fflush(stdout);
+  };
+
+  int v_ind;
+  SEM_vertex* v;
+
+  for (int rep = 0; rep < num_repetitions; rep++) {
+    std::cout << "rep " << rep + 1 << std::endl;
+
+    for (int v_i = 0; v_i < static_cast<int>(vertex_indices_to_visit.size()); v_i++) {
+      v_ind = vertex_indices_to_visit[v_i];
+      v = (*this->vertexMap)[v_ind];
+      std::cout << "node " << v_i + 1 << " of " << nodeTotal << ":" << v->name << std::endl;
+
+      if (v->degree != 3) throw mt_error("Expect internal nodes to have degree three");
+
+      // this->EMTrifle_current = EMTrifle_struct{};
+      // this->EMTrifle_current.method = "dirichlet";
+      // this->EMTrifle_current.root = v->name;
+      // this->EMTrifle_current.rep = rep + 1;
+
+      for (int layer = 0; layer < 3; layer++) {
+        this->EMTrifle_started_with_dirichlet_rooted_at(v, layer);
+
+        double ll_val = this->EMTrifle_current.ll_final_trifle[layer]; // if available
+        emit_layer_done(/*rep1*/ rep + 1, /*nodeIndex1*/ v_i + 1, /*layerIdx*/ layer, /*rootName*/ v->name, ll_val);
+      }
+
+      if (this->max_log_likelihood_diri < EMTrifle_current.ll_final_trifle[2]) {
+        this->max_log_likelihood_diri = EMTrifle_current.ll_final_trifle[2];
+        if (this->max_log_likelihood_best < this->max_log_likelihood_diri) {
+          this->max_log_likelihood_best = this->max_log_likelihood_diri;
+          this->StoreRootAndRootProbability();
+          this->StoreTransitionMatrices();
+        }
+      }
+      // this->EMTrifle_DNA_runs_diri.emplace_back(std::move(this->EMTrifle_current));
+    }
+  }
+  std::cout << "max log likelihood obtained using Dirichlet parameters is "
+            << std::setprecision(10) << this->max_log_likelihood_diri << std::endl;
+}
+
+
 
 
 void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repetitions) {
@@ -7700,7 +7936,7 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repet
     mt19937 rng(seed);
 
     // Shuffle the vector
-	cout << "randomizing the order in which nodes will be visited" << endl;
+	// cout << "randomizing the order in which nodes will be visited" << endl;
     shuffle(vertex_indices_to_visit.begin(), vertex_indices_to_visit.end(), rng);
     int v_ind;	
 	for (int v_i = 0; v_i < vertex_indices_to_visit.size(); v_i++){
@@ -7736,10 +7972,194 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_dirichlet(int num_repet
 		}
 	}
 	
-	loglikelihood_node_rep_file.close();	
+	loglikelihood_node_rep_file.close();
 	cout << "max log likelihood, precision 10, obtained using Dirichlet parameters is " << setprecision(10) << this->max_log_likelihood_diri << endl;	
-	// cout << "max log likelihood, precision 24, obtained using Dirichlet parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;		
 }
+
+void SEM::EMTrifle_DNA_for_replicate(int rep) {
+  this->max_log_likelihood_rep = -1 * std::pow(10.0, 5.0);
+  int n = this->numberOfObservedVertices;
+  int num_vertices = this->vertexMap->size();  
+
+  std::vector<int> vertex_indices_to_visit;
+  vertex_indices_to_visit.reserve(std::max(0, num_vertices - n));
+  string node_name;
+  SEM_vertex * v;
+  int v_ind;
+  
+  for (int i = 1; i < n-1; i++) {
+	node_name = "h_" + to_string(i);	
+	cout << node_name << endl;
+	vertex_indices_to_visit.emplace_back(this->GetVertexId(node_name));
+  }
+  
+    
+  const int nodeTotal = static_cast<int>(vertex_indices_to_visit.size());
+
+  // --- Emitters (define BEFORE use) -----------------------------------------
+  auto emit_method_start = [&](const char* method) {
+    nlohmann::json j{
+      {"type","progress"},
+      {"kind","method:start"},
+      {"method", method},
+      {"rep", rep}
+    };
+    std::cout << "[EM_Method] " << j.dump() << "\n";
+    std::fflush(stdout);
+  };
+
+  auto emit_layer_done = [&](const char* method,
+                             int nodeIndex1,
+                             int layerIdx,
+                             const std::string& rootName,
+                             double ll_val) {
+    nlohmann::json j{
+      {"type","progress"},
+      {"kind","layer:done"},
+      {"method", method},
+      {"rep", rep},
+      {"nodeIndex", nodeIndex1},
+      {"nodeTotal", nodeTotal},
+      {"layer", layerIdx},
+      {"rootName", rootName},
+      {"ll", ll_val}
+    };
+    std::cout << "[EM_Method] " << j.dump() << "\n";
+    std::fflush(stdout);
+  };
+  // -------------------------------------------------------------------------
+  
+  emit_method_start("dirichlet");
+  for (int v_i = 0; v_i < nodeTotal; ++v_i) {	
+    v_ind = vertex_indices_to_visit[v_i];
+    v = (*this->vertexMap)[v_ind];
+	// ---- Dirichlet (layers 0..2) ----       
+	for (int layer = 0; layer < 3; ++layer) {
+      this->EMTrifle_started_with_dirichlet_rooted_at(v, layer);
+      double ll_val = this->EMTrifle_current.ll_final_trifle[layer];
+      emit_layer_done("dirichlet", v_i + 1, layer, v->name, ll_val);
+	  cout << "dirichlet" << "\t" << v_i + 1 << "\t" << layer << "\t" << v->name << "\t" << ll_val << endl;
+    }
+    
+	if (this->max_log_likelihood_rep < EMTrifle_current.ll_final_trifle[2]) {
+      	this->max_log_likelihood_rep = EMTrifle_current.ll_final_trifle[2];
+      	if (this->max_log_likelihood_best < this->max_log_likelihood_rep) {
+				this->max_log_likelihood_best = this->max_log_likelihood_rep;
+				this->StoreRootAndRootProbability();
+				this->StoreTransitionMatrices();
+      		}
+    	}
+	}
+
+	emit_method_start("parsimony");
+	for (int v_i = 0; v_i < nodeTotal; ++v_i) {
+		v_ind = vertex_indices_to_visit[v_i];
+    	v = (*this->vertexMap)[v_ind];
+		// ---- Parsimony (layers 0..2) ----		
+		for (int layer = 0; layer < 3; ++layer) {
+			this->EMTrifle_started_with_parsimony_rooted_at(v, layer);
+			double ll_val = this->EMTrifle_current.ll_final_trifle[layer];
+			emit_layer_done("parsimony", v_i + 1, layer, v->name, ll_val);
+			cout << "parsimony" << "\t" << v_i + 1 << "\t" << layer << "\t" << v->name << "\t" << ll_val << endl;
+			}
+
+		if (this->max_log_likelihood_rep < EMTrifle_current.ll_final_trifle[2]) {
+			this->max_log_likelihood_rep = EMTrifle_current.ll_final_trifle[2];
+			if (this->max_log_likelihood_best < this->max_log_likelihood_rep) {
+				this->max_log_likelihood_best = this->max_log_likelihood_rep;
+				this->StoreRootAndRootProbability();
+				this->StoreTransitionMatrices();
+			}
+		}
+	}
+	
+	cout << "Restoring BH model with best probability" << endl;
+    this->RestoreBestProbability();	
+    this->ReparameterizeBH();
+	cout << "BH reparameterized" << endl;
+	
+	emit_method_start("hss");
+	for (int v_i = 0; v_i < nodeTotal; ++v_i) {
+		v_ind = vertex_indices_to_visit[v_i];
+    	v = (*this->vertexMap)[v_ind];
+		// ---- HSS (layers 0..2) ----		
+		for (int layer = 0; layer < 3; ++layer) {
+			this->EMTrifle_started_with_HSS_rooted_at(v, layer);
+			double ll_val = this->EMTrifle_current.ll_final_trifle[layer];
+			emit_layer_done("hss", v_i + 1, layer, v->name, ll_val);
+			cout << "hss" << "\t" << v_i + 1 << "\t" << layer << "\t" << v->name << "\t" << ll_val << endl;
+		}
+	}
+}
+
+
+void SEM::EMTrifle_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results() {
+  int n = this->numberOfObservedVertices;
+  int num_vertices = this->vertexMap->size();
+  this->max_log_likelihood_pars = -1 * std::pow(10.0, 5.0);
+
+  std::vector<int> vertex_indices_to_visit;
+  vertex_indices_to_visit.reserve(std::max(0, num_vertices - n));
+  for (int v_ind = n; v_ind < num_vertices; ++v_ind) vertex_indices_to_visit.push_back(v_ind);
+
+  unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
+  std::mt19937 rng(seed);
+
+  const int nodeTotal = static_cast<int>(vertex_indices_to_visit.size());
+
+  
+  auto emit_layer_done = [&](int rep, int nodeIndex1, int layerIdx, const std::string& rootName, double ll_val) {
+    nlohmann::json j{
+      {"type", "progress"},
+      {"kind", "layer:done"},
+      {"method", "parsimony"},
+      {"rep", rep},
+      {"nodeIndex", nodeIndex1},
+      {"nodeTotal", nodeTotal},
+      {"layer", layerIdx},
+      {"rootName", rootName},
+      {"ll", ll_val}
+    };
+    std::cout << "[EM_Method] " << j.dump() << "\n";
+    std::fflush(stdout);
+  };
+
+  int v_ind;
+  SEM_vertex* v;
+
+  for (int rep = 0; rep < num_repetitions; rep++) {
+    std::cout << "rep " << rep + 1 << std::endl;
+
+    for (int v_i = 0; v_i < static_cast<int>(vertex_indices_to_visit.size()); v_i++) {
+      v_ind = vertex_indices_to_visit[v_i];
+      v = (*this->vertexMap)[v_ind];
+      std::cout << "node " << v_i + 1 << " of " << nodeTotal << ":" << v->name << std::endl;
+
+      if (v->degree != 3) throw mt_error("Expect internal nodes to have degree three");
+
+      for (int layer = 0; layer < 3; layer++) {
+        this->EMTrifle_started_with_parsimony_rooted_at(v, layer);
+
+        
+        double ll_val = this->EMTrifle_current.ll_final_trifle[layer];
+        emit_layer_done(rep + 1, v_i + 1, layer, v->name, ll_val);
+      }
+
+      if (this->max_log_likelihood_pars < EMTrifle_current.ll_final_trifle[2]) {
+        this->max_log_likelihood_pars = EMTrifle_current.ll_final_trifle[2];
+        if (this->max_log_likelihood_best < this->max_log_likelihood_pars) {
+          this->max_log_likelihood_best = this->max_log_likelihood_pars;
+          this->StoreRootAndRootProbability();
+          this->StoreTransitionMatrices();
+        }
+      }      
+    }
+  }
+  std::cout << "max log likelihood obtained using Parsimony parameters is "
+            << std::setprecision(10) << this->max_log_likelihood_pars << std::endl;
+}
+
+
 
 void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results(int num_repetitions) {
 	int n = this->numberOfObservedVertices;	
@@ -7949,6 +8369,77 @@ void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_HSS_store_results(i
 	cout << "max log likelihood obtained using HSS parameters is " << setprecision(10) << this->max_log_likelihood_hss << endl;	
 }
 
+void SEM::EMtrifle_DNA_rooted_at_each_internal_vertex_started_with_HSS_store_results() {
+  int n = this->numberOfObservedVertices;
+  int num_vertices = this->vertexMap->size();
+  this->max_log_likelihood_hss = -1 * std::pow(10.0, 5.0);
+
+  std::vector<int> vertex_indices_to_visit;
+  vertex_indices_to_visit.reserve(std::max(0, num_vertices - n));
+  for (int v_ind = n; v_ind < num_vertices; ++v_ind) vertex_indices_to_visit.push_back(v_ind);
+
+  unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
+  std::mt19937 rng(seed);
+
+  const int nodeTotal = static_cast<int>(vertex_indices_to_visit.size());
+
+  auto emit_layer_done = [&](int rep1, int nodeIndex1, int layerIdx, const std::string& rootName, double ll_val) {
+    nlohmann::json j{
+      {"type", "progress"},
+      {"kind", "layer:done"},
+      {"method", "hss"},
+      {"rep", rep1},
+      {"nodeIndex", nodeIndex1},
+      {"nodeTotal", nodeTotal},
+      {"layer", layerIdx},
+      {"rootName", rootName},
+      {"ll", ll_val}
+    };
+    std::cout << "[EM_Method] " << j.dump() << "\n";
+    std::fflush(stdout);
+  };
+
+  int v_ind;
+  SEM_vertex* v;
+
+  for (int rep = 0; rep < num_repetitions; rep++) {
+    std::cout << "rep " << rep + 1 << std::endl;
+
+    for (int v_i = 0; v_i < static_cast<int>(vertex_indices_to_visit.size()); v_i++) {
+      v_ind = vertex_indices_to_visit[v_i];
+      v = (*this->vertexMap)[v_ind];
+      std::cout << "node " << v_i + 1 << " of " << nodeTotal << ":" << v->name << std::endl;
+
+      if (v->degree != 3) throw mt_error("Expect internal nodes to have degree three");
+
+      // this->EMTrifle_current = EMTrifle_struct{};
+      // this->EMTrifle_current.method = "hss";
+      // this->EMTrifle_current.root = v->name;
+      // this->EMTrifle_current.rep = rep + 1;
+
+      for (int layer = 0; layer < 3; layer++) {
+        this->EMTrifle_started_with_HSS_rooted_at(v, layer);
+
+        double ll_val = this->EMTrifle_current.ll_final_trifle[layer]; // if available
+        emit_layer_done(/*rep1*/ rep + 1, /*nodeIndex1*/ v_i + 1, /*layerIdx*/ layer, /*rootName*/ v->name, ll_val);
+      }
+
+      if (this->max_log_likelihood_hss < this->EMTrifle_current.ll_final_trifle[2]) {
+        this->max_log_likelihood_hss = this->EMTrifle_current.ll_final_trifle[2];
+        if (this->max_log_likelihood_best < this->max_log_likelihood_hss) {
+          this->max_log_likelihood_best = this->max_log_likelihood_hss;
+          this->StoreRootAndRootProbability();
+          this->StoreTransitionMatrices();
+        }
+      }
+      // this->EMTrifle_DNA_runs_hss.emplace_back(std::move(this->EMTrifle_current));
+    }
+  }
+  std::cout << "max log likelihood obtained using HSS is "
+            << std::setprecision(10) << this->max_log_likelihood_hss << std::endl;
+}
+
+
 void SEM::EM_rooted_at_each_internal_vertex_started_with_HSS_par(int num_repetitions) {
 	// cout << "convergence threshold for EM is " << this->logLikelihoodConvergenceThreshold << endl;
 	// (* this->logFile) << "convergence threshold for EM is " << this->logLikelihoodConvergenceThreshold << endl;
@@ -8019,14 +8510,227 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_HSS_par(int num_repetit
 	// (*this->logFile) << "max log likelihood obtained using HSS parameters is " << setprecision(ll_precision) << max_log_likelihood << endl;	
 }
 
-/*
-1. Number of iterations until EM converges
-2. Initial log-likelihood with parsimony based parameters
-3. Expected-data log-likelihood after one EM iteration
-4. Expected-data log-likelihood after last EM iteration
-5. Final log-likelihood using EM based parameters
-6. Final location of root selected by EM
-*/
+void SEM::EMTrifle_started_with_dirichlet_rooted_at(SEM_vertex *v, int layer) {
+	// iterate over each internal node	
+	this->EMTrifle_current = EMTrifle_struct{};
+	this->EMTrifle_current.method = "dirichlet";
+	this->EMTrifle_current.root = v->name;
+	this->EMTrifle_current.rep = this->rep + 1;
+	this->RootTreeAtVertex(v);
+	if (layer == 0) {		
+		this->SetInitialEstimateOfModelParametersUsingDirichlet();		
+	} else {
+		this->BumpZeroEntriesOfModelParametersForNextLayer();
+	}
+	this->StoreInitialParamsInEMTrifleCurrent(layer);
+	// cout << "10d" << endl;
+	this->ComputeTrifleLogLikelihood(layer);
+	// cout << "10e" << endl;		
+	this->EMTrifle_current.ll_initial_trifle[layer] = this->logLikelihood;
+	cout << "initial log likelihood is " << this->EMTrifle_current.ll_initial_trifle[layer] << endl;
+	
+	// this->StoreParamsInEMCurrent("init");
+	// cout << "10d" << endl;
+	this->ResetAncestralSequences();
+	
+	double logLikelihood_exp_data_previous;
+	double logLikelihood_exp_data_first;
+	double logLikelihood_exp_data_final;
+	int iter = 0;	
+	bool continueIterations = 1;
+	this->debug = 0;
+	bool verbose = 0;		
+	// (*this->logFile) << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
+	logLikelihood_exp_data_previous = -1 * pow(10,4);
+	this->ConstructCliqueTree();
+	while (continueIterations) {
+		// t_start_time = chrono::high_resolution_clock::now();
+		iter += 1;
+		// cout << "iteration " << iter << endl;			
+		// cout << "here 2" << endl;
+		this->ComputeExpectedCountsForTrifle(layer);
+		// cout << "here 3" << endl;
+		this->ComputeMarginalProbabilitiesUsingExpectedCounts();
+		// cout << "here 4" << endl;
+		this->ComputeMLEstimateOfBHGivenExpectedDataCompletion();
+		// cout << "here 5" << endl;
+		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
+		// cout << "here 6" << endl;
+		// cout << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
+		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;		
+		if (iter == 1) {			
+			logLikelihood_exp_data_first = this->logLikelihood;
+            logLikelihood_exp_data_previous = this->logLikelihood;
+			this->EMTrifle_current.ecd_ll_per_iter_for_trifle[layer][iter] = this->logLikelihood;
+		} else if ((this->logLikelihood > logLikelihood_exp_data_previous + this->ecdllConvergenceThresholdForTrifle[layer]) and (iter < this->maxIter)) {
+			logLikelihood_exp_data_previous = this->logLikelihood;
+			this->EMTrifle_current.ecd_ll_per_iter_for_trifle[layer][iter] = this->logLikelihood;
+		} else {
+			continueIterations = 0;
+			logLikelihood_exp_data_final = logLikelihood_exp_data_previous;
+		}
+	}
+	this->ComputeTrifleLogLikelihood(layer);
+	this->StoreFinalParamsInEMTrifleCurrent(layer);	
+	this->EMTrifle_current.iter_trifle[layer] = iter;
+	this->EMTrifle_current.ll_final_trifle[layer] = this->logLikelihood;
+	cout << "[EM_Trifle] " << this->emtrifle_to_json(this->EMTrifle_current) << endl;
+	cout << "final log likelihood is " << this->EMTrifle_current.ll_final_trifle[layer] << endl;
+	return ;
+	// return tuple<int,double,double,double,double>(iter,logLikelihood_pars,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
+}
+
+
+void SEM::EMTrifle_started_with_HSS_rooted_at(SEM_vertex *v, int layer) {
+	this->EMTrifle_current = EMTrifle_struct{};
+	this->EMTrifle_current.method = "hss";
+	this->EMTrifle_current.root = v->name;
+	this->EMTrifle_current.rep = this->rep + 1;
+	// iterate over each internal node	
+	this->RootTreeAtVertex(v);
+	if (layer == 0) {
+		this->SetInitialEstimateOfModelParametersUsingHSS();
+	} else {
+		this->BumpZeroEntriesOfModelParametersForNextLayer();		
+	}
+	this->StoreInitialParamsInEMTrifleCurrent(layer);
+	// cout << "10d" << endl;
+	this->ComputeTrifleLogLikelihood(layer);
+	// cout << "10e" << endl;		
+	this->EMTrifle_current.ll_initial_trifle[layer] = this->logLikelihood;
+	cout << "initial log likelihood is " << this->EMTrifle_current.ll_initial_trifle[layer] << endl;
+	
+	// this->StoreParamsInEMCurrent("init");
+	// cout << "10d" << endl;
+	this->ResetAncestralSequences();
+	
+	double logLikelihood_exp_data_previous;
+	double logLikelihood_exp_data_first;
+	double logLikelihood_exp_data_final;
+	int iter = 0;	
+	bool continueIterations = 1;
+	this->debug = 0;
+	bool verbose = 0;
+	
+	// cout << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
+	// cout << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
+	// (*this->logFile) << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
+	// (*this->logFile) << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
+	logLikelihood_exp_data_previous = -1 * pow(10,4);
+	this->ConstructCliqueTree();
+	while (continueIterations) {
+		// t_start_time = chrono::high_resolution_clock::now();
+		iter += 1;
+		// cout << "iteration " << iter << endl;			
+		// cout << "here 2" << endl;
+		this->ComputeExpectedCountsForTrifle(layer);
+		// cout << "here 3" << endl;
+		this->ComputeMarginalProbabilitiesUsingExpectedCounts();
+		// cout << "here 4" << endl;
+		this->ComputeMLEstimateOfBHGivenExpectedDataCompletion();
+		// cout << "here 5" << endl;
+		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
+		// cout << "here 6" << endl;
+		// cout << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
+		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;		
+		if (iter == 1) {			
+			logLikelihood_exp_data_first = this->logLikelihood;
+            logLikelihood_exp_data_previous = this->logLikelihood;
+			this->EMTrifle_current.ecd_ll_per_iter_for_trifle[layer][iter] = this->logLikelihood;
+		} else if ((this->logLikelihood > logLikelihood_exp_data_previous + this->ecdllConvergenceThresholdForTrifle[layer]) and (iter < this->maxIter)) {
+			logLikelihood_exp_data_previous = this->logLikelihood;
+			this->EMTrifle_current.ecd_ll_per_iter_for_trifle[layer][iter] = this->logLikelihood;
+		} else {
+			continueIterations = 0;
+			logLikelihood_exp_data_final = logLikelihood_exp_data_previous;
+		}
+	}
+	this->ComputeTrifleLogLikelihood(layer);
+	this->StoreFinalParamsInEMTrifleCurrent(layer);	
+	this->EMTrifle_current.iter_trifle[layer] = iter;
+	this->EMTrifle_current.ll_final_trifle[layer] = this->logLikelihood;
+	cout << "[EM_Trifle] " << this->emtrifle_to_json(this->EMTrifle_current) << endl;
+	cout << "final log likelihood is " << this->EMTrifle_current.ll_final_trifle[layer] << endl;
+	return ;
+}
+
+void SEM::EMTrifle_started_with_parsimony_rooted_at(SEM_vertex *v, int layer) {
+	// iterate over each internal node
+	this->EMTrifle_current = EMTrifle_struct{};
+	this->EMTrifle_current.method = "parsimony";
+	this->EMTrifle_current.root = v->name;
+	this->EMTrifle_current.rep = this->rep + 1;
+	this->RootTreeAtVertex(v);
+	if (layer == 0) {
+		// cout << "10a" << endl;
+		this->ComputeMPEstimateOfAncestralSequencesForTrifle(layer);
+		// cout << "10b" << endl;
+		this->ComputeInitialEstimateOfModelParametersForTrifle(layer);
+		// cout << "10c" << endl;		
+	} else {
+		this->BumpZeroEntriesOfModelParametersForNextLayer();		
+	}
+	this->StoreInitialParamsInEMTrifleCurrent(layer);
+	// cout << "10d" << endl;
+	this->ComputeTrifleLogLikelihood(layer);
+	// cout << "10e" << endl;		
+	this->EMTrifle_current.ll_initial_trifle[layer] = this->logLikelihood;
+	cout << "initial log likelihood is " << this->EMTrifle_current.ll_initial_trifle[layer] << endl;
+	
+	// this->StoreParamsInEMCurrent("init");
+	// cout << "10d" << endl;
+	this->ResetAncestralSequences();
+	
+	double logLikelihood_exp_data_previous;
+	double logLikelihood_exp_data_first;
+	double logLikelihood_exp_data_final;
+	int iter = 0;	
+	bool continueIterations = 1;
+	this->debug = 0;
+	bool verbose = 0;
+	
+	// cout << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
+	// cout << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
+	// (*this->logFile) << "-    -     -     -     -     -     -     -     -     -     -     -     -     -" << endl;
+	// (*this->logFile) << "log-likelihood computed by marginalization using parsimony parameters is " << setprecision(ll_precision) << logLikelihood_pars << endl;
+	logLikelihood_exp_data_previous = -1 * pow(10,4);
+	this->ConstructCliqueTree();
+	while (continueIterations) {
+		// t_start_time = chrono::high_resolution_clock::now();
+		iter += 1;
+		// cout << "iteration " << iter << endl;			
+		// cout << "here 2" << endl;
+		this->ComputeExpectedCountsForTrifle(layer);
+		// cout << "here 3" << endl;
+		this->ComputeMarginalProbabilitiesUsingExpectedCounts();
+		// cout << "here 4" << endl;
+		this->ComputeMLEstimateOfBHGivenExpectedDataCompletion();
+		// cout << "here 5" << endl;
+		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
+		// cout << "here 6" << endl;
+		// cout << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
+		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;		
+		if (iter == 1) {			
+			logLikelihood_exp_data_first = this->logLikelihood;
+            logLikelihood_exp_data_previous = this->logLikelihood;
+			this->EMTrifle_current.ecd_ll_per_iter_for_trifle[layer][iter] = this->logLikelihood;
+		} else if ((this->logLikelihood > logLikelihood_exp_data_previous + this->ecdllConvergenceThresholdForTrifle[layer]) and (iter < this->maxIter)) {
+			logLikelihood_exp_data_previous = this->logLikelihood;
+			this->EMTrifle_current.ecd_ll_per_iter_for_trifle[layer][iter] = this->logLikelihood;
+		} else {
+			continueIterations = 0;
+			logLikelihood_exp_data_final = logLikelihood_exp_data_previous;
+		}
+	}
+	this->ComputeTrifleLogLikelihood(layer);
+	this->StoreFinalParamsInEMTrifleCurrent(layer);	
+	this->EMTrifle_current.iter_trifle[layer] = iter;
+	this->EMTrifle_current.ll_final_trifle[layer] = this->logLikelihood;
+	cout << "[EM_Trifle] " << this->emtrifle_to_json(this->EMTrifle_current) << endl;
+	cout << "final log likelihood is " << this->EMTrifle_current.ll_final_trifle[layer] << endl;
+	return ;
+	// return tuple<int,double,double,double,double>(iter,logLikelihood_pars,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
+}
 
 tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at(SEM_vertex *v) {
 	//	cout << "10a" << endl;
@@ -8058,17 +8762,16 @@ tuple <int,double,double,double,double> SEM::EM_started_with_parsimony_rooted_at
 	logLikelihood_exp_data_previous = -1 * pow(10,4);
 	while (continueIterations) {
 		// t_start_time = chrono::high_resolution_clock::now();
-		iter += 1;
-					
+		iter += 1;					
 		this->ConstructCliqueTree();			
 		// 2. Compute expected counts
 		this->ComputeExpectedCounts();
 
-		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
+		this->ComputeMarginalProbabilitiesUsingExpectedCounts();
 		
-		// this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
-		this->ComputeMLRootedTreeForRootSearchUnderGMM();
-		// this->ComputeLogLikelihoodUsingExpectedDataCompletion();
+		this->ComputeMLEstimateOfBHGivenExpectedDataCompletion();	
+		
+		this->ComputeLogLikelihoodUsingExpectedDataCompletion();		
 		
 		// cout << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;
 		// (*this->logFile) << "log-likelihood computed using expected counts after EM iteration " << iter << " is " << setprecision(ll_precision) << this->logLikelihood << endl;		
@@ -8132,9 +8835,9 @@ tuple <int,double,double,double,double> SEM::EM_started_with_HSS_parameters_root
 		// 2. Compute expected counts
 		this->ComputeExpectedCounts();
 
-		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
+		this->ComputeMarginalProbabilitiesUsingExpectedCounts();
 
-		this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
+		this->ComputeMLEstimateOfBHGivenExpectedDataCompletion();
 		
 		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
 		
@@ -8205,9 +8908,9 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 		// 2. Compute expected counts
 		this->ComputeExpectedCounts();
 
-		this->ComputePosteriorProbabilitiesUsingExpectedCounts();
+		this->ComputeMarginalProbabilitiesUsingExpectedCounts();
 		
-		this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
+		this->ComputeMLEstimateOfBHGivenExpectedDataCompletion();
 		
 		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
 		
@@ -8309,7 +9012,6 @@ tuple <int,double,double,double,double> SEM::EM_started_with_dirichlet_rooted_at
 // 		// 	cout << "Optimize model parameters given expected counts" << endl;
 // 		// }
 		
-// 		this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
 // 		// cout << "10j" << endl;
 		
 // 		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
@@ -8361,14 +9063,14 @@ void SEM::ComputeSumOfExpectedLogLikelihoods() {
 	}
 }
 
-void SEM::ComputeMLRootedTreeForRootSearchUnderGMM() {
+void SEM::ComputeMLRootedTreeForRootSearchUnderBH() {
 	vector < SEM_vertex *> verticesToVisit = this->preOrderVerticesWithoutLeaves;	
 	double logLikelihood_max = 0;
 	int numberOfVerticesVisited = 0;	
 	for (SEM_vertex * v : verticesToVisit) {
 		numberOfVerticesVisited += 1;
 		this->RootTreeAtVertex(v);		
-		this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
+		this->ComputeMLEstimateOfBHGivenExpectedDataCompletion();
 		this->ComputeLogLikelihoodUsingExpectedDataCompletion();
 		if ((numberOfVerticesVisited < 2) or (logLikelihood_max < this->logLikelihood)) {
 			logLikelihood_max = this->logLikelihood;
@@ -8418,7 +9120,7 @@ void SEM::ComputeMLRootedTreeForFullStructureSearch() {
 		// P(V) (for each vertex) and 
 		// P(V1, V2) (for each vertex pair) are available
 //		cout << "Computing MLE of model parameters" << endl;
-		this->ComputeMLEstimateOfGMMGivenExpectedDataCompletion();
+		this->ComputeMLEstimateOfBHGivenExpectedDataCompletion();
 		// Transform to bifurcating rooted tree
 //		cout << "Transforming to bifurcating leaf-labeled tree" << endl;		
 		if (useExpectedLogLikForSelectingRoot) {
@@ -8475,7 +9177,18 @@ emtr::Md SEM::GetP_yGivenx(emtr::Md P_xy) {
 	}
 	for (int dna_x = 0; dna_x < 4; dna_x ++) {
 		for (int dna_y = 0; dna_y < 4; dna_y ++) {
-			P_yGivenx[dna_x][dna_y] = P_xy[dna_x][dna_y] / P_x[dna_x];
+			// P_yGivenx[dna_x][dna_y] = P_xy[dna_x][dna_y] / P_x[dna_x];
+			if (P_xy[dna_x][dna_y] == 0 && P_x[dna_x] == 0) {
+				P_yGivenx[dna_x][dna_y] = 0;				
+			} else {						
+				P_yGivenx[dna_x][dna_y] = P_xy[dna_x][dna_y] / P_x[dna_x];
+			}						
+			if (isnan(P_yGivenx[dna_x][dna_y])) {
+				cout << "P_yGivenx[" << dna_x << "][" << dna_y << "]" << " is nan " << endl;
+				cout << "P_xy[" << dna_x << "][" << dna_y << "]" << " is " << P_xy[dna_x][dna_y]  << endl;
+				cout << "P_x[" << dna_x << "] is " << P_x[dna_x] << endl;				
+				throw mt_error ("nan found");
+			}
 		}
 	}
 	return (P_yGivenx);
@@ -8491,7 +9204,7 @@ void SEM::SetMinLengthOfEdges() {
 }
 
  
-void SEM::ComputeMLEstimateOfGMMGivenExpectedDataCompletion() {
+void SEM::ComputeMLEstimateOfBHGivenExpectedDataCompletion() {	
 	SEM_vertex * x; SEM_vertex * y;
 	emtr::Md P_xy;
 	for (pair <int, SEM_vertex*> idPtrPair : *this->vertexMap) {
@@ -8506,8 +9219,10 @@ void SEM::ComputeMLEstimateOfGMMGivenExpectedDataCompletion() {
 				
 			}
 			// MLE of transition matrices
+			// cout << "eight eight" << endl;
 			y->transitionMatrix = this->GetP_yGivenx(P_xy);
-		} else {
+			// cout << "nine nine" << endl;
+		} else {			
 			// MLE of root probability
 			this->rootProbability = this->posteriorProbabilityForVertex[y];
 			y->rootProbability = this->rootProbability;
@@ -8515,6 +9230,7 @@ void SEM::ComputeMLEstimateOfGMMGivenExpectedDataCompletion() {
 			for (int i = 0; i < 4; i ++) {
 				y->transitionMatrix[i][i] = 1.0;
 			}
+			// cout << "ten ten" << endl;
 		}
 	}
 }
@@ -8806,6 +9522,30 @@ void SEM::ResetTimesVisited() {
 	}
 }
 
+array <double, 4> SEM::GetBaseCompositionForTrifle(SEM_vertex * v, int layer) {
+	array <double, 4> baseCompositionArray;
+	for (int dna = 0; dna < 4; dna ++) {
+		baseCompositionArray[dna] = 0;
+	}
+	int dna_v;
+	// cout << "here 12a" << endl;
+	for (int site = 0; site < this->num_patterns_for_layer[layer]; site ++) {
+		dna_v = v->DNAcompressed[site];
+		if (dna_v > -1) baseCompositionArray[dna_v] += this->DNAPatternWeights[site];
+	}
+	// cout << "here 12b" << endl;
+	int non_gap_sites = 0;
+	for (int dna = 0; dna < 4; dna ++) {
+		non_gap_sites += baseCompositionArray[dna];
+	}
+	// cout << "here 12c" << endl;
+	for (int dna = 0; dna < 4; dna ++) {
+		baseCompositionArray[dna] /= float(non_gap_sites);		
+	}	
+
+	return (baseCompositionArray);
+}
+
 array <double, 4> SEM::GetBaseComposition(SEM_vertex * v) {
 	array <double, 4> baseCompositionArray;
 	for (int dna = 0; dna < 4; dna ++) {
@@ -8889,6 +9629,43 @@ void SEM::SetInitialEstimateOfModelParametersUsingDirichlet() {
 	}
 }
 
+void SEM::StoreInitialParamsInEMTrifleCurrent(int layer) {	
+	SEM_vertex * c;		
+	for (int dna = 0; dna < 4; dna ++) this->EMTrifle_current.root_prob_initial_trifle[layer][dna] = this->rootProbability[dna];
+	for (pair <int, SEM_vertex *> idPtrPair : * this->vertexMap) {
+		c = idPtrPair.second;
+		this->EMTrifle_current.trans_prob_initial_trifle[layer][c->name] = c->transitionMatrix;
+	}
+}
+
+void SEM::StoreFinalParamsInEMTrifleCurrent(int layer) {	
+	SEM_vertex * c;		
+	for (int dna = 0; dna < 4; dna ++) this->EMTrifle_current.root_prob_final_trifle[layer][dna] = this->rootProbability[dna];
+	for (pair <int, SEM_vertex *> idPtrPair : * this->vertexMap) {
+		c = idPtrPair.second;
+		this->EMTrifle_current.trans_prob_final_trifle[layer][c->name] = c->transitionMatrix;
+	}
+}
+
+// void SEM::StoreParamsInEMTrifleCurrent(int layer) {	
+// 	SEM_vertex * c;	
+// 	if (layer == -1) {
+// 		for (int dna = 0; dna < 4; dna ++) this->EMTrifle_current.root_prob_init[dna] = this->rootProbability[dna];
+// 		for (pair <int, SEM_vertex *> idPtrPair : * this->vertexMap) {
+// 			c = idPtrPair.second;
+// 			this->EMTrifle_current.trans_prob_init[c->name] =  c->transitionMatrix;
+// 		}
+// 	} else if (layer > -1 && layer < 3) {
+// 		for (int dna = 0; dna < 4; dna ++) this->EMTrifle_current.root_prob_final_trifle[layer][dna] = this->rootProbability[dna];
+// 		for (pair <int, SEM_vertex *> idPtrPair : * this->vertexMap) {
+// 			c = idPtrPair.second;
+// 			this->EMTrifle_current.trans_prob_final_trifle[layer][c->name] = c->transitionMatrix;
+// 		}
+// 	} else {
+// 		throw mt_error("argument not recognized");
+// 	}
+// }
+
 void SEM::StoreParamsInEMCurrent(string init_or_final) {
 	for (int dna = 0; dna < 4; dna ++) {
 		if (init_or_final == "init") {			
@@ -8935,16 +9712,89 @@ void SEM::SetInitialEstimateOfModelParametersUsingHSS() {
 	}
 }
 
+void SEM::BumpZeroEntriesOfModelParametersForNextLayer() {
+	// characters in next layer not present in previous layer may have
+	// zero probabilities 
+	bool debug = 0;
+	// cout << "here 11a" << endl;
+	this->addToZeroEntriesOfRootProbability(this->rootProbability);
+	this->root->rootProbability = this->rootProbability;
+	for (int i = 0; i < 4; i++) {
+		if(isnan(this->rootProbability[i])) {
+			cout << "root prob not valid" << endl;
+			throw mt_error("root prob not valid");
+		}
+	}
+	if (debug) {
+		cout << "Root probability is " << endl;
+		for (int i = 0; i < 4; i++) {
+			// cout << this->rootProbability[i] << "\t";
+		}
+		cout << endl;
+	}
+	// cout << "here 11b" << endl;
+	SEM_vertex * c; SEM_vertex * p;
+	for (pair <int, SEM_vertex *> idPtrPair : * this->vertexMap) {
+		c = idPtrPair.second;
+		p = c->parent;
+		if (p != c) {			
+			this->addToZeroEntriesOfTransitionMatrix(c->transitionMatrix);			
+			if (debug) {
+				cout << "Transition matrix for " << p->name << " to " << c->name << " is " << endl;
+				// cout << c->transitionMatrix[2][3] << endl;
+			}			
+		}
+	}
+}
+
+void SEM::ComputeInitialEstimateOfModelParametersForTrifle(int layer) {
+	bool debug = 0;
+	// cout << "here 11a" << endl;
+	this->rootProbability = GetBaseCompositionForTrifle(this->root, layer);
+	this->root->rootProbability = this->rootProbability;
+	for (int i = 0; i < 4; i++) {
+		if(isnan(this->rootProbability[i])) {
+			cout << "root prob not valid" << endl;
+			throw mt_error("root prob not valid");
+		}
+	}
+	if (debug) {
+		cout << "Root probability is " << endl;
+		for (int i = 0; i < 4; i++) {
+			// cout << this->rootProbability[i] << "\t";
+		}
+		cout << endl;
+	}
+	// cout << "here 11b" << endl;
+	SEM_vertex * c; SEM_vertex * p;
+	for (pair <int, SEM_vertex *> idPtrPair : * this->vertexMap) {
+		c = idPtrPair.second;
+		p = c->parent;
+		if (p != c) {
+			c->transitionMatrix = this->ComputeTransitionMatrixUsingAncestralStatesForTrifle(p,c,layer);
+			
+			if (debug) {
+				cout << "Transition matrix for " << p->name << " to " << c->name << " is " << endl;
+				// cout << c->transitionMatrix[2][3] << endl;
+			}			
+		}
+	}
+	// cout << "here 11c" << endl;
+	if (debug) {
+		cout << "Transition matrices have been computed" << endl;
+	}	
+}
+
 void SEM::ComputeInitialEstimateOfModelParameters() {
 	bool debug = 0;
 	this->rootProbability = GetBaseComposition(this->root);	
 	this->root->rootProbability = this->rootProbability;
 	if (debug) {
-		cout << "Root probability is " << endl;
-		for (int i = 0; i < 4; i++) {
-			cout << this->rootProbability[i] << "\t";
-		}
-		cout << endl;
+		// cout << "Root probability is " << endl;
+		// for (int i = 0; i < 4; i++) {
+		// 	cout << this->rootProbability[i] << "\t";
+		// }
+		// cout << endl;
 	}
 
 	SEM_vertex * c; SEM_vertex * p;
@@ -8955,7 +9805,7 @@ void SEM::ComputeInitialEstimateOfModelParameters() {
 			c->transitionMatrix = this->ComputeTransitionMatrixUsingAncestralStates(p,c);		
 			if (debug) {
 				cout << "Transition matrix for " << p->name << " to " << c->name << " is " << endl;
-				cout << c->transitionMatrix[2][3] << endl;
+				// cout << c->transitionMatrix[2][3] << endl;
 			}			
 		}
 	}
@@ -8969,6 +9819,96 @@ void SEM::ResetLogScalingFactors() {
 	for (pair <int, SEM_vertex * > idPtrPair : * this->vertexMap){
 		idPtrPair.second->logScalingFactors = 0;
 	}
+}
+
+void SEM::ComputeMPEstimateOfAncestralSequencesForTrifle(int layer) {
+	SEM_vertex * p;	
+	map <SEM_vertex * , int> V;
+	map <SEM_vertex * , vector<int>> VU;					
+	map <int, int> dnaCount;
+	int pos;
+	int maxCount; int numberOfPossibleStates;
+	this->ResetAncestralSequences();
+	if (this->preOrderVerticesWithoutLeaves.size() == 0) {
+		// cout << "setting vertices for preorder traversal" << endl;
+		this->SetVerticesForPreOrderTraversalWithoutLeaves();
+	} else {
+		// cout << "vertices for preorder traversal already set" << endl;
+	}
+	
+	// cout << "p 1" << endl;
+
+	// cout << "site patterns for layer is " << this->num_patterns_for_layer[layer] << endl;
+	for (int site = 0; site < this->num_patterns_for_layer[layer]; site++) {		
+		V.clear();
+		VU.clear();		
+	//	Compute V and VU for leaves	
+		// if (site==0) cout << "p 2" << endl;
+		for (SEM_vertex * c : this->leaves) {			
+			V.insert(make_pair(c,c->DNAcompressed[site]));
+			vector <int> vectorToAdd;
+			vectorToAdd.push_back(c->DNAcompressed[site]);
+			VU.insert(make_pair(c,vectorToAdd));	
+		}		
+	//	Set VU for ancestors
+		for (SEM_vertex * c : this->preOrderVerticesWithoutLeaves) {
+			vector <int> vectorToAdd;
+			VU.insert(make_pair(c,vectorToAdd));
+		}				
+		for (int p_ind = this->preOrderVerticesWithoutLeaves.size()-1; p_ind > -1; p_ind--) {			
+			p = preOrderVerticesWithoutLeaves[p_ind];
+			// cout << p->name << " rf \t" << endl;			
+			dnaCount.clear();
+			for (int dna = -1; dna < 4; dna++) {
+				dnaCount[dna] = 0;
+			}
+			for (SEM_vertex * c : p->children) {
+				for (int dna: VU[c]) {
+					dnaCount[dna] += 1;
+				}
+			}
+			maxCount = 0;
+			for (pair <int, int> dnaCountPair: dnaCount) {
+				if (dnaCountPair.second > maxCount) {
+					maxCount = dnaCountPair.second;
+				}
+			}			
+			for (pair <int, int> dnaCountPair: dnaCount) {
+				if (dnaCountPair.second == maxCount) {
+					VU[p].push_back(dnaCountPair.first);
+				}
+			}			
+		}			
+		
+	// Set V for ancestors
+		for (SEM_vertex * c : preOrderVerticesWithoutLeaves) {
+			if (c->parent == c) {			
+			// Set V for root
+				if (VU[c].size()==1) {
+					V.insert(make_pair(c,VU[c][0]));
+					// cout << c->name << "\t" << VU[c][0] << endl;
+				} else {
+					numberOfPossibleStates = VU[c].size();
+					uniform_int_distribution <int> distribution(0,numberOfPossibleStates-1);
+					pos = distribution(generator);
+					V.insert(make_pair(c,VU[c][pos]));
+				}				
+			} else {
+				p = c->parent;
+				if (find(VU[c].begin(),VU[c].end(),V[p])==VU[c].end()) {
+					numberOfPossibleStates = VU[c].size();
+					uniform_int_distribution <int> distribution(0,numberOfPossibleStates-1);
+					pos = distribution(generator);
+					V.insert(make_pair(c,VU[c][pos]));
+					// cout << c->name << " ancestor \t" << VU[c][pos] << endl;
+				} else {
+					V.insert(make_pair(c,V[p]));
+					// cout << c->name << " ancestor \t" << V[p] << endl;
+				}				
+			}				
+			c->DNAcompressed[site] = V[c];
+		}				
+	}	
 }
 
 void SEM::ComputeMPEstimateOfAncestralSequences() {
@@ -9368,6 +10308,10 @@ void SEM::SetEdgesForPostOrderTraversal() {
 	}
 }
 
+void SEM::SetVerticesForPostOrderTraversal() {
+
+}
+
 void SEM::SetVerticesForPreOrderTraversalWithoutLeaves() {
 	this->preOrderVerticesWithoutLeaves.clear();
 	for (pair <SEM_vertex*, SEM_vertex*> edge : this->edgesForPreOrderTreeTraversal) {
@@ -9375,6 +10319,9 @@ void SEM::SetVerticesForPreOrderTraversalWithoutLeaves() {
 			this->preOrderVerticesWithoutLeaves.push_back(edge.first);
 		}
 	}
+	// for (SEM_vertex * v : this->preOrderVerticesWithoutLeaves) {
+	// 	cout << v->name << endl;
+	// }
 }
 
 void SEM::RootedTreeAlongAnEdgeIncidentToCentralVertex() {	
@@ -9702,7 +10649,7 @@ void SEM::CompressAASequences() {
 #include <vector>
 
 void SEM::CompressDNASequences() {
-    // Reset
+    
     this->DNAPatternWeights.clear();
     this->gapLessDNAFlag.clear();
 
@@ -9752,9 +10699,9 @@ void SEM::CompressDNASequences() {
     }
 
     // Sort pattern indices by decreasing weight
-    std::vector<size_t> order(this->DNAPatternWeights.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::stable_sort(order.begin(), order.end(),
+    vector<size_t> order(this->DNAPatternWeights.size());
+    iota(order.begin(), order.end(), 0);
+    stable_sort(order.begin(), order.end(),
         [this](size_t a, size_t b) {
             return this->DNAPatternWeights[a] > this->DNAPatternWeights[b];
         }
@@ -9912,7 +10859,7 @@ void SEM::SetDNASequencesFromFile(string sequenceFileName) {
     seq_len = recodedSequence.size();
 	recodedSequence.clear();
 	inputFile.close(); 
-	cout << this->numberOfObservedVertices << endl;   
+	// cout << this->numberOfObservedVertices << endl;   
 }
 
 void SEM::SetAASequencesFromFile(string sequenceFileName) {
@@ -9955,7 +10902,7 @@ void SEM::SetAASequencesFromFile(string sequenceFileName) {
 		}
 	}
 	this->SetAASequenceForVertex(seqName,recodedSequence);
-	cout << "completed setting AA sequences" << endl;	
+	// cout << "completed setting AA sequences" << endl;	
 }
 
 void SEM::AddWeightedEdges(vector <tuple <string,string,double> > weightedEdgesToAdd) {
@@ -10105,10 +11052,6 @@ double SEM::ComputeDistance(int v_i, int v_j) {
 }
 
 
-
-
-
-
 ///...///...///...///...///...///...///... Constructor and Destructor for EM manager ///...///...///...///...///...///...///...///...///
 
 EMManager::EMManager(string DNAsequenceFileNameToSet,				 
@@ -10131,80 +11074,93 @@ EMManager::EMManager(string DNAsequenceFileNameToSet,
 		this->max_EM_iter = max_iter;
 		this->numberOfLargeEdgesThreshold = 100;
 		this->SetDNAMap();
-		this->ancestralSequencesString = "";
-		cout << "here 1" << endl;
-		this->P = new SEM(0.01,100,this->verbose);	
-		cout << "here 1" << endl;
-		this->F = new FamilyJoining(DNAsequenceFileNameToSet, 0.0);
-		cout << "here 2" << endl;
-		this->P->SetFJTree(this->F->GetTree());		
-		cout << "here 3" << endl;
+		this->ancestralSequencesString = "";		
+		this->P = new SEM(0.0,100,this->verbose);			
+		this->F = new FamilyJoining(DNAsequenceFileNameToSet, 0.0);	
+		this->P->SetFJTree(this->F->GetTree());			
 		vector <tuple <string, string, double>> edge_vector = this->F->GetEdgeVector();
-		cout << "here 4" << endl;
-		// this->F->EmitNewickJSON(edge_vector);
-		// for (auto e: edge_vector) {
-		// 	cout << get<0>(e) << "\t" << get<1>(e) << "\t" << get<2>(e) << endl;
-		// }
-		// cout << "num of edges in FJ tree is "<< edge_vector.size() << endl;			
-		this->P->SetDNASequencesFromFile(DNAsequenceFileNameToSet);		
-		cout << "here 5" << endl;
+		{
+			const auto& ev = this->F->GetEdgeVector();
+			nlohmann::json j;
+
+			// Build [[u,v,w], ...]
+			std::vector<nlohmann::json> arr;
+			arr.reserve(ev.size());
+			for (const auto& e : ev) {
+				const std::string& u = std::get<0>(e);
+				const std::string& v = std::get<1>(e);
+				const double       w = std::get<2>(e);
+				arr.emplace_back(nlohmann::json::array({ u, v, w }));
+			}
+
+			j["edge_list"] = std::move(arr);
+			j["source"]    = "familyjoining";
+			j["method"]    = "epsilon_zero";
+			j["label"]     = "final";
+			j["n_edges"] = static_cast<int>(ev.size());			
+
+			std::cout << "[FAMILYJOINING]\t" << j.dump() << "\n";
+			fflush(stdout);
+		}
+
+		this->P->SetDNASequencesFromFile(DNAsequenceFileNameToSet);				
 		this->P->AddWeightedEdges(edge_vector);				
 		this->P->SetVertexVector();
-		this->P->CompressDNASequences();
-		this->P->DNAPatternWeights.size();
+		this->P->CompressDNASequences();		
 		this->P->SetParameters(parameters_json);
-		cout << "total num dna patterns is " << this->P->num_dna_patterns << endl;
-		cout << "site, pattern weight, cum_pattern_weight" << this->P->num_dna_patterns << endl;
-		for (int i = 0; i < this->P->num_dna_patterns; i++) {
-			cout << i << " " << this->P->DNAPatternWeights[i] << " " << this->P->CumPercDNAPatternWeights[i] << endl;
+		
+		const auto& cum = this->P->CumPercDNAPatternWeights;				
+		this->P->num_patterns_for_layer[0] = this->P->first_index_gt(cum, this->P->cum_pattern_weight_coarse);
+		this->P->num_patterns_for_layer[1] = this->P->first_index_gt(cum, this->P->cum_pattern_weight_medium);
+		this->P->num_patterns_for_layer[2] = this->P->first_index_gt(cum, 100);
+				
+
+		this->P->ecdllConvergenceThresholdForTrifle.resize(3);
+		this->P->ecdllConvergenceThresholdForTrifle[0] = this->P->cum_pattern_weight_coarse/(100.0) * this->P->ecdllConvergenceThreshold;
+		this->P->ecdllConvergenceThresholdForTrifle[1] = this->P->cum_pattern_weight_medium/(100.0) * this->P->ecdllConvergenceThreshold;
+		this->P->ecdllConvergenceThresholdForTrifle[2] = this->P->ecdllConvergenceThreshold;
 		}
-		const auto& cum = this->P->CumPercDNAPatternWeights;
 
-		// this->P->siteidx_for_regime[0] = this->P->first_index_gt(cum, this->P->cum_pattern_weight_coarse);
-		// this->P->siteidx_for_regime[1] = this->P->first_index_gt(cum, this->P->cum_pattern_weight_medium);
-		// this->P->siteidx_for_regime[2] = this->P->first_index_gt(cum, 100);
+		EMManager::~EMManager() {
+			delete this->F;	
+			delete this->P;		
+		}
 
-		// cout << "num of patterns used for first regime is " << this->P->siteidx_for_regime[0] << endl;
-		// cout << "num of patterns used for second regime is " << this->P->siteidx_for_regime[1] << endl;
-		// cout << "num of patterns used for third regime is " << this->P->siteidx_for_regime[2] << endl;
-    }
-
-EMManager::~EMManager() {
-		delete this->F;	
-		delete this->P;		
-	}
-
-void EMManager::EM_main() {
+	void EMManager::EM_main() {
 	this->num_repetitions = this->P->num_repetitions;
-	if (true) {
-		this->P->max_log_likelihood_best = -1 * pow(10,10);
-		cout << "Starting EMDNA with initial parameters set using parsimony" << endl;			
-		this->P->EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_results(this->num_repetitions);
-		cout << "EMDNA pars reps available is " << this->P->EM_DNA_runs_pars.size() << endl;
-		for (EM_struct EM_pars: this->P->EM_DNA_runs_pars) {
-			const string string_EM_pars = string("[EM_AllInfo]{\"parsimony\":") + this->P->em_to_json(EM_pars) + "}";
-			cout << string_EM_pars << endl;
-		}
+	this->P->max_log_likelihood_best = -1 * std::pow(10.0, 10.0);
+
+	const int total_nodes =
+		std::max(0, int(this->P->vertexMap->size()) - this->P->numberOfObservedVertices);
+
+	auto emit_progress = [&](const char* kind,
+							const char* method = nullptr,
+							int rep1 = -1) {
+		nlohmann::json j{
+		{"type", "progress"},
+		{"kind", kind}
+		};
+		if (method) j["method"] = method;
+		if (rep1 >= 0) j["rep"] = rep1;
+
 		
-		cout << "Starting EMDNA with initial parameters sampled from Dirichlet distribution" << endl;
-		this->P->EM_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_store_results(this->num_repetitions);
-		cout << "EMDNA dirichlet reps available is " << this->P->EM_DNA_runs_diri.size() << endl;		
-		for (EM_struct EM_diri: this->P->EM_DNA_runs_diri) {
-			const string string_EM_diri = string("[EM_AllInfo]{\"dirichlet\":") + this->P->em_to_json(EM_diri) + "}";
-			cout << string_EM_diri << endl;
+		if (std::strcmp(kind, "setup:reps") == 0) {
+		j["totalReps"] = this->num_repetitions;
+		} else if (std::strcmp(kind, "setup:edges") == 0) {
+		j["nodeTotal"] = total_nodes;
 		}
-		
-		this->P->RestoreBestProbability();
-		this->P->ReparameterizeGMM();
-		cout << "Starting EMDNA with initial parameters set using HSS" << endl;
-		this->P->EM_DNA_rooted_at_each_internal_vertex_started_with_HSS_store_results(this->num_repetitions);
-		cout << "EMDNA hss reps available is " << this->P->EM_DNA_runs_diri.size() << endl;
-		for (EM_struct EM_hss: this->P->EM_DNA_runs_hss) {
-			const string string_EM_hss = string("[EM_AllInfo]{\"hss\":") + this->P->em_to_json(EM_hss) + "}";
-			cout << string_EM_hss << endl;
-		}	
-		cout << "transmitting EMDNA ll change results" << endl;
-		emtr::flush_rows_json(this->P->EMTR_results);
+
+		std::cout << "[EM_Method] " << j.dump() << "\n";
+		std::fflush(stdout);
+	};
+
+	
+	emit_progress("setup:reps");
+	emit_progress("setup:edges");
+
+	for (int rep = 0; rep < this->num_repetitions; ++rep) {		
+		this->P->EMTrifle_DNA_for_replicate(rep + 1);
+		emit_progress("rep", nullptr, rep + 1);
 	}
 }
 
@@ -10221,8 +11177,8 @@ void EMManager::EMparsimony() {
 }
 
 
-void EMManager::EMdirichlet() {
-	cout << "This should not be running" << endl;
+void EMManager::EMdirichlet() {	
+	cout << "Starting EM with initial parameters set using Dirichlet" << endl;
 	this->P->probabilityFileName_diri = this->prefix_for_output_files + ".diri_prob";
 	this->probabilityFileName_diri = this->prefix_for_output_files + ".diri_prob";
 	this->P->EM_rooted_at_each_internal_vertex_started_with_dirichlet(this->num_repetitions);
@@ -10241,10 +11197,9 @@ void EMManager::SetprobFileforHSS() {
 void EMManager::EMhss() {
 	this->SetprobFileforHSS();
 	cout << "Starting EM with initial parameters set using Bayes rule as described in HSS paper" << endl;
-	this->P->probabilityFileName_best = this->probabilityFileName_best;
-	cout << this->P->probabilityFileName_best << endl;
-    this->P->SetGMMparameters();
-	this->P->ReparameterizeGMM();    
+	this->P->probabilityFileName_best = this->probabilityFileName_best;	
+    this->P->SetBHparameters();
+	this->P->ReparameterizeBH();    
     this->P->EM_rooted_at_each_internal_vertex_started_with_HSS_par(this->num_repetitions);
 }
 

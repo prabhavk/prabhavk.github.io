@@ -1,27 +1,36 @@
 CREATE TABLE IF NOT EXISTS emtr_jobs (
-  job_id      VARCHAR(128) NOT NULL,
-  status      ENUM('started','completed','failed') NOT NULL DEFAULT 'started',
-  thr         DOUBLE NOT NULL,
-  reps        INT NOT NULL,
-  max_iter    INT NOT NULL,
+  job_id        VARCHAR(128) NOT NULL,
+  status        ENUM('started','blocked','completed','failed') NOT NULL DEFAULT 'started',
+  thr           DOUBLE NOT NULL,
+  reps          INT NOT NULL,
+  max_iter      INT NOT NULL,
 
   -- Dirichlet priors as individual columns
-  d_pi_1      DOUBLE NOT NULL,
-  d_pi_2      DOUBLE NOT NULL,
-  d_pi_3      DOUBLE NOT NULL,
-  d_pi_4      DOUBLE NOT NULL,
-  d_m_1       DOUBLE NOT NULL,
-  d_m_2       DOUBLE NOT NULL,
-  d_m_3       DOUBLE NOT NULL,
-  d_m_4       DOUBLE NOT NULL,
+  d_pi_1        DOUBLE NOT NULL,
+  d_pi_2        DOUBLE NOT NULL,
+  d_pi_3        DOUBLE NOT NULL,
+  d_pi_4        DOUBLE NOT NULL,
+  d_m_1         DOUBLE NOT NULL,
+  d_m_2         DOUBLE NOT NULL,
+  d_m_3         DOUBLE NOT NULL,
+  d_m_4         DOUBLE NOT NULL,
 
-  created_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-  finished_at DATETIME(6) NULL,
-  dur_minutes DECIMAL(10,2) NULL,
+  -- Timestamps / metrics
+  created_at    DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  started_at    DATETIME(6) NULL,
+  finished_at   DATETIME(6) NULL,
+  dur_minutes   DECIMAL(10,2) NULL,
+  blocked_reason VARCHAR(2048) NULL,
+
+  -- Row update tracking (optional but handy)
+  updated_at    DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                  ON UPDATE CURRENT_TIMESTAMP(6),
 
   PRIMARY KEY (job_id),
   KEY idx_status_created (status, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_0900_ai_ci;
 
 
 CREATE TABLE IF NOT EXISTS emtr_all_info (
@@ -113,3 +122,140 @@ CREATE TABLE emtr_trees (
 ) ENGINE=InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS `emtr_pattern_weights` (
+  id           bigint unsigned NOT NULL AUTO_INCREMENT,
+  job_id       varchar(100)    NOT NULL,
+  num_patterns int             NOT NULL,
+  weights      json            NOT NULL,
+  cum_weights  json            NOT NULL,
+  created_at   timestamp       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   timestamp       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uniq_job (job_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS `emtr_tree_edges` (
+  `id`           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `job_id`       VARCHAR(100)    NOT NULL,
+  `source`       VARCHAR(64)     DEFAULT NULL,
+  `method`       VARCHAR(32)     NOT NULL DEFAULT '',
+  `label`        VARCHAR(64)     DEFAULT NULL,
+  `rep`          INT             DEFAULT NULL,
+  `iter`         INT             DEFAULT NULL,
+  `epsilon`      DOUBLE          DEFAULT NULL,
+  `root`         VARCHAR(64)     DEFAULT NULL,
+  `n_leaves`     INT             DEFAULT NULL,
+  `n_edges`      INT             DEFAULT NULL,
+  `edge_list`    JSON            NOT NULL,      -- e.g. [[u,v,w], ...] or {edges:[...]}
+  `edges_sha256` CHAR(64)        NOT NULL,      -- 64-char hex digest of canonicalized edge_list
+  `created_at`   TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`   TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                         ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_job_method` (`job_id`,`method`),
+  KEY `idx_sha256` (`edges_sha256`),
+
+  -- Optional, read-optimized indexes (safe to keep; writers unaffected):
+  KEY `idx_job_method_label_created` (`job_id`,`method`,`label`,`created_at`),
+  KEY `idx_job_method_label_sha`     (`job_id`,`method`,`label`,`edges_sha256`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS emtr_trifle_runs (
+  id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  job_id           VARCHAR(64)     NOT NULL,
+  method           ENUM('parsimony','dirichlet','hss') NOT NULL,
+  rep              INT UNSIGNED    NOT NULL,
+  root             VARCHAR(64)     NOT NULL,
+
+  -- per-rep fields
+  ll_init          DOUBLE          NULL,
+  root_prob_init   JSON            NULL,  -- length-4 array
+  trans_prob_init  JSON            NULL,  -- map<string, Md>
+  raw_json         JSON            NULL,  -- original payload for debugging
+
+  created_at       TIMESTAMP(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at       TIMESTAMP(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                                   ON UPDATE CURRENT_TIMESTAMP(6),
+
+  PRIMARY KEY (id),
+
+  -- Exactly one header row per (job_id, method, root, rep)
+  UNIQUE KEY uq_job_method_root_rep (job_id, method, root, rep),
+
+  -- Helpful secondary
+  KEY idx_all_job (job_id)
+) ENGINE=InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_0900_ai_ci;
+
+  CREATE TABLE IF NOT EXISTS emtr_trifle_layers (
+  id                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+
+  -- Identity columns (mirrors header for easy upserts)
+  job_id             VARCHAR(64)     NOT NULL,
+  method             ENUM('parsimony','dirichlet','hss') NOT NULL,
+  rep                INT UNSIGNED    NOT NULL,
+  root               VARCHAR(64)     NOT NULL,
+  layer              TINYINT UNSIGNED NOT NULL,  -- 0,1,2
+
+  -- Per-layer fields
+  iter               INT             NULL,
+  ll_initial         DOUBLE          NULL,
+  ll_final           DOUBLE          NULL,
+  root_prob_final    JSON            NULL,  -- length-4 array
+  trans_prob_final   JSON            NULL,  -- map<string, Md>
+  ecd_ll_per_iter    JSON            NULL,  -- { "1": -2186.2, "2": ... }
+  raw_json           JSON            NULL,  -- optional: the layer slice for debugging
+
+  created_at         TIMESTAMP(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at         TIMESTAMP(6)    NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                                     ON UPDATE CURRENT_TIMESTAMP(6),
+
+  PRIMARY KEY (id),
+
+  -- One row per (job, method, root, rep, layer)
+  UNIQUE KEY uq_job_method_root_rep_layer (job_id, method, root, rep, layer),
+
+  -- helpful secondaries
+  KEY idx_layers_job (job_id),
+  KEY idx_layers_job_rep (job_id, rep)
+) ENGINE=InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS emtr_fj_runs (
+  job_id     varchar(191) NOT NULL,
+  method     varchar(64)  NOT NULL,
+  label      varchar(64)  NOT NULL,
+
+  source     varchar(64)  NOT NULL DEFAULT 'familyjoining',
+  iter       int          NULL,
+  epsilon    double       NULL,
+  root       varchar(191) NOT NULL DEFAULT '',
+  n_edges    int          NOT NULL,
+  n_leaves   int          NOT NULL,
+  raw_json   json         NULL,
+
+  created_at timestamp    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (job_id, method, label)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+CREATE TABLE IF NOT EXISTS emtr_fj_edges (
+  job_id  varchar(191) NOT NULL,
+  method  varchar(64)  NOT NULL,
+  label   varchar(64)  NOT NULL,
+  u       varchar(191) NOT NULL,
+  v       varchar(191) NOT NULL,
+  w       double       NOT NULL,
+
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (job_id, method, label, u, v)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+

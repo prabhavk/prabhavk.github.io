@@ -7,16 +7,16 @@ import { usePathname } from "next/navigation";
 type Tab = { href: string; label: string; mode: "exact" | "deep" };
 
 const tabs: Tab[] = [
-  { href: "/",                label: "Input",                 mode: "exact" },
+  { href: "/",                label: "Input",                 mode: "exact" }, // replace progress pane with three-stained clock
   { href: "/runs",            label: "Available Results",     mode: "deep"  },
-  { href: "/trees",           label: "Tree",                  mode: "deep"  },
-  { href: "/violin_methods",  label: "Violin methods",        mode: "deep"  },
-  { href: "/violin_roots",    label: "Violin roots",          mode: "deep"  },  
-  { href: "/dosa",            label: "Dosa plot",             mode: "deep"  }, 
-  { href: "/ecdll",           label: "ECDLL",                 mode: "deep"  },   
-  { href: "/wmw_method",      label: "WMW method",            mode: "deep"  },
-  { href: "/wmw_root",        label: "WMW root",              mode: "deep"  },
-  { href: "/mle    ",         label: "MLE",                   mode: "deep"  },  
+  { href: "/familyjoining",   label: "FamilyJoining",         mode: "deep"  },
+  { href: "/cake",            label: "Cake",                  mode: "deep"  },
+  { href: "/violin_methods",  label: "Violin methods",        mode: "deep"  }, // pack in same page and add layers
+  { href: "/violin_roots",    label: "Violin roots",          mode: "deep"  }, // pack in same page and add layers
+  { href: "/ecdll",           label: "ECDLL",                 mode: "deep"  }, // add layers 
+  { href: "/wmw_method",      label: "WMW method",            mode: "deep"  }, // pack in same page and add layers
+  { href: "/wmw_root",        label: "WMW root",              mode: "deep"  }, // pack in same page and add layers
+  { href: "/mle    ",         label: "MLE",                   mode: "deep"  }, // add layers 
 ];
 
 export default function Nav() {
@@ -32,12 +32,12 @@ export default function Nav() {
     "focus-visible:ring-offset-2 focus-visible:ring-offset-black text-black";
 
   // selected red; idle green; both hover yellow; text stays black
-  const active      = "bg-gray-300 hover:bg-blue-600";
-  const idleGeneral = "bg-gray-500 hover:bg-blue-400";
+  const active      = "bg-gray-300 hover:bg-green-600";
+  const idleGeneral = "bg-gray-500 hover:bg-blue-600";
 
  
   return (
-    <nav className="w-full border-b bg-black">
+    <nav className="w-full border-b bg-[#3C1421]">
       {/* Top row: brand only */}
       <div className="max-w-6xl mx-auto px-4 py-2 flex items-center">        
       </div>
