@@ -100,11 +100,15 @@ export async function GET(req: NextRequest) {
     const methodRaw = (searchParams.get("method") || "").trim();
     const methodLc = methodRaw.toLowerCase();
 
-    // optional rep and root filters
+    // optional rep, root, and layer filters
     const repStr = searchParams.get("rep");
     const rep = repStr != null && repStr !== "" ? Number(repStr) : null;
 
-    const rootParam = (searchParams.get("root") || "").trim(); // <-- NEW: root filter
+    const rootParam = (searchParams.get("root") || "").trim();
+
+    const layerStr = (searchParams.get("layer") || "0").trim();
+    const layerNum = Number(layerStr);
+    const layer = layerNum === 0 || layerNum === 1 || layerNum === 2 ? layerNum : 0;
 
     if (!jobId) {
       return NextResponse.json({ ok: false, error: "Missing job_id" }, { status: 400 });
@@ -116,22 +120,22 @@ export async function GET(req: NextRequest) {
     const conn = db();
 
     // Base WHERE (we’ll append rep/root conditions below as needed)
-    const where = `WHERE job_id = ? AND LOWER(method) = ?`;
-    const baseParams: Array<string | number> = [jobId, methodLc];
+    const where = `WHERE tl.job_id = ? AND LOWER(tl.method) = ? AND tl.layer = ?`;
+    const baseParams: Array<string | number> = [jobId, methodLc, layer];
 
     // Helper to run the “latest row” query with optional extra WHERE + params
     const runLatest = async (extraWhere: string, extraParams: Array<string | number>) => {
       const sql = `
         SELECT
-          ecd_ll_per_iter,
-          root,
-          root_prob_final,
-          ll_init,
-          ll_final,
-          rep
-        FROM emtr_all_info
+          tl.ecd_ll_per_iter,
+          tl.root,
+          tl.root_prob_final,
+          tl.ll_initial AS ll_init,
+          tl.ll_final   AS ll_final,
+          tl.rep
+        FROM emtr_trifle_layers AS tl
         ${where} ${extraWhere}
-        ORDER BY created_at DESC
+        ORDER BY tl.created_at DESC
         LIMIT 1
       `;
       const { rows } = await conn.execute<Row>(sql, [...baseParams, ...extraParams]);
@@ -140,26 +144,29 @@ export async function GET(req: NextRequest) {
 
     let rows: Row[] = [];
 
+    const hasValidRep = rep !== null && Number.isFinite(rep);
+    const hasRoot = !!rootParam;
+
     // Priority 1: exact (rep, root) match if both provided
-    if (rep !== null && Number.isFinite(rep) && rootParam) {
-      rows = await runLatest(`AND rep = ? AND root = ?`, [rep, rootParam]);
+    if (hasValidRep && hasRoot) {
+      rows = await runLatest(`AND tl.rep = ? AND tl.root = ?`, [rep as number, rootParam]);
       // Fallback if not found: same rep, ignore root
-      if (!rows.length) rows = await runLatest(`AND rep = ?`, [rep]);
+      if (!rows.length) rows = await runLatest(`AND tl.rep = ?`, [rep as number]);
       // Fallback if still not found: ignore rep, keep root
-      if (!rows.length) rows = await runLatest(`AND root = ?`, [rootParam]);
+      if (!rows.length) rows = await runLatest(`AND tl.root = ?`, [rootParam]);
     }
     // Priority 2: only rep provided
-    else if (rep !== null && Number.isFinite(rep)) {
-      rows = await runLatest(`AND rep = ?`, [rep]);
-      // Fallback: latest for this method (and root, if provided)
-      if (!rows.length && rootParam) rows = await runLatest(`AND root = ?`, [rootParam]);
+    else if (hasValidRep) {
+      rows = await runLatest(`AND tl.rep = ?`, [rep as number]);
+      // Fallback: latest for this method+layer (and root, if provided)
+      if (!rows.length && hasRoot) rows = await runLatest(`AND tl.root = ?`, [rootParam]);
     }
     // Priority 3: only root provided
-    else if (rootParam) {
-      rows = await runLatest(`AND root = ?`, [rootParam]);
+    else if (hasRoot) {
+      rows = await runLatest(`AND tl.root = ?`, [rootParam]);
     }
 
-    // Final fallback: latest regardless of rep/root for this method
+    // Final fallback: latest regardless of rep/root for this method+layer
     if (!rows.length) {
       rows = await runLatest(``, []);
     }
@@ -169,7 +176,8 @@ export async function GET(req: NextRequest) {
         ok: true,
         job_id: jobId,
         method: methodLc,
-        rep: rep ?? null,
+        layer,
+        rep: hasValidRep ? rep : null,
         points: [],
         summary: null,
       });
@@ -190,7 +198,8 @@ export async function GET(req: NextRequest) {
       ok: true,
       job_id: jobId,
       method: methodLc,
-      rep: repOut ?? rep ?? null,
+      layer,
+      rep: repOut ?? (hasValidRep ? rep : null),
       points,
       summary: {
         root: row.root ?? null,

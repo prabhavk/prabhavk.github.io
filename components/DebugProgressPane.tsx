@@ -24,8 +24,8 @@ export default function DebugProgressPane({
     lastLayer,
   ] = useProgressStore(
     useShallow((s) => [
-      s.logs,            // NEW
-      s.clearLogs,       // NEW
+      s.logs,
+      s.clearLogs,
       s.currentMethod,
       s.currentRoot,
       s.currentRep,
@@ -40,6 +40,14 @@ export default function DebugProgressPane({
   React.useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs.length]);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(logs.join("\n"));
+    } catch (err) {
+      console.error("Failed to copy logs:", err);
+    }
+  };
 
   return (
     <div
@@ -56,13 +64,22 @@ export default function DebugProgressPane({
           </div>
         </div>
 
-        <button
-          onClick={clearLogs}
-          className="text-xs border px-2 py-1 rounded hover:bg-stone-50"
-          disabled={logs.length === 0}
-        >
-          Clear
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleCopy}
+            className="text-xs border px-2 py-1 rounded hover:bg-stone-50"
+            disabled={logs.length === 0}
+          >
+            Copy
+          </button>
+          <button
+            onClick={clearLogs}
+            className="text-xs border px-2 py-1 rounded hover:bg-stone-50"
+            disabled={logs.length === 0}
+          >
+            Clear
+          </button>
+        </div>
       </div>
 
       <div className="h-[calc(100%-2.5rem)] overflow-auto rounded bg-stone-50 border border-stone-200 p-2">

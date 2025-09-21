@@ -44,8 +44,7 @@ export default function InputLayout({ children }: { children: React.ReactNode })
 
           {/* Sidebar: toggle between DebugProgressPane and ClockAndTree */}
           <aside className="lg:sticky lg:top-4 self-start max-h-[calc(100vh-0.5rem)] overflow-auto">
-            <div className="flex items-center justify-between mb-2 px-1">
-              <h2 className="text-sm font-semibold text-black">Right Pane</h2>
+            <div className="flex items-center justify-between mb-2 px-1">              
               <label className="flex items-center gap-2 text-xs text-black">
                 <span>Show debug logs</span>
                 <input
@@ -61,7 +60,7 @@ export default function InputLayout({ children }: { children: React.ReactNode })
             {showDebug ? (
               <DebugProgressPane height={550} />
             ) : (
-              <ClockAndTree clockHeight={500} treeHeight={400} />
+              <ClockAndTree clockHeight={400} treeHeight={500} yShift={-50}/>
             )}
           </aside>
         </div>

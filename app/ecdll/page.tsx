@@ -11,11 +11,18 @@ const Plot = dynamic<PlotParams>(() => import("react-plotly.js"), { ssr: false }
 /* ---------------- Types ---------------- */
 
 type MethodKey = "dirichlet" | "parsimony" | "hss";
+type LayerIdx = 0 | 1 | 2;
 
 const METHOD_LABEL: Record<MethodKey, string> = {
   dirichlet: "Dirichlet",
   parsimony: "Parsimony",
   hss: "HSS",
+};
+
+const LAYER_LABEL: Record<LayerIdx, string> = {
+  0: "Bottom",
+  1: "Medium",
+  2: "Top",
 };
 
 const COLORS: Record<MethodKey, string> = {
@@ -40,6 +47,7 @@ type ApiOk = {
   ok: true;
   job_id: string;
   method: MethodKey;
+  layer: LayerIdx;
   rep: number | null;
   points: Pt[];
   summary: SummaryRow | null;
@@ -113,6 +121,9 @@ function monoTrace(name: string, pts: Pt[] | null, color: string): Partial<PlotD
 export default function EcdllPage() {
   const [job, setJob] = useState<string>("");
 
+  // NEW: layer and selector
+  const [layer, setLayer] = useState<LayerIdx>(0);
+
   // roots and selected root
   const [roots, setRoots] = useState<string[]>([]);
   const [root, setRoot] = useState<string>("");
@@ -150,10 +161,21 @@ export default function EcdllPage() {
     try {
       const saved = localStorage.getItem("emtr:selectedJobId");
       if (saved) setJob(saved);
+      const savedLayer = localStorage.getItem("emtr:ecdll:selectedLayer");
+      if (savedLayer != null) {
+        const n = Number(savedLayer);
+        if (n === 0 || n === 1 || n === 2) setLayer(n as LayerIdx);
+      }
     } catch {
       /* ignore */
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("emtr:ecdll:selectedLayer", String(layer));
+    } catch { /* ignore */ }
+  }, [layer]);
 
   // Load roots for this job (reuse /api/violin list endpoint)
   const loadRoots = useCallback(async (jobId: string) => {
@@ -175,12 +197,13 @@ export default function EcdllPage() {
     setRoot((prev) => (prev && list.includes(prev) ? prev : preferred));
   }, []);
 
-  // Load reps; pass root if supported by backend
+  // Load reps; pass root and layer (backend may ignore layer if not implemented)
   const loadReps = useCallback(
-    async (jobId: string, rootSel?: string) => {
+    async (jobId: string, rootSel?: string, layerSel?: LayerIdx) => {
       const u = new URL("/api/ecdll/reps", window.location.origin);
       u.searchParams.set("job_id", jobId);
       if (rootSel) u.searchParams.set("root", rootSel);
+      if (layerSel !== undefined) u.searchParams.set("layer", String(layerSel));
       const res = await fetch(u.toString(), { cache: "no-store" });
       const j = (await res.json()) as { ok: boolean; reps?: number[]; error?: string };
       if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
@@ -191,7 +214,7 @@ export default function EcdllPage() {
     [rep]
   );
 
-  // Kick off roots + reps when job changes
+  // Kick off roots + reps when job OR layer changes
   useEffect(() => {
     if (!job) return;
     (async () => {
@@ -203,28 +226,37 @@ export default function EcdllPage() {
         setRoots([]);
         setRoot("");
       }
-    })();
-  }, [job, loadRoots]);
-
-  // When root is known, (re)load reps
-  useEffect(() => {
-    if (!job || !root) return;
-    (async () => {
       try {
-        await loadReps(job, root);
+        if (root) await loadReps(job, root, layer);
       } catch (e) {
         setErr(e instanceof Error ? e.message : "Failed to load repetitions");
         setReps([]);
         setRep(null);
       }
     })();
-  }, [job, root, loadReps]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job, layer, loadRoots, loadReps]);
+
+  // When root changes, (re)load reps for this layer
+  useEffect(() => {
+    if (!job || !root) return;
+    (async () => {
+      try {
+        await loadReps(job, root, layer);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Failed to load repetitions");
+        setReps([]);
+        setRep(null);
+      }
+    })();
+  }, [job, root, layer, loadReps]);
 
   const fetchOne = useCallback(
-    async (method: MethodKey, repSel: number | null, rootSel: string): Promise<{ pts: Pt[]; sum: SummaryRow | null }> => {
+    async (method: MethodKey, repSel: number | null, rootSel: string, layerSel: LayerIdx): Promise<{ pts: Pt[]; sum: SummaryRow | null }> => {
       const u = new URL("/api/ecdll", window.location.origin);
       u.searchParams.set("job_id", job);
       u.searchParams.set("method", method);
+      u.searchParams.set("layer", String(layerSel)); // NEW
       if (repSel !== null) u.searchParams.set("rep", String(repSel));
       if (rootSel) u.searchParams.set("root", rootSel);
       const res = await fetch(u.toString(), { cache: "no-store" });
@@ -238,7 +270,7 @@ export default function EcdllPage() {
       const j = (await res.json()) as ApiOk | ApiErr;
 
       if (!res.ok || !("ok" in j) || j.ok === false) {
-        const msg = "error" in j ? j.error : `HTTP ${res.status}`;
+        const msg = "error" in (j as ApiErr) ? (j as ApiErr).error : `HTTP ${res.status}`;
         throw new Error(`${METHOD_LABEL[method]}: ${msg}`);
       }
       const ok = j as ApiOk;
@@ -270,9 +302,9 @@ export default function EcdllPage() {
     setLoading(true);
     try {
       const [d, p, s] = await Promise.allSettled([
-        fetchOne("dirichlet", rep, root),
-        fetchOne("parsimony", rep, root),
-        fetchOne("hss", rep, root),
+        fetchOne("dirichlet", rep, root, layer),
+        fetchOne("parsimony", rep, root, layer),
+        fetchOne("hss", rep, root, layer),
       ]);
 
       setDirPts(d.status === "fulfilled" ? d.value.pts : []);
@@ -299,11 +331,11 @@ export default function EcdllPage() {
     } finally {
       setLoading(false);
     }
-  }, [job, rep, root, fetchOne]);
+  }, [job, rep, root, layer, fetchOne]);
 
   useEffect(() => {
     if (job && rep !== null && root) void load();
-  }, [job, rep, root, load]);
+  }, [job, rep, root, layer, load]);
 
   /* -------- Layouts (integer x ticks everywhere) -------- */
 
@@ -446,7 +478,7 @@ export default function EcdllPage() {
     const tasks: Array<Promise<void>> = [];
     const base = `ecdll_job-${job || "unknown"}_root-${(root || "na").replace(/[^A-Za-z0-9_-]+/g, "_")}_rep-${
       rep ?? "na"
-    }`;
+    }_layer-${layer}`;
 
     if (graphRefs.current.composite)
       tasks.push(downloadFigure("composite", `${base}_composite_alpha-${alpha.toFixed(2)}`));
@@ -456,20 +488,41 @@ export default function EcdllPage() {
     if (graphRefs.current.hss) tasks.push(downloadFigure("hss", `${base}_hss`));
 
     for (const t of tasks) await t;
-  }, [alpha, job, root, rep, downloadFigure]);
+  }, [alpha, job, root, rep, layer, downloadFigure]);
 
   /* ---------------- Render ---------------- */
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-5">
-      <div className="flex items-end gap-3">
+      <div className="flex flex-wrap items-end gap-3">
         <h1 className="text-2xl text-black font-bold">Expected Complete-Data LL Convergence</h1>
+
         <div className="text-sm text-black ml-2">
           Job: <span className="font-mono">{job || "(none)"} </span>
         </div>
 
+        {/* NEW: Layer selector */}
+        <div className="flex items-center gap-2 ml-2">
+          <span className="text-sm text-black">Layer</span>
+          <div className="inline-flex rounded-md border overflow-hidden">
+            {([0, 1, 2] as LayerIdx[]).map((L) => (
+              <button
+                key={L}
+                type="button"
+                onClick={() => setLayer(L)}
+                className={`px-3 py-1.5 text-sm ${
+                  layer === L ? "bg-black text-white" : "bg-white text-black"
+                } ${L !== 2 ? "border-r" : ""}`}
+                title={LAYER_LABEL[L]}
+              >
+                {LAYER_LABEL[L]}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Root selector */}
-        <label className="ml-6 text-sm flex text-black items-center gap-2">
+        <label className="ml-4 text-sm flex text-black items-center gap-2">
           Root:
           <select className="border rounded px-2 py-1 text-sm" value={root} onChange={(e) => setRoot(e.target.value)}>
             {roots.map((r) => (
@@ -535,7 +588,8 @@ export default function EcdllPage() {
       <section className={cardCls}>
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-lg text-black font-semibold">
-            Composite (Gap^α transform){root ? ` — root=${root.replace(/^h_/, "")}` : ""}
+            Composite (Gap^α transform)
+            {root ? ` — root=${root.replace(/^h_/, "")}` : ""} · layer={LAYER_LABEL[layer]}
           </h2>
           <button
             type="button"
@@ -544,7 +598,7 @@ export default function EcdllPage() {
                 "composite",
                 `ecdll_job-${job || "unknown"}_root-${(root || "na").replace(/[^A-Za-z0-9_-]+/g, "_")}_rep-${
                   rep ?? "na"
-                }_composite_alpha-${alpha.toFixed(2)}`
+                }_layer-${layer}_composite_alpha-${alpha.toFixed(2)}`
               )
             }
             className="px-2 py-1 rounded bg-black text-white"
@@ -576,7 +630,8 @@ export default function EcdllPage() {
       <section className={cardCls}>
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-lg text-black font-semibold">
-            All methods (ECD-LL){root ? ` — root=${root.replace(/^h_/, "")}` : ""}
+            All methods (ECD-LL)
+            {root ? ` — root=${root.replace(/^h_/, "")}` : ""} · layer={LAYER_LABEL[layer]}
           </h2>
           <button
             type="button"
@@ -585,7 +640,7 @@ export default function EcdllPage() {
                 "all",
                 `ecdll_job-${job || "unknown"}_root-${(root || "na").replace(/[^A-Za-z0-9_-]+/g, "_")}_rep-${
                   rep ?? "na"
-                }_all-methods`
+                }_layer-${layer}_all-methods`
               )
             }
             className="px-2 py-1 rounded bg-black text-white"
@@ -613,59 +668,66 @@ export default function EcdllPage() {
         )}
       </section>
 
-      {/* NEW: Summary table for the selected rep and root */}
+      {/* Summary table */}
       <section className={`${cardCls} text-black`}>
         <h2 className="text-lg font-semibold mb-2">
-          Summary — rep={rep ?? "?"}{root ? ` · root=${root.replace(/^h_/, "")}` : ""}
-          </h2>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm border-collapse text-black">
-              <thead className="text-black">
-                <tr className="border-b">
-                  <th className="text-left py-2 pr-3 font-medium">Method</th>
-                  <th className="text-left py-2 pr-3 font-medium"># iters</th>
-                  <th className="text-left py-2 pr-3 font-medium">init_ll</th>
-                  <th className="text-left py-2 pr-3 font-medium">ecd_ll_first</th>
-                  <th className="text-left py-2 pr-3 font-medium">ecd_ll_final</th>
-                  <th className="text-left py-2 pr-3 font-medium">final_ll</th>
-                  <th className="text-left py-2 pr-3 font-medium">root_prob_final [4]</th>
+          Summary — rep={rep ?? "?"}{root ? ` · root=${root.replace(/^h_/, "")}` : ""} · layer={LAYER_LABEL[layer]}
+        </h2>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm border-collapse text-black">
+            <thead className="text-black">
+              <tr className="border-b">
+                <th className="text-left py-2 pr-3 font-medium">Method</th>
+                <th className="text-left py-2 pr-3 font-medium"># iters</th>
+                <th className="text-left py-2 pr-3 font-medium">init_ll</th>
+                <th className="text-left py-2 pr-3 font-medium">ecd_ll_first</th>
+                <th className="text-left py-2 pr-3 font-medium">ecd_ll_final</th>
+                <th className="text-left py-2 pr-3 font-medium">final_ll</th>
+                <th className="text-left py-2 pr-3 font-medium">root_prob_final [4]</th>
+              </tr>
+            </thead>
+            <tbody className="text-black">
+              {[
+                { method: "Dirichlet", color: COLORS.dirichlet, sum: dirSum },
+                { method: "Parsimony", color: COLORS.parsimony, sum: parSum },
+                { method: "HSS",       color: COLORS.hss,       sum: hssSum },
+              ].map(({ method, color, sum }) => (
+                <tr key={method} className="border-b align-top">
+                  <td className="py-2 pr-3">
+                    <span className="inline-flex items-center gap-2">
+                      <span className="inline-block w-3 h-3 rounded-sm" style={{ background: color }} />
+                      {method}
+                    </span>
+                  </td>
+                  {sum ? (
+                    <>
+                      <td className="py-2 pr-3">{sum.num_iterations ?? 0}</td>
+                      <td className="py-2 pr-3">{sum.ll_init != null ? sum.ll_init.toFixed(6) : "—"}</td>
+                      <td className="py-2 pr-3">{sum.ecd_ll_first != null ? sum.ecd_ll_first.toFixed(6) : "—"}</td>
+                      <td className="py-2 pr-3">{sum.ecd_ll_final != null ? sum.ecd_ll_final.toFixed(6) : "—"}</td>
+                      <td className="py-2 pr-3">{sum.ll_final != null ? sum.ll_final.toFixed(6) : "—"}</td>
+                      <td className="py-2 pr-3 font-mono">
+                        {Array.isArray(sum.root_prob_final) && sum.root_prob_final.length === 4
+                          ? `[${sum.root_prob_final.map((p) => (Number.isFinite(p) ? p.toFixed(4) : "NaN")).join(", ")}]`
+                          : "—"}
+                      </td>
+                    </>
+                  ) : (
+                    <td className="py-2 pr-3" colSpan={6}>No data</td>
+                  )}
                 </tr>
-              </thead>
-              <tbody className="text-black">
-                {tableRows.map(({ method, color, sum }) => (
-                  <tr key={method} className="border-b align-top">
-                    <td className="py-2 pr-3">
-                      <span className="inline-flex items-center gap-2">
-                        <span className="inline-block w-3 h-3 rounded-sm" style={{ background: color }} />
-                        {method}
-                      </span>
-                    </td>
-                    {sum ? (
-                      <>
-                        <td className="py-2 pr-3">{sum.num_iterations ?? 0}</td>
-                        <td className="py-2 pr-3">{sum.ll_init != null ? sum.ll_init.toFixed(6) : "—"}</td>
-                        <td className="py-2 pr-3">{sum.ecd_ll_first != null ? sum.ecd_ll_first.toFixed(6) : "—"}</td>
-                        <td className="py-2 pr-3">{sum.ecd_ll_final != null ? sum.ecd_ll_final.toFixed(6) : "—"}</td>
-                        <td className="py-2 pr-3">{sum.ll_final != null ? sum.ll_final.toFixed(6) : "—"}</td>
-                        <td className="py-2 pr-3 font-mono">
-                          {Array.isArray(sum.root_prob_final) && sum.root_prob_final.length === 4
-                            ? `[${sum.root_prob_final.map((p) => (Number.isFinite(p) ? p.toFixed(4) : "NaN")).join(", ")}]`
-                            : "—"}
-                        </td>
-                      </>
-                    ) : (
-                      <td className="py-2 pr-3" colSpan={6}>No data</td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       {/* Individual plots */}
       <section className={cardCls}>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg text-black font-semibold">Dirichlet{root ? ` — root=${root.replace(/^h_/, "")}` : ""}</h2>
+          <h2 className="text-lg text-black font-semibold">
+            Dirichlet{root ? ` — root=${root.replace(/^h_/, "")}` : ""} · layer={LAYER_LABEL[layer]}
+          </h2>
           <button
             type="button"
             onClick={() =>
@@ -673,7 +735,7 @@ export default function EcdllPage() {
                 "dir",
                 `ecdll_job-${job || "unknown"}_root-${(root || "na").replace(/[^A-Za-z0-9_-]+/g, "_")}_rep-${
                   rep ?? "na"
-                }_dirichlet`
+                }_layer-${layer}_dirichlet`
               )
             }
             className="px-2 py-1 rounded bg-black text-white"
@@ -703,7 +765,9 @@ export default function EcdllPage() {
 
       <section className={cardCls}>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg text-black font-semibold">Parsimony{root ? ` — root=${root.replace(/^h_/, "")}` : ""}</h2>
+          <h2 className="text-lg text-black font-semibold">
+            Parsimony{root ? ` — root=${root.replace(/^h_/, "")}` : ""} · layer={LAYER_LABEL[layer]}
+          </h2>
           <button
             type="button"
             onClick={() =>
@@ -711,7 +775,7 @@ export default function EcdllPage() {
                 "par",
                 `ecdll_job-${job || "unknown"}_root-${(root || "na").replace(/[^A-Za-z0-9_-]+/g, "_")}_rep-${
                   rep ?? "na"
-                }_parsimony`
+                }_layer-${layer}_parsimony`
               )
             }
             className="px-2 py-1 rounded bg-black text-white"
@@ -741,7 +805,9 @@ export default function EcdllPage() {
 
       <section className={cardCls}>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg text-black font-semibold">HSS{root ? ` — root=${root.replace(/^h_/, "")}` : ""}</h2>
+          <h2 className="text-lg text-black font-semibold">
+            HSS{root ? ` — root=${root.replace(/^h_/, "")}` : ""} · layer={LAYER_LABEL[layer]}
+          </h2>
           <button
             type="button"
             onClick={() =>
@@ -749,7 +815,7 @@ export default function EcdllPage() {
                 "hss",
                 `ecdll_job-${job || "unknown"}_root-${(root || "na").replace(/[^A-Za-z0-9_-]+/g, "_")}_rep-${
                   rep ?? "na"
-                }_hss`
+                }_layer-${layer}_hss`
               )
             }
             className="px-2 py-1 rounded bg-black text-white"

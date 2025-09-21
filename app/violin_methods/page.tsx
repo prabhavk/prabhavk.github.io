@@ -50,6 +50,11 @@ export default function ViolinMethodsPage() {
   const [job, setJob] = useState<string>("");
   const [roots, setRoots] = useState<string[]>([]);
   const [root, setRoot] = useState<string>("");
+
+  // NEW: layer state + labels
+  const [layer, setLayer] = useState<number>(1); // 0=coarse, 1=medium, 2=fine
+  const LAYER_LABEL: Record<number, string> = { 0: "coarse (0)", 1: "medium (1)", 2: "fine (2)" };
+
   const [finalData, setFinalData] = useState<SeriesResp | null>(null);
   const [initData, setInitData] = useState<SeriesResp | null>(null);
   const [loading, setLoading] = useState(false);
@@ -84,10 +89,10 @@ export default function ViolinMethodsPage() {
       const gd = plotsRef.current[id];
       if (!gd) return;
       const url = await toImage(gd);
-      const fname = `${job || "job"}__violin_methods__${id}__root-${root || "NA"}__t${utcStamp()}.png`;
+      const fname = `${job || "job"}__violin_methods__${id}__root-${root || "NA"}__layer-${layer}__t${utcStamp()}.png`;
       downloadURI(url, fname);
     },
-    [job, root, toImage]
+    [job, root, layer, toImage]
   );
 
   // read job
@@ -110,6 +115,7 @@ export default function ViolinMethodsPage() {
       const baseU = new URL("/api/violin", window.location.origin);
       baseU.searchParams.set("job", job);
       baseU.searchParams.set("metric", "final");
+      baseU.searchParams.set("layer", String(layer)); // NEW
       const baseRes = await fetch(baseU.toString(), { cache: "no-store" });
       const baseJson: unknown = await baseRes.json();
       if (!baseRes.ok || isErr(baseJson)) throw new Error(isErr(baseJson) ? baseJson.error : `HTTP ${baseRes.status}`);
@@ -126,6 +132,7 @@ export default function ViolinMethodsPage() {
           u.searchParams.set("job", job);
           if (chosenRoot) u.searchParams.set("root", chosenRoot);
           u.searchParams.set("metric", metric);
+          u.searchParams.set("layer", String(layer)); // NEW
           const r = await fetch(u.toString(), { cache: "no-store" });
           const j: unknown = await r.json();
           if (!r.ok || isErr(j)) throw new Error(isErr(j) ? j.error : `HTTP ${r.status}`);
@@ -141,11 +148,11 @@ export default function ViolinMethodsPage() {
     } finally {
       setLoading(false);
     }
-  }, [job, root]);
+  }, [job, root, layer]); // NEW: layer dep
 
   useEffect(() => {
     if (job) void load();
-  }, [job, root, load]);
+  }, [job, root, layer, load]); // NEW: layer dep
 
   // traces builder with colors
   const buildMethodTraces = useCallback((d: SeriesResp | null): Partial<Data>[] => {
@@ -207,12 +214,12 @@ export default function ViolinMethodsPage() {
   }), []);
 
   const titleFinal = useMemo(
-    () => `Across Methods — final — root=${root ? showRoot(root) : "(none)"}`,
-    [root]
+    () => `Across Methods — final — root=${root ? showRoot(root) : "(none)"} — layer=${LAYER_LABEL[layer]}`,
+    [root, layer]
   );
   const titleInit = useMemo(
-    () => `Across Methods — init — root=${root ? showRoot(root) : "(none)"}`,
-    [root]
+    () => `Across Methods — init — root=${root ? showRoot(root) : "(none)"} — layer=${LAYER_LABEL[layer]}`,
+    [root, layer]
   );
 
   return (
@@ -236,6 +243,26 @@ export default function ViolinMethodsPage() {
           </select>
         </label>
 
+        {/* NEW: Layer segmented control */}
+        <div className="flex flex-col">
+          <span className="text-sm">Layer</span>
+          <div className="inline-flex rounded border overflow-hidden">
+            {[0, 1, 2].map((lv) => (
+              <button
+                key={lv}
+                type="button"
+                onClick={() => setLayer(lv)}
+                className={`px-3 py-2 text-sm border-r last:border-r-0 ${
+                  layer === lv ? "bg-black text-white" : "bg-white text-black hover:bg-gray-100"
+                }`}
+                title={LAYER_LABEL[lv]}
+              >
+                {lv}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="text-sm ml-auto">
           {job ? <>Job: <span className="font-mono">{job}</span></> : "No job selected"}
           {loading && <span className="ml-3 animate-pulse">Loading…</span>}
@@ -246,7 +273,7 @@ export default function ViolinMethodsPage() {
       {/* Final */}
       <section className="bg-white border rounded p-3 mb-6">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold">ll_final · root={root || "(none)"}</h2>
+          <h2 className="text-lg font-semibold">ll_final · root={root || "(none)"} · layer={layer}</h2>
           <button
             className="px-3 py-1 text-sm rounded bg-black text-white disabled:opacity-50"
             onClick={() => downloadPNG("final_methods")}
@@ -273,7 +300,7 @@ export default function ViolinMethodsPage() {
       {/* Init */}
       <section className="bg-white border rounded p-3">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold">ll_init · root={root || "(none)"}</h2>
+          <h2 className="text-lg font-semibold">ll_init · root={root || "(none)"} · layer={layer}</h2>
           <button
             className="px-3 py-1 text-sm rounded bg-black text-white disabled:opacity-50"
             onClick={() => downloadPNG("init_methods")}

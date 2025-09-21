@@ -27,6 +27,8 @@ type Props = {
   daylightPasses?: number;
   /** Visual magnification (applied around canvas center). Default 1.5x for readability */
   zoom?: number;
+  /** Vertical pixel shift applied outside the zoom transform (moves the whole tree up/down) */
+  yShift?: number;
 };
 
 /* ===== Colors ===== */
@@ -473,7 +475,7 @@ export function equalizeDaylightAtNode_Generic(
   if (wedges.length < 3) return null;
 
   const three =
-    wedges.length === 3 ? wedges : [...wedges].sort((x, y) => y.width - x.width).slice(0, 3);
+  wedges.length === 3 ? wedges : [...wedges].sort((x, y) => y.width - x.width).slice(0, 3);
 
   const isLeafChild = (w: { kind: "child" | "parent"; id?: string }) =>
     w.kind === "child" && w.id ? (children.get(w.id!)?.length ?? 0) === 0 : false;
@@ -545,7 +547,8 @@ export default function DaylightTree({
   padding = 12,
   showLabels = true,
   daylightPasses = 1,
-  zoom = 1.0,                  // magnify 1.5x by default
+  zoom = 0.9,
+  yShift = -40,
 }: Props) {
   const ref = React.useRef<HTMLDivElement>(null);
   const [size, setSize] = React.useState({ w: 0, h: 0 });
@@ -775,7 +778,6 @@ export default function DaylightTree({
     return out;
   }, [core.parent, daylight.angle, cx, cy, radiusOfDepth, weightedDepth]);
 
-
   const nodesViz = React.useMemo(() => {
     const out: Array<{
       id: string;
@@ -830,8 +832,7 @@ export default function DaylightTree({
     activeNode,
     liveColor,
     weightedDepth,
-]);
-
+  ]);
 
   // Total rendered edge length
   const totalRenderedLength = React.useMemo(() => {
@@ -867,133 +868,132 @@ export default function DaylightTree({
         role="img"
         aria-label="Daylight-adjusted unrooted tree"
       >
-        <g transform={contentTransform}>
-          {/* Links */}
-          <g stroke="#334155" strokeOpacity={0.25} strokeWidth={1}>
-            {links.map((L) => (
-              <line key={L.key} x1={L.x1} y1={L.y1} x2={L.x2} y2={L.y2} />
-            ))}
-          </g>
+        {/* Apply vertical pixel shift outside the zoom transform */}
+        <g transform={`translate(0, ${yShift})`}>
+          <g transform={contentTransform}>
+            {/* Links */}
+            <g stroke="#334155" strokeOpacity={0.25} strokeWidth={1}>
+              {links.map((L) => (
+                <line key={L.key} x1={L.x1} y1={L.y1} x2={L.x2} y2={L.y2} />
+              ))}
+            </g>
 
-          {/* Nodes */}
-          <g>
-            {nodesViz.map((n) => (
-              <circle
-                key={`base-${n.id}`}
-                cx={n.x}
-                cy={n.y}
-                r={n.rOuter}
-                fill={n.color}
-                stroke={n.color}
-                strokeWidth={1.2}
-              />
-            ))}
-
-            {/* White cap for internal nodes that were NOT visited in any pass */}
-            {nodesViz.map((n) =>
-              n.showWhiteCap ? (
+            {/* Nodes */}
+            <g>
+              {nodesViz.map((n) => (
                 <circle
-                  key={`cap-${n.id}`}
+                  key={`base-${n.id}`}
                   cx={n.x}
                   cy={n.y}
-                  r={Math.max(1.6, n.rOuter * 0.8)}
-                  fill="#ffffff"
-                  stroke="#ffffff"
-                  strokeWidth={0.6}
+                  r={n.rOuter}
+                  fill={n.color}
+                  stroke={n.color}
+                  strokeWidth={1.2}
                 />
-              ) : null
-            )}
+              ))}
 
-            {/* Plus symbol only for the active internal node while incomplete */}
-            {nodesViz.map((n) =>
-              n.showPlus ? (
-                <g key={`plus-${n.id}`}>
-                  <line
-                    x1={n.x - n.rOuter * 0.6}
-                    y1={n.y}
-                    x2={n.x + n.rOuter * 0.6}
-                    y2={n.y}
-                    stroke={n.color}
-                    strokeWidth={1.6}
-                    strokeLinecap="round"
+              {/* White cap for internal nodes that were NOT visited in any pass */}
+              {nodesViz.map((n) =>
+                n.showWhiteCap ? (
+                  <circle
+                    key={`cap-${n.id}`}
+                    cx={n.x}
+                    cy={n.y}
+                    r={Math.max(1.6, n.rOuter * 0.8)}
+                    fill="#ffffff"
+                    stroke="#ffffff"
+                    strokeWidth={0.6}
                   />
-                  <line
-                    x1={n.x}
-                    y1={n.y - n.rOuter * 0.6}
-                    x2={n.x}
-                    y2={n.y + n.rOuter * 0.6}
-                    stroke={n.color}
-                    strokeWidth={1.6}
-                    strokeLinecap="round"
-                  />
+                ) : null
+              )}
+
+              {/* Plus symbol only for the active internal node while incomplete */}
+              {nodesViz.map((n) =>
+                n.showPlus ? (
+                  <g key={`plus-${n.id}`}>
+                    <line
+                      x1={n.x - n.rOuter * 0.6}
+                      y1={n.y}
+                      x2={n.x + n.rOuter * 0.6}
+                      y2={n.y}
+                      stroke={n.color}
+                      strokeWidth={1.6}
+                      strokeLinecap="round"
+                    />
+                    <line
+                      x1={n.x}
+                      y1={n.y - n.rOuter * 0.6}
+                      x2={n.x}
+                      y2={n.y + n.rOuter * 0.6}
+                      stroke={n.color}
+                      strokeWidth={1.6}
+                      strokeLinecap="round"
+                    />
+                  </g>
+                ) : null
+              )}
+            </g>
+
+            {/* Labels (both leaves and internal nodes) */}
+            {showLabels ? (
+              <>
+                {/* Leaf labels: pushed outward along the ray */}
+                <g fontSize={12} fill="#000">
+                  {nodesViz
+                    .filter((n) => n.isLeaf)
+                    .map((n) => {
+                      const theta = daylight.angle.get(n.id) ?? 0;
+                      const dv = weightedDepth.get(n.id) ?? 0;
+                      const R = radiusOfDepth(dv);
+                      const dirX = Math.cos(theta - PI / 2);
+                      const dirY = Math.sin(theta - PI / 2);
+                      const offset = n.rOuter + 12;
+                      const tx = n.x + dirX * offset;
+                      const ty = n.y + dirY * offset;
+                      const anchor =
+                        dirX > 0.15 ? "start" : dirX < -0.15 ? "end" : "middle";
+                      return (
+                        <text
+                          key={`leaf-label-${n.id}`}
+                          x={tx}
+                          y={ty}
+                          textAnchor={anchor}
+                          dominantBaseline="middle"
+                        >
+                          {n.id}
+                        </text>
+                      );
+                    })}
                 </g>
-              ) : null
-            )}
-          </g>
 
-          {/* Labels (both leaves and internal nodes) */}
-          {showLabels ? (
-            <>
-              {/* Leaf labels: pushed outward along the ray */}
-              <g fontSize={12} fill="#000">
-                {nodesViz
-                  .filter((n) => n.isLeaf)
-                  .map((n) => {
-                    const theta = daylight.angle.get(n.id) ?? 0;
-                    const dv = (weightedDepth.get(n.id) ?? 0);
-                    const R = radiusOfDepth(dv);
-                    const dirX = Math.cos(theta - PI / 2);
-                    const dirY = Math.sin(theta - PI / 2);
-                    const offset = n.rOuter + 12;
-                    const tx = n.x + dirX * offset;
-                    const ty = n.y + dirY * offset;
-                    const anchor =
-                      dirX > 0.15 ? "start" : dirX < -0.15 ? "end" : "middle";
-                    return (
+                {/* Internal node labels: centered just above each node */}
+                <g fontSize={11} fill="#000">
+                  {nodesViz
+                    .filter((n) => !n.isLeaf)
+                    .map((n) => (
                       <text
-                        key={`leaf-label-${n.id}`}
-                        x={tx}
-                        y={ty}
-                        textAnchor={anchor}
-                        dominantBaseline="middle"
+                        key={`internal-label-${n.id}`}
+                        x={n.x}
+                        y={n.y - (n.rOuter + 6)}
+                        textAnchor="middle"
+                        dominantBaseline="ideographic"
                       >
                         {n.id}
                       </text>
-                    );
-                  })}
-              </g>
-
-              {/* Internal node labels: centered just above each node */}
-              <g fontSize={11} fill="#000">
-                {nodesViz
-                  .filter((n) => !n.isLeaf)
-                  .map((n) => (
-                    <text
-                      key={`internal-label-${n.id}`}
-                      x={n.x}
-                      y={n.y - (n.rOuter + 6)}
-                      textAnchor="middle"
-                      dominantBaseline="ideographic"
-                    >
-                      {n.id}
-                    </text>
-                  ))}
-              </g>
-            </>
-          ) : null}
+                    ))}
+                </g>
+              </>
+            ) : null}
+          </g>
         </g>
       </svg>
 
       {/* Side panel with diagnostics (not scaled) */}
-      <div className="absolute top-2 right-2 bg-white/85 backdrop-blur-sm border border-black/10 shadow-sm rounded-xl p-3 max-w-[280px] text-[12px] text-black leading-tight">
+      {/* <div className="absolute top-2 right-2 bg-white/85 backdrop-blur-sm border border-black/10 shadow-sm rounded-xl p-3 max-w-[280px] text-[12px] text-black leading-tight">
         <div className="font-semibold mb-1">Tree diagnostics</div>
         <div className="mb-1">
           <span className="opacity-70">Daylight passes:</span>{" "}
           <span>{Math.max(1, Math.floor(daylightPasses))}</span>
-        </div>
-        <div className="mb-2">
-          <span className="opacity-70">Rendered total edge length:</span>{" "}
-          <span>{totalRenderedLength.toFixed(2)}</span>
         </div>
         <div className="font-medium mb-1">Daylight imbalance (max−min gap)</div>
         <ul className="space-y-0.5 max-h-56 overflow-auto pr-1">
@@ -1008,7 +1008,7 @@ export default function DaylightTree({
             ))
           )}
         </ul>
-      </div>
+      </div> */}
     </div>
   );
 }

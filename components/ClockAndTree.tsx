@@ -12,6 +12,8 @@ type Props = {
   className?: string;
   /** How many global passes of the daylight algorithm to run (default 1) */
   daylightPasses?: number;
+  /** Vertical pixel shift applied to the tree (not scaled by zoom) */
+  yShift?: number;
 };
 
 type EdgeInput =
@@ -30,7 +32,8 @@ export default function ClockAndTree({
   clockHeight = 520,
   treeHeight = 340,
   className = "",
-  daylightPasses = 32,
+  daylightPasses = 0,
+  yShift = -60,
 }: Props) {
   // Progress state
   const edges = useProgressStore((s) => s.edges) as EdgeInput[] | undefined;
@@ -74,13 +77,10 @@ export default function ClockAndTree({
   return (
     <div className={`flex flex-col gap-3 ${className}`}>
       {/* Clock */}
-      <div
-        className="w-full rounded-2xl border border-black/10 bg-white shadow-sm"
-        style={{ height: clockHeight }}
-      >
+      <div className="w-full rounded-2xl" style={{ height: clockHeight }}>
         <StainedGlassClock
           method={longHandMethod}
-          rep={currentRep}            // short hand
+          rep={currentRep}
           totalReps={totalReps}
           className="p-3"
         />
@@ -88,31 +88,23 @@ export default function ClockAndTree({
 
       {/* Tree */}
       <div
-        className="w-full rounded-2xl border border-black/10 bg-white shadow-sm relative overflow-hidden"
+        className="w-full rounded-2xl overflow-hidden relative"
         style={{ height: treeHeight }}
       >
         {showTree ? (
-          <>
-            {/* The "+" will be shown only on this single internal node (if incomplete) */}
-            <DaylightTree
-              className="p-3"
-              edges={edges || []}
-              activeMethod={currentMethod}
-              completedByNode={completedByNode}
-              activeNode={activeNode}
-              padding={14}
-              showLabels={true}
-              daylightPasses={daylightPasses}
-            />
-          </>
+          <DaylightTree
+            className="p-3"
+            edges={edges || []}
+            activeMethod={currentMethod}
+            completedByNode={completedByNode}
+            activeNode={activeNode}
+            padding={14}
+            showLabels={true}
+            daylightPasses={daylightPasses}
+            yShift={yShift}
+          />
         ) : (
-          <div className="absolute inset-0 grid place-items-center text-sm text-black/60">
-            {edges && edges.length === 0
-              ? "Waiting for Family-Joining edges…"
-              : currentRep >= totalReps
-              ? "All repetitions complete — tree hidden."
-              : "Preparing tree…"}
-          </div>
+          <div className="absolute inset-0 grid place-items-center text-sm text-black/60" />
         )}
       </div>
     </div>

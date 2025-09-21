@@ -193,12 +193,12 @@ export default function InputPage() {
   const [DNAsequenceFile, setDNASequenceFile] = useState<File | null>(null);
   const [useDefaultSeqsToggle, setUseDefaultSeqsToggle] = useState<boolean>(false);
 
-  // =========================
-  // ECDLL (EM-DNA) controls — single regime
-  // =========================
-  const [numReps, setNumReps] = useState<string>("30");
+  // ================= //
+  // (EM-DNA) controls //
+  // ================= //
+  const [numReps, setNumReps] = useState<string>("1");
   const [maxIter, setMaxIter] = useState<string>("100");
-  const [thrDNA, setThrDNA] = useState<string>("0.01");
+  const [thrDNA, setThrDNA] = useState<string>("10.0");
   const [pi, setPi] = useState<string[]>(["100", "100", "100", "100"]);
   const [M, setM] = useState<string[]>(["100", "2", "2", "2"]);
   const [requireAlphaGe1, setRequireAlphaGe1] = useState<boolean>(REQUIRE_ALPHA_GE1_DEFAULT);
@@ -208,8 +208,8 @@ export default function InputPage() {
   const [includeHSS, setincludeHSS] = useState<boolean>(true);
 
   // Three-stage site-pattern counts
-  const [patCoarse, setPatCoarse] = useState<string>("28");
-  const [patMedium, setPatMedium] = useState<string>("49");
+  const [patCoarse, setPatCoarse] = useState<string>("100");
+  const [patMedium, setPatMedium] = useState<string>("100");
   const patFine = String(FINE_FIXED); // fixed
 
   // Worker flags
@@ -500,7 +500,7 @@ export default function InputPage() {
       }
     }
 
-    // NEW: also persist all inputs into the store (so the clock & others can read them)
+    // Persist into store for other components
     {
       const defaultDNA = "/data/RAxML_DNA_test.fa";
       const useDefaultSeqs = useDefaultSeqsToggle || !DNAsequenceFile;
@@ -557,8 +557,66 @@ export default function InputPage() {
     start(jobId);
     append(`jobId = ${jobId}`);
 
+    // ===== NEW: Build settings & payload BEFORE starting worker, and persist UI inputs to SQL
     const defaultDNA = "/data/RAxML_DNA_test.fa";
     const useDefaultSeqs = useDefaultSeqsToggle || !DNAsequenceFile;
+
+    const settings: EmtrSettings = {
+      version: SETTINGS_VERSION,
+      dna: {
+        thr: thrD,
+        reps,
+        maxIter: iters,
+        D_pi,
+        D_M,
+        requireAlphaGe1,
+        includeParsimony,
+        includeHSS,
+        patternCounts: { coarse: pc, medium: pm, fine: FINE_FIXED },
+      },
+      useDefaultSeqs,
+      fileNames: {
+        dna: !useDefaultSeqs ? DNAsequenceFile?.name ?? null : defaultDNA,
+      },
+      flags: { enableUiUpsert, enableDbLogging, enableTreeUpload },
+    };
+
+    const { jsonStr, files } = buildRunJSON(jobId, settings);
+
+    // Persist the exact inputs (including patternCounts) to SQL
+    try {
+      const inputsRes = await fetch("/api/ui-inputs", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(secret ? { "x-emtr-secret": secret } : {}),
+        },
+        body: JSON.stringify({
+          job_id: jobId,
+          settings_version: SETTINGS_VERSION,
+          use_default_seqs: useDefaultSeqs,
+          dna_filename: settings.fileNames.dna,
+          thr: settings.dna.thr,
+          reps: settings.dna.reps,
+          max_iter: settings.dna.maxIter,
+          require_alpha_ge1: settings.dna.requireAlphaGe1,
+          include_parsimony: !!settings.dna.includeParsimony,
+          include_hss: !!settings.dna.includeHSS,
+          D_pi: settings.dna.D_pi,
+          D_M: settings.dna.D_M,
+          pattern_counts: settings.dna.patternCounts,   // <-- your input-form thresholds
+          raw_json: JSON.parse(jsonStr),                // exact payload you send to C++
+        }),
+      });
+      if (!inputsRes.ok) {
+        const t = await inputsRes.text();
+        append(`WARN: saving UI inputs failed: ${inputsRes.status} ${t}`);
+      } else {
+        append("Saved input settings to SQL.");
+      }
+    } catch (e) {
+      append(`WARN: saving UI inputs failed: ${String(e)}`);
+    }
 
     const parts: string[] = [];
     if (!useDefaultSeqs && DNAsequenceFile) parts.push(`DNA=${DNAsequenceFile.name}`);
@@ -568,6 +626,7 @@ export default function InputPage() {
         `patterns (coarse,medium,fine)=(${pc},${pm},${FINE_FIXED})`
     );
 
+    // ===== Start worker AFTER persisting UI inputs =====
     const v = Date.now();
     const w = new Worker(`/wasm/worker.js?v=${v}`, { type: "module" });
     useProgressStore.getState().attachWorker(w);
@@ -631,31 +690,9 @@ export default function InputPage() {
     const dnaBuf: ArrayBuffer | undefined =
       !useDefaultSeqs && DNAsequenceFile ? await DNAsequenceFile.arrayBuffer() : undefined;
 
-    const settings: EmtrSettings = {
-      version: SETTINGS_VERSION,
-      dna: {
-        thr: thrD,
-        reps,
-        maxIter: iters,
-        D_pi,
-        D_M,
-        requireAlphaGe1,
-        includeParsimony,
-        includeHSS,
-        patternCounts: { coarse: pc, medium: pm, fine: FINE_FIXED },
-      },
-      useDefaultSeqs,
-      fileNames: {
-        dna: !useDefaultSeqs ? DNAsequenceFile?.name ?? null : defaultDNA,
-      },
-      flags: { enableUiUpsert, enableDbLogging, enableTreeUpload },
-    };
-
-    const { jsonStr, files } = buildRunJSON(jobId, settings);
-
     post({
       __cmd: "runWithJson",
-      json: jsonStr,
+      json: jsonStr,   // already built above
       files,
       dnaSeqBytes: dnaBuf,
       jobId,
@@ -774,7 +811,7 @@ export default function InputPage() {
                   }}
                   placeholder="89"
                 />
-                <p className="text-[11px] text-white mt-1">Allowed: {patCoarse || COARSE_MIN}–{MEDIUM_MAX}</p>
+                <p className="text:[11px] text-white mt-1">Allowed: {patCoarse || COARSE_MIN}–{MEDIUM_MAX}</p>
               </div>
 
               {/* Fine */}

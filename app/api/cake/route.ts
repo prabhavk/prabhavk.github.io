@@ -4,6 +4,8 @@ import { query as q, type SQLParam } from "@/lib/db";
 import crypto from "node:crypto";
 
 export const runtime = "nodejs";
+// If you want to always hit the DB and never cache at the edge:
+// export const dynamic = "force-dynamic";
 
 type YesNo = 0 | 1;
 type Edge = [string, string, number];
@@ -89,13 +91,20 @@ type EdgeInput = Edge | [unknown, unknown, unknown];
 
 function normalizeEdgeList(raw: unknown): Edge[] | null {
   if (raw == null) return null;
-  let x = raw as unknown;
+  let x: unknown = raw;
+
   if (typeof x === "string") {
     const t = x.trim();
     if (!t) return null;
-    try { x = JSON.parse(t); } catch { return null; }
+    try {
+      x = JSON.parse(t);
+    } catch {
+      return null;
+    }
   }
+
   if (!Array.isArray(x)) return null;
+
   const out: Edge[] = [];
   for (const e of x as EdgeInput[]) {
     if (!Array.isArray(e) || e.length !== 3) return null;
@@ -108,7 +117,10 @@ function normalizeEdgeList(raw: unknown): Edge[] | null {
 
 function inferLeafCountFromEdges(edges: Edge[]): number {
   const names = new Set<string>();
-  for (const [u, v] of edges) { names.add(u); names.add(v); }
+  for (const [u, v] of edges) {
+    names.add(u);
+    names.add(v);
+  }
   let cnt = 0;
   for (const name of names) if (!/^h_/.test(name)) cnt++;
   return cnt;
@@ -142,17 +154,14 @@ export async function GET(req: Request) {
       "created_at", "updated_at",
     ];
 
-    if (hasTreeLabeled) {
-      cols.splice(7, 0, full ? "emtr_trees.tree_labeled AS tree_labeled" : "NULL AS tree_labeled");
-    } else {
-      cols.splice(7, 0, "NULL AS tree_labeled");
-    }
+    // Insert optional columns in stable positions
+    cols.splice(7, 0, hasTreeLabeled
+      ? (full ? "emtr_trees.tree_labeled AS tree_labeled" : "NULL AS tree_labeled")
+      : "NULL AS tree_labeled");
 
-    if (edgeCol) {
-      cols.splice(8, 0, full ? `emtr_trees.${edgeCol} AS edge_list` : "NULL AS edge_list");
-    } else {
-      cols.splice(8, 0, "NULL AS edge_list");
-    }
+    cols.splice(8, 0, edgeCol
+      ? (full ? `emtr_trees.${edgeCol} AS edge_list` : "NULL AS edge_list")
+      : "NULL AS edge_list");
 
     const where = `WHERE job_id = ? ${currentOnly ? "AND is_current=1" : ""}`;
     const sql = `
@@ -229,7 +238,7 @@ export async function POST(req: Request) {
       "job_id", "source", "method", "label", "format", "tree",
     ];
     const placeholders: string[] = ["?","?","?","?","?","?"];
-    const params: SQLParam[] = [ // ← properly typed
+    const params: SQLParam[] = [
       job_id, source, method, (label ?? null), format, tree,
     ];
 
@@ -256,7 +265,7 @@ export async function POST(req: Request) {
         (${placeholders.join(", ")})
     `;
 
-    await q(sql, params); // ← now matches readonly SQLParam[]
+    await q(sql, params);
 
     type IdRow = { [k: string]: unknown; id: number };
     const rows2 = await q<IdRow>(

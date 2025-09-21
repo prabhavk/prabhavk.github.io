@@ -7,7 +7,7 @@ import type { PlotlyHTMLElement } from "plotly.js";
 
 type AnyObj = Record<string, unknown>;
 
-/* ---------- new: initialization methods ---------- */
+/* ---------- initialization methods ---------- */
 type MethodKey = "dirichlet" | "parsimony" | "hss";
 const METHOD_LABEL: Record<MethodKey, string> = {
   dirichlet: "Dirichlet",
@@ -15,10 +15,16 @@ const METHOD_LABEL: Record<MethodKey, string> = {
   hss: "HSS",
 };
 
+/* ---------- layer labels ---------- */
+type LayerIdx = 0 | 1 | 2;
+const LAYER_LABEL: Record<LayerIdx, string> = { 0: "Bottom", 1: "Medium", 2: "Top" };
+
+/* ---------- localStorage keys ---------- */
 const SELECTED_JOB_KEY = "emtr:selectedJobId";
 const selectedRepKey = (job: string) => `emtr:selectedRep:${job}`;
 const selectedRootKey = (job: string) => `emtr:selectedRoot:${job}`;
 const selectedMethodKey = (job: string) => `emtr:selectedInitMethod:${job}`;
+const selectedLayerKey = (job: string) => `emtr:selectedLayer:${job}`;
 
 /* ---------------- number coercion helpers ---------------- */
 const asNum = (v: unknown): number | null => {
@@ -38,7 +44,11 @@ const as4Vec = (x: unknown): number[] | null => {
 
 const safeParseJSON = (x: unknown): unknown => {
   if (typeof x === "string") {
-    try { return JSON.parse(x); } catch { return null; }
+    try {
+      return JSON.parse(x);
+    } catch {
+      return null;
+    }
   }
   return x;
 };
@@ -104,12 +114,11 @@ const pickTransWrapped = (obj: AnyObj, keys: string[]): Record<string, unknown> 
 type ApiMLE = {
   job_id: string;
   method: string;
+  layer?: number | null;
   rep?: string | number | null;
   reps?: Array<string | number>;
-  // canonical names:
   root_prob?: number[] | string | null;
   trans_prob?: unknown;
-  // label-only (e.g., "h_5")
   root?: string | null;
   // compatibility fields:
   root_prob_final?: number[] | string | null;
@@ -190,21 +199,22 @@ export default function MLEinDPage() {
   const [roots, setRoots] = useState<string[]>([]);
   const [selRoot, setSelRoot] = useState<string>("");
 
-  /* ---------- new: initialization method state ---------- */
+  /* ---------- initialization method + layer ---------- */
   const [method, setMethod] = useState<MethodKey>("dirichlet");
+  const [layer, setLayer] = useState<LayerIdx>(0);
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [root, setRoot] = useState<number[] | null>(null);                // 4-vector
+  const [root, setRoot] = useState<number[] | null>(null);                 // 4-vector
   const [trans, setTrans] = useState<Record<string, unknown> | null>(null); // map of matrices
-  const [rootKey, setRootKey] = useState<string | null>(null);            // label (e.g., "h_5")
+  const [rootKey, setRootKey] = useState<string | null>(null);             // label (e.g., "h_5")
   const [alphaPi, setAlphaPi] = useState<number[] | null>(null);
   const [alphaM, setAlphaM] = useState<number[] | null>(null);
 
   const plotsRef = useRef<HTMLDivElement | null>(null);
 
-  /* ---------- read job + rep + root + method from localStorage ---------- */
+  /* ---------- read job + rep + root + method + layer from localStorage ---------- */
   useEffect(() => {
     try {
       const savedJob = localStorage.getItem(SELECTED_JOB_KEY) ?? "";
@@ -218,11 +228,16 @@ export default function MLEinDPage() {
         if (savedMethod && (["dirichlet","parsimony","hss"] as MethodKey[]).includes(savedMethod)) {
           setMethod(savedMethod);
         }
+        const savedLayer = localStorage.getItem(selectedLayerKey(savedJob));
+        if (savedLayer !== null) {
+          const n = Number(savedLayer);
+          if (n === 0 || n === 1 || n === 2) setLayer(n as LayerIdx);
+        }
       }
     } catch { /* ignore */ }
   }, []);
 
-  /* ---------- persist rep/root/method per job ---------- */
+  /* ---------- persist rep/root/method/layer per job ---------- */
   useEffect(() => {
     if (!job) return;
     try {
@@ -247,13 +262,21 @@ export default function MLEinDPage() {
     } catch { /* ignore */ }
   }, [job, method]);
 
+  useEffect(() => {
+    if (!job) return;
+    try {
+      localStorage.setItem(selectedLayerKey(job), String(layer));
+    } catch { /* ignore */ }
+  }, [job, layer]);
+
   /* ---------- fetch full reps list for this job ---------- */
   const fetchReps = useCallback(async (jobId: string) => {
     try {
       const u = new URL("/api/mle/reps", window.location.origin);
       u.searchParams.set("job_id", jobId);
+      // NOTE: reps endpoint may not be layer-aware; we also fill from /api/mle response below
       const res = await fetch(u.toString(), { cache: "no-store" });
-      const j = await res.json().catch(() => null) as { ok?: boolean; reps?: Array<string | number>; error?: string } | null;
+      const j = (await res.json().catch(() => null)) as { ok?: boolean; reps?: Array<string | number>; error?: string } | null;
 
       if (res.ok && j && j.ok && Array.isArray(j.reps)) {
         const list = j.reps.map((r) => String(r));
@@ -293,7 +316,7 @@ export default function MLEinDPage() {
     if (job) void fetchRoots(job);
   }, [job, fetchRoots]);
 
-  /* ---------- load current rep/root/method’s data ---------- */
+  /* ---------- load current rep/root/method/layer data ---------- */
   const load = useCallback(async () => {
     if (!job) {
       setErr("No job selected. Choose a job on the Precomputed Results page.");
@@ -309,7 +332,8 @@ export default function MLEinDPage() {
     try {
       const u = new URL("/api/mle", window.location.origin);
       u.searchParams.set("job_id", job);
-      u.searchParams.set("method", method);     // <-- use selected initialization method
+      u.searchParams.set("method", method);
+      u.searchParams.set("layer", String(layer));
       if (rep) u.searchParams.set("rep", rep);
       if (selRoot) u.searchParams.set("root", selRoot);
 
@@ -317,7 +341,9 @@ export default function MLEinDPage() {
       const raw = await res.text();
 
       let base: unknown = {};
-      try { base = raw ? JSON.parse(raw) : {}; } catch {
+      try {
+        base = raw ? JSON.parse(raw) : {};
+      } catch {
         throw new Error(`Expected JSON from ${u.pathname}, got invalid body (HTTP ${res.status}). ${raw.slice(0, 180)}`);
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -325,7 +351,7 @@ export default function MLEinDPage() {
       const payload = (base as Partial<ApiMLE>) ?? {};
       if (typeof payload.error === "string" && payload.error) throw new Error(payload.error);
 
-      // Reps fallback
+      // Reps fallback (from API /mle response which is layer-aware)
       if (!allReps.length && Array.isArray(payload.reps)) {
         const list = payload.reps.map((x) => String(x));
         if (list.length) setAllReps(list);
@@ -333,9 +359,13 @@ export default function MLEinDPage() {
 
       const serverRep = payload.rep != null ? String(payload.rep) : null;
       const defaultRep = serverRep || (allReps.length ? allReps[allReps.length - 1] : null);
-      if (!rep && defaultRep) { setRep(defaultRep); setLoading(false); return; }
+      if (!rep && defaultRep) {
+        setRep(defaultRep);
+        setLoading(false);
+        return;
+      }
 
-      // Root probabilities (4-vector), if provided by this method
+      // Root probabilities (4-vector), if provided
       const rootVec = pick4Vec(payload as AnyObj, [
         "root_prob",          // canonical
         "root_prob_final",    // legacy
@@ -359,17 +389,16 @@ export default function MLEinDPage() {
       ]);
       setTrans(transMap);
 
-      // Root label (server wins; else keep user choice)
-    const rKeyServer =
-      typeof (payload as AnyObj)["root"] === "string"
-      ? ((payload as AnyObj)["root"] as string)
-      : (pick(payload as AnyObj, ["rootKey", "root_key"]) as string | undefined);
-
-  setRootKey(selRoot || rKeyServer || null);
+      // Root label
+      const rKeyServer =
+        typeof (payload as AnyObj)["root"] === "string"
+          ? ((payload as AnyObj)["root"] as string)
+          : (pick(payload as AnyObj, ["rootKey", "root_key"]) as string | undefined);
+      setRootKey(selRoot || rKeyServer || null);
 
       // Dirichlet hyperparameters (likely only when method === 'dirichlet')
-      const aPi = as4Vec(payload.D_pi ?? (pick(payload as AnyObj, ["alpha_pi", "dirichlet_pi"]) as unknown)) ?? null;
-      const aM  = as4Vec(payload.D_M  ?? (pick(payload as AnyObj, ["alpha_M",  "dirichlet_M"])  as unknown))  ?? null;
+      const aPi = as4Vec((payload as AnyObj)["D_pi"] ?? (pick(payload as AnyObj, ["alpha_pi", "dirichlet_pi"]) as unknown)) ?? null;
+      const aM  = as4Vec((payload as AnyObj)["D_M"]  ?? (pick(payload as AnyObj, ["alpha_M",  "dirichlet_M"])  as unknown))  ?? null;
       setAlphaPi(aPi);
       setAlphaM(aM);
     } catch (e) {
@@ -377,9 +406,9 @@ export default function MLEinDPage() {
     } finally {
       setLoading(false);
     }
-  }, [job, rep, selRoot, method, allReps.length]);
+  }, [job, rep, selRoot, method, layer, allReps.length]);
 
-  useEffect(() => { if (job) void load(); }, [job, rep, selRoot, method, load]);
+  useEffect(() => { if (job) void load(); }, [job, rep, selRoot, method, layer, load]);
 
   const rootOK = useMemo(() => Array.isArray(root) && root.length === 4, [root]);
   const transOK = useMemo(() => !!trans && Object.keys(trans).length > 0, [trans]);
@@ -398,14 +427,15 @@ export default function MLEinDPage() {
   }
   function plotFilterAgg(txt: string): boolean {
     return /p\(.+\|.+\)/i.test(txt) && /\(n=\d+\)/i.test(txt);
-    }
+  }
 
   const dpiSlug = useMemo(() => paramSlug("dpi", alphaPi), [alphaPi]);
   const dmSlug  = useMemo(() => paramSlug("dm",  alphaM),  [alphaM]);
 
   function prefix(): string {
     const repPart = rep ? `_rep${rep}` : "";
-    return `mle_${job || "job"}${repPart}_${method}`;
+    const layerPart = `_layer${layer}`;
+    return `mle_${job || "job"}${repPart}_${method}${layerPart}`;
   }
   function rootNameSlug(): string {
     return sanitizeForFilename(rootKey || "root");
@@ -527,7 +557,7 @@ export default function MLEinDPage() {
           </select>
         </label>
 
-        {/* NEW: Method selector */}
+        {/* Method selector */}
         <div className="flex items-center gap-2 ml-2">
           <span className="text-sm text-black">Initialization</span>
           <div className="inline-flex rounded-md border overflow-hidden">
@@ -542,6 +572,26 @@ export default function MLEinDPage() {
                 title={METHOD_LABEL[m]}
               >
                 {METHOD_LABEL[m]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Layer selector */}
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-black">Layer</span>
+          <div className="inline-flex rounded-md border overflow-hidden">
+            {([0,1,2] as LayerIdx[]).map((L) => (
+              <button
+                key={L}
+                type="button"
+                onClick={() => setLayer(L)}
+                className={`px-3 py-1.5 text-sm ${
+                  layer === L ? "bg-black text-white" : "bg-white text-black"
+                } ${L !== 2 ? "border-r" : ""}`}
+                title={LAYER_LABEL[L]}
+              >
+                {LAYER_LABEL[L]}
               </button>
             ))}
           </div>
@@ -598,7 +648,7 @@ export default function MLEinDPage() {
         <div className="p-4 border rounded text-red-600">{err}</div>
       ) : !(rootOK || transOK) ? (
         <div className="p-4 border rounded">
-          No {METHOD_LABEL[method]} data available for this job{rep ? ` (rep ${rep})` : ""}.
+          No {METHOD_LABEL[method]} data available for this job{rep ? ` (rep ${rep})` : ""} on {LAYER_LABEL[layer]} layer.
         </div>
       ) : (
         <div className="space-y-4">

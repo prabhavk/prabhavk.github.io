@@ -185,6 +185,113 @@ SortedKey(const std::string& a, const std::string& b) {
 
 }
 
+static inline std::string json_escape_(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 16);
+    static const char* HEX = "0123456789ABCDEF";
+
+    for (unsigned char uc : s) {          // important: unsigned char
+        switch (uc) {
+            case '\"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (uc < 0x20 || uc == 0x7F) {
+                    out += "\\u00";
+                    out += HEX[(uc >> 4) & 0x0F];
+                    out += HEX[(uc      ) & 0x0F];
+                } else {
+                    out += static_cast<char>(uc); // pass through UTF-8 bytes as-is
+                }
+        }
+    }
+    return out;
+}
+
+static inline std::string num3(double x) {
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(3) << x;
+    return ss.str();
+}
+
+static inline std::string estr(const std::string& s) {
+    std::ostringstream os;
+    os << '"' << json_escape_(s) << '"';
+    return os.str();
+}
+
+static inline std::string hstring(double x) { return num3(x); }
+
+static inline bool is_vec4_finite(const std::array<double,4>& v) {
+    for (double x : v) if (!std::isfinite(x)) return false;
+    return true;
+}
+static inline void dump_vec4_fixed3(std::ostringstream& os, const std::array<double,4>& v) {
+    os << '[' << num3(v[0]) << ',' << num3(v[1]) << ','
+              << num3(v[2]) << ',' << num3(v[3]) << ']';
+}
+
+static inline bool is_md4_finite(const Md& m) {
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+            if (!std::isfinite(m[i][j])) return false;
+    return true;
+}
+static inline void dump_md4_fixed3(std::ostringstream& os, const Md& m) {
+    os << '[';
+    for (int i = 0; i < 4; ++i) {
+        if (i) os << ',';
+        os << '['
+           << num3(m[i][0]) << ',' << num3(m[i][1]) << ','
+           << num3(m[i][2]) << ',' << num3(m[i][3]) << ']';
+    }
+    os << ']';
+}
+
+static inline std::string pvec4(const std::array<double,4>& v) {
+    std::ostringstream os;
+    if (is_vec4_finite(v)) {
+        dump_vec4_fixed3(os, v);
+    } else {
+        os << "[]";
+    }
+    return os.str();
+}
+
+// map<string, Md> -> {"A":[[...],[...],[...],[...]], ...}
+static inline std::string hmap_mat4(const std::map<std::string, Md>& mp) {
+    std::ostringstream os;
+    os << '{';
+    bool first = true;
+    for (const auto& kv : mp) {
+        if (!is_md4_finite(kv.second)) continue;
+        if (!first) os << ',';
+        first = false;
+        os << '"' << json_escape_(kv.first) << "\":";
+        dump_md4_fixed3(os, kv.second);
+    }
+    os << '}';
+    return os.str();
+}
+
+static inline std::string dump_iter_ll_obj(const std::map<int,double>& m) {
+    std::ostringstream os;
+    os << '{';
+    bool first = true;
+    for (const auto& kv : m) {
+        if (!std::isfinite(kv.second)) continue;
+        if (!first) os << ',';
+        first = false;
+        os << '"' << kv.first << "\":" << num3(kv.second);
+    }
+    os << '}';
+    return os.str();
+}
+
 
 using namespace fj;
 
@@ -673,14 +780,12 @@ private:
 	std::vector<std::string> names; names.reserve(aln.size());
     for (const auto& kv : aln) names.push_back(kv.first);
     std::sort(names.begin(), names.end());
-	const std::size_t Alen = aln.at(names[0]).size(); // length of alignment
+	const std::size_t Alen = aln.at(names[0]).size();
     if (names.size() < 2) throw std::runtime_error("Need >= 2 sequences.");
 	// generate positions for train/test alignment pairs
 	// generate distance_matrices for train/test alignment pairs
   	map <pair<int,int>,pair<DistanceMap,DistanceMap>> kfoldcv_dm;
 	int seq_len;
-
-
   }
   
   static DistanceMap ComputeNHDistances(const std::unordered_map<std::string,std::string>& aln) {
@@ -2630,21 +2735,25 @@ class clique {
     vector <int> compressedSequence;
 	string name;
 	int id;
+	int site;
 	int inDegree = 0;
 	int outDegree = 0;
 	int timesVisited = 0;
 	clique * parent = this;
+	SEM_vertex * root_variable;
 	vector <clique *> children;
 	void AddParent(clique * C);
 	void AddChild(clique * C);
 	void ComputeBelief();
+	void ScaleFactor();
 	SEM_vertex * x;
 	SEM_vertex * y;
 	std::array <double, 4> MarginalizeOverVariable(SEM_vertex * v);
 //	emtr::Md DivideBeliefByMessageMarginalizedOverVariable(SEM_vertex * v);	
 	// Clique is defined over the vertex pair (X,Y)
 	// No of variables is always 2 for bifurcating tree-structured DAGs
-	
+	double scalingFactor;
+	emtr::Md factor;
 	emtr::Md initialPotential;	
 	emtr::Md belief;
 	// P(X,Y)
@@ -2692,10 +2801,11 @@ std::array <double, 4> clique::MarginalizeOverVariable(SEM_vertex * v) {
 }
 
 void clique::ComputeBelief() {
-	emtr::Md factor = this->initialPotential;
+	this->factor = this->initialPotential;
 	vector <clique *> neighbors = this->children;
 	std::array <double, 4> messageFromNeighbor;
 	bool debug = 0;		
+	// if (this->y->name == "Mouse" && this->root_variable->name == "h_4" && this->site == 257) {debug = 1; cout << "..........................................................................." << endl;}
 	if (this->parent != this) {
 		neighbors.push_back(this->parent);
 	}
@@ -2703,50 +2813,44 @@ void clique::ComputeBelief() {
 	for (clique * C_neighbor : neighbors) {		
 		this->logScalingFactorForClique += this->logScalingFactorForMessages[C_neighbor];
 		messageFromNeighbor = this->messagesFromNeighbors[C_neighbor];
-		for (int i = 0; i < 4; i ++) if (isnan(messageFromNeighbor[i])) throw mt_error("message contain nan"); ;
+		for (int i = 0; i < 4; i ++) if (isnan(messageFromNeighbor[i])) throw mt_error("message contain nan");
+		double message_sum = 0;		
+				
+		//
 		if (this->y == C_neighbor->x or this->y == C_neighbor->y) {
-//		factor_row_i = factor_row_i (dot) message
-			for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
-				for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
-					factor[dna_x][dna_y] *= messageFromNeighbor[dna_y];					
-				}
-			}
-			if (debug) {
-				cout << "Performing row-wise multiplication" << endl;
-			}			
+		    //	factor_row_i = factor_row_i (dot) message
+			for (int dna_x = 0 ; dna_x < 4; dna_x ++) for (int dna_y = 0 ; dna_y < 4; dna_y ++) this->factor[dna_x][dna_y] *= messageFromNeighbor[dna_y];
+			// scale factor
+			this->scalingFactor = 0;
+			for (int dna_x = 0 ; dna_x < 4; dna_x ++) for (int dna_y = 0 ; dna_y < 4; dna_y ++) this->scalingFactor += this->factor[dna_x][dna_y];			
+			assert(scalingFactor > 0);
+			for (int dna_x = 0 ; dna_x < 4; dna_x ++) for (int dna_y = 0 ; dna_y < 4; dna_y ++) this->factor[dna_x][dna_y] /= this->scalingFactor;
+			this->logScalingFactorForClique += log(scalingFactor);
+			if (debug) cout << "Performing row-wise multiplication" << endl;
 		} else if (this->x == C_neighbor->x or this->x == C_neighbor->y) {
-//		factor_col_i = factor_col_i (dot) message
-			for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
-				for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
-					factor[dna_x][dna_y] *= messageFromNeighbor[dna_x];
-				}
-			}
-			if (debug) {
-				cout << "Performing column-wise multiplication" << endl;
-			}			
+			for (int dna_y = 0 ; dna_y < 4; dna_y ++) for (int dna_x = 0 ; dna_x < 4; dna_x ++) this->factor[dna_x][dna_y] *= messageFromNeighbor[dna_x];
+			// scale factor
+			this->scalingFactor = 0;
+			for (int dna_x = 0 ; dna_x < 4; dna_x ++) for (int dna_y = 0 ; dna_y < 4; dna_y ++) this->scalingFactor += this->factor[dna_x][dna_y];			
+			assert(scalingFactor > 0);
+			for (int dna_x = 0 ; dna_x < 4; dna_x ++) for (int dna_y = 0 ; dna_y < 4; dna_y ++) this->factor[dna_x][dna_y] /= this->scalingFactor;
+			this->logScalingFactorForClique += log(scalingFactor);
+			if (debug) cout << "Performing column-wise multiplication" << endl;
 		} else {
 			cout << "Check product step" << endl;
             throw mt_error("check product step");
 		}
 	}
 	// cout << "6b" << endl;	
-	double scalingFactor = 0;
-	for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
-		for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
-			scalingFactor += factor[dna_x][dna_y];
-		}
-	}
-	// cout << "6c" << endl;	
-	if (scalingFactor == 0) {
-		cout << "scalingFactor" << endl;
-        throw mt_error("check factor");
-    }
+	this->scalingFactor = 0;
+	for (int dna_x = 0 ; dna_x < 4; dna_x ++) for (int dna_y = 0 ; dna_y < 4; dna_y ++) this->scalingFactor += this->factor[dna_x][dna_y];
+	assert(scalingFactor > 0);
+	for (int dna_x = 0 ; dna_x < 4; dna_x ++) for (int dna_y = 0 ; dna_y < 4; dna_y ++) this->factor[dna_x][dna_y] /= this->scalingFactor;
+	this->logScalingFactorForClique += log(this->scalingFactor);
+	// cout << "6c" << endl;		
 	// cout << "6d" << endl;
-	for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
-		for (int dna_y = 0 ; dna_y < 4; dna_y ++) {
-			this->belief[dna_x][dna_y] = factor[dna_x][dna_y]/scalingFactor;
-		}
-	}
+	for (int dna_x = 0 ; dna_x < 4; dna_x ++) for (int dna_y = 0 ; dna_y < 4; dna_y ++) this->belief[dna_x][dna_y] = this->factor[dna_x][dna_y];
+	
 	for (int dna_x = 0 ; dna_x < 4; dna_x ++) {
 		for (int dna_y = 0 ; dna_y < 4; dna_y ++) {			
 			if (isnan(this->belief[dna_x][dna_y])){
@@ -2755,7 +2859,6 @@ void clique::ComputeBelief() {
 		}
 	}
 	// cout << "6e" << endl;
-	this->logScalingFactorForClique += log(scalingFactor);
 }
 
 void clique::AddParent(clique * C) {
@@ -2769,6 +2872,7 @@ void clique::AddChild(clique * C) {
 }
 
 void clique::SetInitialPotentialAndBelief(int site) {
+	this->site = site;
 	// Initialize psi
 	// V = (X,Y) X->Y (wlog), X is always an unobserved vertex
 	int matchingCase;
@@ -2845,8 +2949,7 @@ void clique::SetInitialPotentialAndBelief(int site) {
 	}
 	
 	if (all_zero_initial_potential) {
-		cout << y->name << endl;
-		cout << "site " << site << endl;
+		cout << y->name << endl;		
 		int dna_y = y->DNAcompressed[site];		
 		cout << dna_y << endl;
 		cout  << "all_zero_initial_potential" << endl;
@@ -2860,7 +2963,7 @@ void clique::SetInitialPotentialAndBelief(int site) {
 
 	// double maxValue = 0;
 	for (int i = 0; i < 4; i ++) {
-		for (int j = 0; j < 4; j ++) {
+		for (int j = 0; j < 4; j ++) {			
 			if(isnan(this->initialPotential[i][j])){
 				cout << "initial potential has nan" << endl;
 				throw mt_error("initial potential has nan");
@@ -3542,93 +3645,22 @@ struct AA_opt_struct {
 
 class SEM {
 private:	
-	static string json_escape(const string& s) {
-		string out; out.reserve(s.size() + 8);
-		for (int c : s) {
-		switch (c) {
-			case '\"': out += "\\\""; break;
-			case '\\': out += "\\\\"; break;
-			case '\b': out += "\\b";  break;
-			case '\f': out += "\\f";  break;
-			case '\n': out += "\\n";  break;
-			case '\r': out += "\\r";  break;
-			case '\t': out += "\\t";  break;
-			default:
-			if (c < 0x20) {
-				char buf[7];
-				snprintf(buf, sizeof(buf), "\\u%04X", c);
-				out += buf;
-			} else {
-				out += static_cast<char>(c);
-			}
-		}
-		}
-		return out;
-	}
 
-	static string jstr(const string& s) {
-		return string("\"") + json_escape(s) + "\"";
-	}
-
-	static string jnum(double x) {
-		if (!isfinite(x)) return "null";
-		ostringstream os;
-		os << setprecision(17) << x;
-		return os.str();
-	}
-
-	static string jvec4(const array<double,4>& a) {
-		return "[" + jnum(a[0]) + "," + jnum(a[1]) + "," + jnum(a[2]) + "," + jnum(a[3]) + "]";
-	}
-
-	static string jmat4(const array<array<double,4>,4>& M) {
-		ostringstream os;
-		os << "[";
-		for (int r = 0; r < 4; ++r) {
-		if (r) os << ",";
-		os << "[" << jnum(M[r][0]) << "," << jnum(M[r][1]) << "," << jnum(M[r][2]) << "," << jnum(M[r][3]) << "]";
-		}
-		os << "]";
-		return os.str();
-	}
-
-	template<class MapStrMat>
-	static string jmap_mat4(const MapStrMat& mp) {
-		ostringstream os;
-		os << "{";
-		bool first = true;
-		for (const auto& kv : mp) {
-		if (!first) os << ",";
-		first = false;
-		os << jstr(kv.first) << ":" << jmat4(kv.second);
-		}
-		os << "}";
-		return os.str();
-	}
-
-	template<class MapIterVal>
-	static string jseries_iter_val(const MapIterVal& mp) {		
-		ostringstream os;
-		os << "[";
-		bool first = true;
-		for (const auto& kv : mp) {
-		if (!first) os << ",";
-		first = false;
-		os << "[" << kv.first << "," << jnum(kv.second) << "]";
-		}
-		os << "]";
-		return os.str();
-	}
 public:
 	void SetParameters(string parameters_json);
 	Eigen::Matrix <double,20,20> Q_D;
 	Eigen::Matrix <double,20,20> Vc, Vc_inv;	
-    Eigen::Matrix <std::complex<double>,20,1> lambda;
+    Eigen::Matrix <complex<double>,20,1> lambda;
 	Eigen::Matrix <double,20,20> S_D;
 	array <int,3> num_patterns_for_layer;
 	vector <int> DNASitesByWeightDesc;
 	vector <int> DNACumulativePatternWeight;
 	vector <size_t> DNAPatternOrderByWeightDesc;
+	vector <vector<int>> DNAPatternOriginalSites;
+	vector <int> OriginalToCompressed;
+	int compressedToFirstOriginalSite(size_t k) const;
+	const vector<int>& compressedToAllOriginalSites(size_t k) const;
+	int originalToCompressed(size_t origSite) const;
 	bool spectral_ready_ = false;
 	vector<double> pi_D;
 	Graph T;
@@ -3793,7 +3825,7 @@ public:
 	void PackTheta(const vector<pair<int,int>>& idxS, int p_ref,vector<double>& theta) const;
 	void UnpackTheta(const vector<double>& theta, const vector<pair<int,int>>& idxS,int i0, int j0, int p_ref);
 	double NMObjectiveNegLL(const vector<double>& theta, const vector<pair<int,int>>& idxS, int i0, int j0, int p_ref);
-
+	void UNRESTForEachBranch();
 //	void AddCompressedSequencesAndNames(map<string,vector<int>> sequencesList, vector <vector <int>> sitePatternRepeats);	
 	void AddAllSequences(string sequencesFileName);
 	void AddNames(vector <string> namesToAdd);
@@ -3897,7 +3929,7 @@ public:
 		 int kcount, int *icount, int *numres, int *ifault);	
 	void ComputeInitialEstimateOfModelParameters();
 	void ComputeInitialEstimateOfModelParametersForTrifle(int layer);
-	void BumpZeroEntriesOfModelParametersForNextLayer();
+	void BumpZeroEntriesOfModelParameters();
 	void SetInitialEstimateOfModelParametersUsingDirichlet();
 	void SetInitialEstimateOfModelParametersUsingHSS();
 	void TransformRootedTreeToBifurcatingTree();
@@ -4037,10 +4069,8 @@ public:
 	vector <AA_opt_struct> AA_opt_runs;
 	EM_struct EM_current{};
 	EMTrifle_struct EMTrifle_current{};
-	AA_opt_struct AA_struct{};
-	string em_to_json(const EM_struct& em) const;
-	string emtrifle_to_json(const EMTrifle_struct& em) const;
-	string aa_struct_to_json(const AA_opt_struct& aa_struct) const;
+	AA_opt_struct AA_struct{};	
+	string emtrifle_to_json(const EMTrifle_struct& em) const;	
 	int first_index_gt(const std::vector<double>& cum, double thr);
 	// Select vertex for rooting Chow-Liu tree and update edges in T
 	// Modify T such that T is a bifurcating tree and likelihood of updated
@@ -4084,6 +4114,24 @@ public:
 		delete this->M_hss;
 	}
 };
+
+int SEM::compressedToFirstOriginalSite(size_t k) const {
+    if (k >= DNAPatternOriginalSites.size()) return -1;
+    const auto& v = DNAPatternOriginalSites[k];
+    return v.empty() ? -1 : v.front();
+}
+
+const vector<int>& SEM::compressedToAllOriginalSites(size_t k) const {
+    static const vector<int> EMPTY;
+    if (k >= DNAPatternOriginalSites.size()) return EMPTY;
+    return DNAPatternOriginalSites[k];
+}
+
+int SEM::originalToCompressed(size_t origSite) const {
+    if (origSite >= OriginalToCompressed.size()) return -1;
+    return OriginalToCompressed[origSite];
+}
+
 
 void SEM::addToZeroEntriesOfRootProbability(array <double,4> & baseComposition) {
 	double sum = 0.0;
@@ -5186,190 +5234,6 @@ void SEM::set_alpha_M_row(double a1, double a2, double a3, double a4) {
 	this->alpha_M_row[3] = a4;
 }
 
-inline std::string SEM::emtrifle_to_json(const EMTrifle_struct& em) const {
-  std::ostringstream os;
-
-  // map<int,double> -> {"1":-1.23,"2":-0.98,...}
-  auto dump_iter_ll_obj = [&](const std::map<int,double>& m) {
-    os << "{";
-    bool first = true;
-    for (const auto& kv : m) {
-      if (!first) os << ",";
-      first = false;
-      os << "\"" << kv.first << "\":" << jnum(kv.second);
-    }
-    os << "}";
-  };
-
-  auto jnum_or_null = [&](double x) -> std::string {
-    return std::isfinite(x) ? jnum(x) : std::string("null");
-  };
-  auto jint_or_null = [&](int x) -> std::string {
-    return (x > 0) ? std::to_string(x) : std::string("null");
-  };
-
-  // Top-level init values from layer 0 if present
-  const bool has_ll_init0 = (!em.ll_initial_trifle.empty() &&
-                             std::isfinite(em.ll_initial_trifle[0]));
-  const bool has_rpi0 = (!em.root_prob_initial_trifle.empty());
-  const bool has_tpi0 = (!em.trans_prob_initial_trifle.empty() &&
-                         !em.trans_prob_initial_trifle[0].empty());
-
-  os << "{"
-     << "\"method\":"           << jstr(em.method) << ","
-     << "\"rep\":"              << em.rep << ","
-     << "\"root\":"             << jstr(em.root) << ","
-     << "\"ll_init\":"          << (has_ll_init0 ? jnum(em.ll_initial_trifle[0]) : "null") << ","
-     << "\"root_prob_init\":"   << (has_rpi0 ? jvec4(em.root_prob_initial_trifle[0]) : "null") << ","
-     << "\"trans_prob_init\":"  << (has_tpi0 ? jmap_mat4(em.trans_prob_initial_trifle[0]) : "null") << ","
-     << "\"layers\":[";
-
-  bool firstLayer = true;
-  for (int layer = 0; layer < 3; ++layer) {
-    const size_t L = static_cast<size_t>(layer);
-
-    const bool has_iter = (L < em.iter_trifle.size());
-    const bool has_ll_initial = (L < em.ll_initial_trifle.size() &&
-                                 std::isfinite(em.ll_initial_trifle[layer]));
-    const bool has_ll_final = (L < em.ll_final_trifle.size() &&
-                               std::isfinite(em.ll_final_trifle[layer]));
-    const bool has_rpf = (L < em.root_prob_final_trifle.size());
-    const bool has_tpf = (L < em.trans_prob_final_trifle.size() &&
-                          !em.trans_prob_final_trifle[layer].empty());
-    const bool has_ecd = (L < em.ecd_ll_per_iter_for_trifle.size() &&
-                          !em.ecd_ll_per_iter_for_trifle[layer].empty());
-
-    // Skip fully empty layers
-    if (!(has_iter || has_ll_initial || has_ll_final || has_rpf || has_tpf || has_ecd)) continue;
-
-    if (!firstLayer) os << ",";
-    firstLayer = false;
-
-    os << "{"
-       << "\"layer\":"            << layer << ","
-       << "\"iter\":"             << (has_iter ? jint_or_null(em.iter_trifle[layer]) : "null") << ","
-       << "\"ll_initial\":"       << (has_ll_initial ? jnum(em.ll_initial_trifle[layer]) : "null") << ","
-       << "\"ll_final\":"         << (has_ll_final ? jnum(em.ll_final_trifle[layer]) : "null") << ","
-       << "\"root_prob_final\":"  << (has_rpf ? jvec4(em.root_prob_final_trifle[layer]) : "null") << ","
-       << "\"trans_prob_final\":" << (has_tpf ? jmap_mat4(em.trans_prob_final_trifle[layer]) : "null") << ","
-       << "\"ecd_ll_per_iter\":";
-    if (has_ecd) dump_iter_ll_obj(em.ecd_ll_per_iter_for_trifle[layer]); else os << "null";
-    os << "}";
-  }
-
-  os << "]}";
-  return os.str();
-}
-
-
-
-inline string SEM::em_to_json(const EM_struct& em) const {  
-  ostringstream os;
-  os << "{"
-     << "\"method\":"           << jstr(em.method)                 << ","
-     << "\"rep\":"              << em.rep                          << ","
-	 << "\"iter\":"             << em.iter                         << ","
-     << "\"ecd_ll_per_iter\":"  << jseries_iter_val(em.ecd_ll_per_iter) << ","
-	 << "\"ll_init\":"          << jnum(em.ll_init)                << ","
-     << "\"ll_final\":"         << jnum(em.ll_final)               << ","
-     << "\"root\":"             << jstr(em.root)                   << ","
-     << "\"root_prob_init\":"   << jvec4(em.root_prob_init)        << ","
-     << "\"root_prob_final\":"  << jvec4(em.root_prob_final)       << ","
-     << "\"trans_prob_init\":"  << jmap_mat4(em.trans_prob_init)   << ","
-     << "\"trans_prob_final\":" << jmap_mat4(em.trans_prob_final)
-     << "}";
-  return os.str();
-}
-
-inline std::string SEM::aa_struct_to_json(const AA_opt_struct& s) const {
-  auto json_escape = [](const std::string& in) -> std::string {
-    std::ostringstream o;
-    for (char c : in) {
-      switch (c) {
-        case '\"': o << "\\\""; break;
-        case '\\': o << "\\\\"; break;
-        case '\b': o << "\\b";  break;
-        case '\f': o << "\\f";  break;
-        case '\n': o << "\\n";  break;
-        case '\r': o << "\\r";  break;
-        case '\t': o << "\\t";  break;
-        default:
-          if (static_cast<unsigned char>(c) < 0x20) {
-            o << "\\u" << std::hex << std::setw(4) << std::setfill('0')
-              << static_cast<int>(static_cast<unsigned char>(c))
-              << std::dec << std::setw(0);
-          } else {
-            o << c;
-          }
-      }
-    }
-    return o.str();
-  };
-
-  auto jvec = [](const std::vector<double>& v) -> std::string {
-    std::ostringstream os;
-    os.setf(std::ios::fixed); os << std::setprecision(17);
-    os << "[";
-    for (size_t i = 0; i < v.size(); ++i) {
-      if (i) os << ",";
-      os << v[i];
-    }
-    os << "]";
-    return os.str();
-  };
-
-  auto jmat20 = [](const Eigen::Matrix<double,20,20>& M) -> std::string {
-    std::ostringstream os;
-    os.setf(std::ios::fixed); os << std::setprecision(17);
-    os << "[";
-    for (int r = 0; r < 20; ++r) {
-      if (r) os << ",";
-      os << "[";
-      for (int c = 0; c < 20; ++c) {
-        if (c) os << ",";
-        os << M(r,c);
-      }
-      os << "]";
-    }
-    os << "]";
-    return os.str();
-  };
-
-  auto jmap_int_double = [](const std::map<int,double>& m) -> std::string {
-    // JSON object with stringified integer keys
-    std::ostringstream os;
-    os.setf(std::ios::fixed); os << std::setprecision(17);
-    os << "{";
-    bool first = true;
-    for (const auto& kv : m) {
-      if (!first) os << ",";
-      first = false;
-      os << "\"" << kv.first << "\":" << kv.second;
-    }
-    os << "}";
-    return os.str();
-  };
-
-  std::ostringstream os;
-  os.setf(std::ios::fixed); os << std::setprecision(17);
-
-  os << "{";
-  os << "\"rep\":"                 << s.rep << ",";
-  os << "\"iter\":"                << s.iter << ",";
-  os << "\"aa_ll_per_iter\":"      << jmap_int_double(s.aa_ll_per_iter) << ",";
-  os << "\"aa_ll_init\":"          << s.aa_ll_init << ",";
-  os << "\"aa_ll_final\":"         << s.aa_ll_final << ",";
-  os << "\"root\":\""              << json_escape(s.root) << "\",";
-  os << "\"root_prob_init\":"      << jvec(s.root_prob_init) << ",";
-  os << "\"root_prob_final\":"     << jvec(s.root_prob_final) << ",";
-  os << "\"exchangeability_matrix_init\":"  << jmat20(s.exchangeability_matrix_init) << ",";
-  os << "\"exchangeability_matrix_final\":" << jmat20(s.exchangeability_matrix_final);
-  os << "}";
-
-  return os.str();
-}
-
-void SEM::ReadFasta() {}
 
 void SEM::AddDuplicatedSequencesToRootedTree(MST * M) {
 	// Store dupl seq names in uniq seq vertex
@@ -6478,6 +6342,9 @@ void SEM::RootTreeAlongAnEdgePickedAtRandom() {
 	this->RootTreeAlongEdge(u,v);
 }
 
+void SEM::UNRESTForEachBranch() {
+
+}
 
 void SEM::RootTreeAlongEdge(SEM_vertex * u, SEM_vertex * v) {
 	// Remove lengths of edges incident to root if necessary
@@ -6943,17 +6810,18 @@ void SEM::ComputeMarginalProbabilitiesUsingExpectedCounts() {
 
 void SEM::ConstructCliqueTree() {
 	this->cliqueT->rootSet = 0;
+	SEM_vertex * root;
 	for (clique * C : this->cliqueT->cliques) {
 		delete C;
 	}
 	this->cliqueT->cliques.clear();
 	for (pair <SEM_vertex *, SEM_vertex *> edge : this->edgesForPreOrderTreeTraversal) {
-//		cout << edge.first->id << "\t" << edge.second->id << endl;
 		clique * C = new clique(edge.first, edge.second);		
 		this->cliqueT->AddClique(C);
 		if (C->x->parent == C->x and !this->cliqueT->rootSet) {
 			this->cliqueT->root = C;
 			this->cliqueT->rootSet = 1;
+			root = C->x;
 		}
 	}
 	clique * C_i; clique * C_j;
@@ -6994,6 +6862,9 @@ void SEM::ConstructCliqueTree() {
 	}	
 	this->cliqueT->SetLeaves();
 	this->cliqueT->SetEdgesForTreeTraversalOperations();
+	for (clique * C: this->cliqueT->cliques) {
+		C->root_variable = root;
+	}
 }
 
 void SEM::ResetExpectedCounts() {
@@ -7591,6 +7462,119 @@ void SEM::ComputeTrifleLogLikelihood(int layer) {
 	}
 }
 
+std::string SEM::emtrifle_to_json(const EMTrifle_struct& em) const {
+    std::ostringstream os;
+
+    // Top-level init values from layer 0 (when usable)
+    const bool has_ll_init0 = (!em.ll_initial_trifle.empty() &&
+                               std::isfinite(em.ll_initial_trifle[0]));
+    const bool has_rpi0 = (!em.root_prob_initial_trifle.empty() &&
+                           is_vec4_finite(em.root_prob_initial_trifle[0]));
+    const bool has_tpi0 = (!em.trans_prob_initial_trifle.empty() &&
+                           !em.trans_prob_initial_trifle[0].empty());
+
+    os << '{'
+       << "\"method\":" << estr(em.method) << ','
+       << "\"rep\":"    << em.rep << ','
+       << "\"root\":"   << estr(em.root) << ',';
+
+    if (has_ll_init0) {
+        os << "\"ll_init\":" << num3(em.ll_initial_trifle[0]) << ',';
+    }
+
+    os << "\"root_prob_init\":";
+    if (has_rpi0) os << pvec4(em.root_prob_initial_trifle[0]); else os << "[]";
+    os << ',';
+
+    os << "\"trans_prob_init\":";
+    if (has_tpi0) os << hmap_mat4(em.trans_prob_initial_trifle[0]); else os << "{}";
+    os << ',';
+
+    // Layers array
+    os << "\"layers\":[";
+    bool firstLayer = true;
+    for (int layer = 0; layer < 3; ++layer) {
+        const size_t L = static_cast<size_t>(layer);
+
+        // Availability checks
+        const bool has_iter        = (L < em.iter_trifle.size());
+        const bool has_ll_initial  = (L < em.ll_initial_trifle.size() &&
+                                      std::isfinite(em.ll_initial_trifle[layer]));
+        const bool has_ll_final    = (L < em.ll_final_trifle.size() &&
+                                      std::isfinite(em.ll_final_trifle[layer]));
+        const bool has_rpf         = (L < em.root_prob_final_trifle.size() &&
+                                      is_vec4_finite(em.root_prob_final_trifle[layer]));
+        const bool has_tpf         = (L < em.trans_prob_final_trifle.size() &&
+                                      !em.trans_prob_final_trifle[layer].empty());
+        const bool has_rpi_layer   = (L < em.root_prob_initial_trifle.size() &&
+                                      is_vec4_finite(em.root_prob_initial_trifle[layer]));
+        const bool has_tpi_layer   = (L < em.trans_prob_initial_trifle.size() &&
+                                      !em.trans_prob_initial_trifle[layer].empty());
+        const bool has_ecd         = (L < em.ecd_ll_per_iter_for_trifle.size());
+
+        // If absolutely nothing for this layer, skip
+        if (!(has_iter || has_ll_initial || has_ll_final ||
+              has_rpf || has_tpf || has_rpi_layer || has_tpi_layer || has_ecd)) continue;
+
+        if (!firstLayer) os << ',';
+        firstLayer = false;
+
+        os << '{'
+           << "\"layer\":" << layer;
+
+        if (has_iter)       os << ",\"iter\":"       << em.iter_trifle[layer];
+        if (has_ll_initial) os << ",\"ll_initial\":" << num3(em.ll_initial_trifle[layer]);
+        if (has_ll_final)   os << ",\"ll_final\":"   << num3(em.ll_final_trifle[layer]);
+
+        // Per-layer initial + final (containers never null)
+        os << ",\"root_prob_initial\":";
+        if (has_rpi_layer) os << pvec4(em.root_prob_initial_trifle[layer]); else os << "[]";
+
+        os << ",\"trans_prob_initial\":";
+        if (has_tpi_layer) os << hmap_mat4(em.trans_prob_initial_trifle[layer]); else os << "{}";
+
+        os << ",\"root_prob_final\":";
+        if (has_rpf) os << pvec4(em.root_prob_final_trifle[layer]); else os << "[]";
+
+        os << ",\"trans_prob_final\":";
+        if (has_tpf) os << hmap_mat4(em.trans_prob_final_trifle[layer]); else os << "{}";
+
+        os << ",\"ecd_ll_per_iter\":";
+        if (has_ecd) os << dump_iter_ll_obj(em.ecd_ll_per_iter_for_trifle[layer]); else os << "{}";
+
+        // raw_json slice (optional mirror)
+        os << ",\"raw_json\":{"
+           << "\"layer\":" << layer;
+        if (has_iter)       os << ",\"iter\":"       << em.iter_trifle[layer];
+        if (has_ll_initial) os << ",\"ll_initial\":" << num3(em.ll_initial_trifle[layer]);
+        if (has_ll_final)   os << ",\"ll_final\":"   << num3(em.ll_final_trifle[layer]);
+
+        os << ",\"root_prob_initial\":";
+        if (has_rpi_layer) os << pvec4(em.root_prob_initial_trifle[layer]); else os << "[]";
+
+        os << ",\"trans_prob_initial\":";
+        if (has_tpi_layer) os << hmap_mat4(em.trans_prob_initial_trifle[layer]); else os << "{}";
+
+        os << ",\"root_prob_final\":";
+        if (has_rpf) os << pvec4(em.root_prob_final_trifle[layer]); else os << "[]";
+
+        os << ",\"trans_prob_final\":";
+        if (has_tpf) os << hmap_mat4(em.trans_prob_final_trifle[layer]); else os << "{}";
+
+        os << ",\"ecd_ll_per_iter\":";
+        if (has_ecd) os << dump_iter_ll_obj(em.ecd_ll_per_iter_for_trifle[layer]); else os << "{}";
+
+        os << '}'; // end raw_json
+        os << '}'; // end layer obj
+    }
+    os << ']'; // end layers
+
+    os << '}'; // end root object
+    return os.str();
+}
+
+
+
 // Case 1: Observed vertices may have out degree > 0
 // Case 2: Root may have out degree = one
 // Case 3: Directed tree (rooted) with vertices with outdegree 2 or 0.
@@ -7887,6 +7871,7 @@ void SEM::EMtrifle_DNA_rooted_at_each_internal_vertex_started_with_dirichlet_sto
         double ll_val = this->EMTrifle_current.ll_final_trifle[layer]; // if available
         emit_layer_done(/*rep1*/ rep + 1, /*nodeIndex1*/ v_i + 1, /*layerIdx*/ layer, /*rootName*/ v->name, ll_val);
       }
+	  cout << "[EM_Trifle] " << this->emtrifle_to_json(this->EMTrifle_current) << endl;
 
       if (this->max_log_likelihood_diri < EMTrifle_current.ll_final_trifle[2]) {
         this->max_log_likelihood_diri = EMTrifle_current.ll_final_trifle[2];
@@ -8033,13 +8018,19 @@ void SEM::EMTrifle_DNA_for_replicate(int rep) {
   for (int v_i = 0; v_i < nodeTotal; ++v_i) {	
     v_ind = vertex_indices_to_visit[v_i];
     v = (*this->vertexMap)[v_ind];
-	// ---- Dirichlet (layers 0..2) ----       
+	// ---- Dirichlet (layers 0..2) ----   
+	this->EMTrifle_current = EMTrifle_struct{};
+	this->EMTrifle_current.method = "dirichlet";
+	this->EMTrifle_current.root = v->name;
+	this->EMTrifle_current.rep = rep;    
 	for (int layer = 0; layer < 3; ++layer) {
-      this->EMTrifle_started_with_dirichlet_rooted_at(v, layer);
-      double ll_val = this->EMTrifle_current.ll_final_trifle[layer];
+      this->EMTrifle_started_with_dirichlet_rooted_at(v, layer);      
+	  double ll_val = this->EMTrifle_current.ll_final_trifle[layer];
       emit_layer_done("dirichlet", v_i + 1, layer, v->name, ll_val);
 	  cout << "dirichlet" << "\t" << v_i + 1 << "\t" << layer << "\t" << v->name << "\t" << ll_val << endl;
     }
+	// cout << this->emtrifle_to_json(this->EMTrifle_current) << endl;
+	cout << "[EM_Trifle] " << this->emtrifle_to_json(this->EMTrifle_current) << endl;
     
 	if (this->max_log_likelihood_rep < EMTrifle_current.ll_final_trifle[2]) {
       	this->max_log_likelihood_rep = EMTrifle_current.ll_final_trifle[2];
@@ -8055,13 +8046,19 @@ void SEM::EMTrifle_DNA_for_replicate(int rep) {
 	for (int v_i = 0; v_i < nodeTotal; ++v_i) {
 		v_ind = vertex_indices_to_visit[v_i];
     	v = (*this->vertexMap)[v_ind];
-		// ---- Parsimony (layers 0..2) ----		
+		// ---- Parsimony (layers 0..2) ----
+		this->EMTrifle_current = EMTrifle_struct{};
+		this->EMTrifle_current.method = "parsimony";
+		this->EMTrifle_current.root = v->name;
+		this->EMTrifle_current.rep = rep;		
 		for (int layer = 0; layer < 3; ++layer) {
 			this->EMTrifle_started_with_parsimony_rooted_at(v, layer);
 			double ll_val = this->EMTrifle_current.ll_final_trifle[layer];
 			emit_layer_done("parsimony", v_i + 1, layer, v->name, ll_val);
 			cout << "parsimony" << "\t" << v_i + 1 << "\t" << layer << "\t" << v->name << "\t" << ll_val << endl;
-			}
+			}		
+		// cout << this->emtrifle_to_json(this->EMTrifle_current) << endl;
+		cout << "[EM_Trifle] " << this->emtrifle_to_json(this->EMTrifle_current) << endl;
 
 		if (this->max_log_likelihood_rep < EMTrifle_current.ll_final_trifle[2]) {
 			this->max_log_likelihood_rep = EMTrifle_current.ll_final_trifle[2];
@@ -8082,13 +8079,19 @@ void SEM::EMTrifle_DNA_for_replicate(int rep) {
 	for (int v_i = 0; v_i < nodeTotal; ++v_i) {
 		v_ind = vertex_indices_to_visit[v_i];
     	v = (*this->vertexMap)[v_ind];
-		// ---- HSS (layers 0..2) ----		
+		// ---- HSS (layers 0..2) ----
+		this->EMTrifle_current = EMTrifle_struct{};
+		this->EMTrifle_current.method = "hss";
+		this->EMTrifle_current.root = v->name;
+		this->EMTrifle_current.rep = rep;		
 		for (int layer = 0; layer < 3; ++layer) {
 			this->EMTrifle_started_with_HSS_rooted_at(v, layer);
 			double ll_val = this->EMTrifle_current.ll_final_trifle[layer];
 			emit_layer_done("hss", v_i + 1, layer, v->name, ll_val);
 			cout << "hss" << "\t" << v_i + 1 << "\t" << layer << "\t" << v->name << "\t" << ll_val << endl;
-		}
+		}		
+		// cout << this->emtrifle_to_json(this->EMTrifle_current) << endl;
+		cout << "[EM_Trifle] " << this->emtrifle_to_json(this->EMTrifle_current) << endl;
 	}
 }
 
@@ -8191,8 +8194,7 @@ void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_parsimony_store_res
 			this->EM_current.method = "parsimony";
 			this->EM_current.root = v->name;
 			this->EM_current.rep = rep + 1;
-			auto tup = this->EM_started_with_parsimony_rooted_at(v);
-			// const string string_EM_pars = string("[EM_AllInfo]{\"parsimony\":") + this->em_to_json(this->EM_current) + "}";
+			auto tup = this->EM_started_with_parsimony_rooted_at(v);			
 			// cout << string_EM_pars << endl;
 			EM_struct EM_pars = this->EM_current;
 			this->EM_DNA_runs_pars.push_back(EM_pars);			
@@ -8343,12 +8345,12 @@ void SEM::EM_DNA_rooted_at_each_internal_vertex_started_with_HSS_store_results(i
             const double logLikelihood_final     = std::get<4>(tup);
 
 			emtr::push_result(
-                this->EMTR_results,                 // vector<tuple<string,string,int,int,double,double,double,double>>
-                "hss",		                        // init_method
-                v->name,                            // root
-                rep + 1,                            // repetition (1-based)
+                this->EMTR_results,
+                "hss",
+                v->name,
+                rep + 1,
                 iter,
-                logLikelihood_hss,                 // ll_initial
+                logLikelihood_hss,
                 loglikelihood_ecd_first,
                 loglikelihood_ecd_final,
                 logLikelihood_final
@@ -8511,27 +8513,19 @@ void SEM::EM_rooted_at_each_internal_vertex_started_with_HSS_par(int num_repetit
 }
 
 void SEM::EMTrifle_started_with_dirichlet_rooted_at(SEM_vertex *v, int layer) {
-	// iterate over each internal node	
-	this->EMTrifle_current = EMTrifle_struct{};
-	this->EMTrifle_current.method = "dirichlet";
-	this->EMTrifle_current.root = v->name;
-	this->EMTrifle_current.rep = this->rep + 1;
+	// iterate over each internal node		
 	this->RootTreeAtVertex(v);
 	if (layer == 0) {		
 		this->SetInitialEstimateOfModelParametersUsingDirichlet();		
-	} else {
-		this->BumpZeroEntriesOfModelParametersForNextLayer();
 	}
+	this->BumpZeroEntriesOfModelParameters();
 	this->StoreInitialParamsInEMTrifleCurrent(layer);
 	// cout << "10d" << endl;
 	this->ComputeTrifleLogLikelihood(layer);
 	// cout << "10e" << endl;		
 	this->EMTrifle_current.ll_initial_trifle[layer] = this->logLikelihood;
+
 	cout << "initial log likelihood is " << this->EMTrifle_current.ll_initial_trifle[layer] << endl;
-	
-	// this->StoreParamsInEMCurrent("init");
-	// cout << "10d" << endl;
-	this->ResetAncestralSequences();
 	
 	double logLikelihood_exp_data_previous;
 	double logLikelihood_exp_data_first;
@@ -8573,26 +8567,20 @@ void SEM::EMTrifle_started_with_dirichlet_rooted_at(SEM_vertex *v, int layer) {
 	this->ComputeTrifleLogLikelihood(layer);
 	this->StoreFinalParamsInEMTrifleCurrent(layer);	
 	this->EMTrifle_current.iter_trifle[layer] = iter;
-	this->EMTrifle_current.ll_final_trifle[layer] = this->logLikelihood;
-	cout << "[EM_Trifle] " << this->emtrifle_to_json(this->EMTrifle_current) << endl;
+	this->EMTrifle_current.ll_final_trifle[layer] = this->logLikelihood;	
 	cout << "final log likelihood is " << this->EMTrifle_current.ll_final_trifle[layer] << endl;
 	return ;
 	// return tuple<int,double,double,double,double>(iter,logLikelihood_pars,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
 }
 
 
-void SEM::EMTrifle_started_with_HSS_rooted_at(SEM_vertex *v, int layer) {
-	this->EMTrifle_current = EMTrifle_struct{};
-	this->EMTrifle_current.method = "hss";
-	this->EMTrifle_current.root = v->name;
-	this->EMTrifle_current.rep = this->rep + 1;
+void SEM::EMTrifle_started_with_HSS_rooted_at(SEM_vertex *v, int layer) {	
 	// iterate over each internal node	
 	this->RootTreeAtVertex(v);
 	if (layer == 0) {
-		this->SetInitialEstimateOfModelParametersUsingHSS();
-	} else {
-		this->BumpZeroEntriesOfModelParametersForNextLayer();		
+		this->SetInitialEstimateOfModelParametersUsingHSS();		
 	}
+	this->BumpZeroEntriesOfModelParameters();
 	this->StoreInitialParamsInEMTrifleCurrent(layer);
 	// cout << "10d" << endl;
 	this->ComputeTrifleLogLikelihood(layer);
@@ -8648,29 +8636,20 @@ void SEM::EMTrifle_started_with_HSS_rooted_at(SEM_vertex *v, int layer) {
 	this->ComputeTrifleLogLikelihood(layer);
 	this->StoreFinalParamsInEMTrifleCurrent(layer);	
 	this->EMTrifle_current.iter_trifle[layer] = iter;
-	this->EMTrifle_current.ll_final_trifle[layer] = this->logLikelihood;
-	cout << "[EM_Trifle] " << this->emtrifle_to_json(this->EMTrifle_current) << endl;
+	this->EMTrifle_current.ll_final_trifle[layer] = this->logLikelihood;	
 	cout << "final log likelihood is " << this->EMTrifle_current.ll_final_trifle[layer] << endl;
 	return ;
 }
 
 void SEM::EMTrifle_started_with_parsimony_rooted_at(SEM_vertex *v, int layer) {
-	// iterate over each internal node
-	this->EMTrifle_current = EMTrifle_struct{};
-	this->EMTrifle_current.method = "parsimony";
-	this->EMTrifle_current.root = v->name;
-	this->EMTrifle_current.rep = this->rep + 1;
+	// iterate over each internal node	
 	this->RootTreeAtVertex(v);
-	if (layer == 0) {
-		// cout << "10a" << endl;
+	if (layer == 0) {		
 		this->ComputeMPEstimateOfAncestralSequencesForTrifle(layer);
-		// cout << "10b" << endl;
 		this->ComputeInitialEstimateOfModelParametersForTrifle(layer);
-		// cout << "10c" << endl;		
-	} else {
-		this->BumpZeroEntriesOfModelParametersForNextLayer();		
 	}
-	this->StoreInitialParamsInEMTrifleCurrent(layer);
+	this->BumpZeroEntriesOfModelParameters();
+	this->StoreInitialParamsInEMTrifleCurrent(layer);	
 	// cout << "10d" << endl;
 	this->ComputeTrifleLogLikelihood(layer);
 	// cout << "10e" << endl;		
@@ -8725,8 +8704,7 @@ void SEM::EMTrifle_started_with_parsimony_rooted_at(SEM_vertex *v, int layer) {
 	this->ComputeTrifleLogLikelihood(layer);
 	this->StoreFinalParamsInEMTrifleCurrent(layer);	
 	this->EMTrifle_current.iter_trifle[layer] = iter;
-	this->EMTrifle_current.ll_final_trifle[layer] = this->logLikelihood;
-	cout << "[EM_Trifle] " << this->emtrifle_to_json(this->EMTrifle_current) << endl;
+	this->EMTrifle_current.ll_final_trifle[layer] = this->logLikelihood;	
 	cout << "final log likelihood is " << this->EMTrifle_current.ll_final_trifle[layer] << endl;
 	return ;
 	// return tuple<int,double,double,double,double>(iter,logLikelihood_pars,logLikelihood_exp_data_first,logLikelihood_exp_data_final,this->logLikelihood);
@@ -9632,6 +9610,13 @@ void SEM::SetInitialEstimateOfModelParametersUsingDirichlet() {
 void SEM::StoreInitialParamsInEMTrifleCurrent(int layer) {	
 	SEM_vertex * c;		
 	for (int dna = 0; dna < 4; dna ++) this->EMTrifle_current.root_prob_initial_trifle[layer][dna] = this->rootProbability[dna];
+	for (int dna = 0; dna < 4; dna ++) {
+		if(this->rootProbability[dna] == 0) {
+			cout << "root prob zero";
+			exit(-1);
+		}
+
+	}
 	for (pair <int, SEM_vertex *> idPtrPair : * this->vertexMap) {
 		c = idPtrPair.second;
 		this->EMTrifle_current.trans_prob_initial_trifle[layer][c->name] = c->transitionMatrix;
@@ -9712,7 +9697,7 @@ void SEM::SetInitialEstimateOfModelParametersUsingHSS() {
 	}
 }
 
-void SEM::BumpZeroEntriesOfModelParametersForNextLayer() {
+void SEM::BumpZeroEntriesOfModelParameters() {
 	// characters in next layer not present in previous layer may have
 	// zero probabilities 
 	bool debug = 0;
@@ -10644,7 +10629,7 @@ void SEM::CompressAASequences() {
 }
 
 #include <algorithm>
-#include <numeric>   // accumulate
+#include <numeric>
 #include <map>
 #include <vector>
 
@@ -10653,8 +10638,8 @@ void SEM::CompressDNASequences() {
     this->DNAPatternWeights.clear();
     this->gapLessDNAFlag.clear();
 
-    std::vector<std::vector<int>> uniquePatterns;
-    std::map<std::vector<int>, std::vector<int>> uniquePatternsToSitesWherePatternRepeats;
+    vector<vector<int>> uniquePatterns;
+    map<vector<int>, vector<int>> uniquePatternsToSitesWherePatternRepeats;
 
     // Clear per-leaf compressed storage
     for (unsigned int i = 0; i < this->leaves.size(); ++i) {
@@ -10664,7 +10649,7 @@ void SEM::CompressDNASequences() {
 
     // Build unique patterns and where they repeat
     const int numberOfSites = static_cast<int>(this->leaves[0]->DNArecoded.size());
-    std::vector<int> sitePattern;
+    vector<int> sitePattern;
     sitePattern.reserve(this->leaves.size());
 
     for (int site = 0; site < numberOfSites; ++site) {
@@ -10706,6 +10691,25 @@ void SEM::CompressDNASequences() {
             return this->DNAPatternWeights[a] > this->DNAPatternWeights[b];
         }
     );
+
+	this->DNAPatternOriginalSites.clear();
+	this->DNAPatternOriginalSites.resize(order.size());
+
+	this->OriginalToCompressed.assign(numberOfSites, -1);
+
+	for (size_t k = 0; k < order.size(); ++k) {
+    const size_t pidx = order[k];
+    const std::vector<int>& sites =
+        uniquePatternsToSitesWherePatternRepeats[ uniquePatterns[pidx] ];
+
+    this->DNAPatternOriginalSites[k] = sites;
+
+    for (int s : sites) {
+        if (s >= 0 && s < numberOfSites) {
+            this->OriginalToCompressed[s] = static_cast<int>(k);
+        	}
+    	}
+	}
 
     // Rebuild DNAcompressed and metadata in sorted order
     for (SEM_vertex* l_ptr : this->leaves) {
@@ -10926,61 +10930,6 @@ void SEM::AddWeightedEdges(vector <tuple <string,string,double> > weightedEdgesT
 	}
 }
 
-// void SEM::AddWeightedEdges(vector < tuple <string,string,double> > weightedEdgesToAdd) {
-// 	SEM_vertex * u; SEM_vertex * v;
-// 	string u_name; string v_name; double t;
-// 	vector <int> emptySequence;
-// 	for (tuple <string, string, double> weightedEdge : weightedEdgesToAdd) {
-// 		tie (u_name, v_name, t) = weightedEdge;		
-// 		if (this->ContainsVertex(u_name)) {
-// 			u = (*this->vertexMap)[this->nameToIdMap[u_name]];
-// 		} else {
-// 			if (!this->ContainsVertex(v_name)) {
-// 				cout << "Adding edge " << u_name << "\t" << v_name << endl;
-// 			}
-// 			if(!this->ContainsVertex(v_name)){
-//                 throw mt_error("Check why v is not in vertex map");
-//             }
-// 			u = new SEM_vertex(this->h_ind,emptySequence);
-// 			u->name = u_name;
-// 			u->id = this->h_ind;
-// 			this->vertexMap->insert(pair<int,SEM_vertex*>(u->id,u));
-// 			this->nameToIdMap.insert(make_pair(u->name,u->id));			
-// 			this->h_ind += 1;
-// 			if(!this->ContainsVertex(u_name)){
-//                 throw mt_error("Check why u is not in vertex map");
-//             }
-// 		}
-		
-// 		if (this->ContainsVertex(v_name)) {
-// 			v = (*this->vertexMap)[this->nameToIdMap[v_name]];
-// 		} else {
-// 			if (!this->ContainsVertex(u_name)) {
-// 				cout << "Adding edge " << u_name << "\t" << v_name << endl;
-// 			}
-// 			if(!this->ContainsVertex(u_name)){
-//                 throw mt_error("Check why u is not in vertex map");
-//             }
-// 			v = new SEM_vertex(this->h_ind,emptySequence);
-// 			v->name = v_name;
-// 			v->id = this->h_ind;
-// 			this->vertexMap->insert(pair<int,SEM_vertex*>(v->id,v));
-// 			this->nameToIdMap.insert(make_pair(v->name,v->id));
-// 			this->h_ind += 1;
-// 			if(!this->ContainsVertex(v_name)){
-//                 throw mt_error("Check why v is not in vertex map");
-//             }
-// 		}
-// 		u->AddNeighbor(v);
-// 		v->AddNeighbor(u);		
-// 		if (u->id < v->id) {
-// 			this->edgeLengths.insert(make_pair(make_pair(u,v),t));			
-// 		} else {
-// 			this->edgeLengths.insert(make_pair(make_pair(v,u),t));
-// 		}
-// 	}
-// }
-
 void SEM::AddEdgeLogLikelihoods(vector<tuple<string,string,double>> edgeLogLikelihoodsToAdd) {
 	SEM_vertex * u; SEM_vertex * v; double edgeLogLikelihood;
 	string u_name; string v_name;
@@ -11074,8 +11023,11 @@ EMManager::EMManager(string DNAsequenceFileNameToSet,
 		this->max_EM_iter = max_iter;
 		this->numberOfLargeEdgesThreshold = 100;
 		this->SetDNAMap();
-		this->ancestralSequencesString = "";		
-		this->P = new SEM(0.0,100,this->verbose);			
+		this->ancestralSequencesString = "";
+		// make an alignment class	
+		// parse fa, phy and nex
+
+		this->P = new SEM(0.0,100,this->verbose);					
 		this->F = new FamilyJoining(DNAsequenceFileNameToSet, 0.0);	
 		this->P->SetFJTree(this->F->GetTree());			
 		vector <tuple <string, string, double>> edge_vector = this->F->GetEdgeVector();
@@ -11113,7 +11065,6 @@ EMManager::EMManager(string DNAsequenceFileNameToSet,
 		this->P->num_patterns_for_layer[0] = this->P->first_index_gt(cum, this->P->cum_pattern_weight_coarse);
 		this->P->num_patterns_for_layer[1] = this->P->first_index_gt(cum, this->P->cum_pattern_weight_medium);
 		this->P->num_patterns_for_layer[2] = this->P->first_index_gt(cum, 100);
-				
 
 		this->P->ecdllConvergenceThresholdForTrifle.resize(3);
 		this->P->ecdllConvergenceThresholdForTrifle[0] = this->P->cum_pattern_weight_coarse/(100.0) * this->P->ecdllConvergenceThreshold;
@@ -11130,8 +11081,7 @@ EMManager::EMManager(string DNAsequenceFileNameToSet,
 	this->num_repetitions = this->P->num_repetitions;
 	this->P->max_log_likelihood_best = -1 * std::pow(10.0, 10.0);
 
-	const int total_nodes =
-		std::max(0, int(this->P->vertexMap->size()) - this->P->numberOfObservedVertices);
+	const int total_nodes = max(0, int(this->P->vertexMap->size()) - this->P->numberOfObservedVertices);
 
 	auto emit_progress = [&](const char* kind,
 							const char* method = nullptr,
@@ -11158,10 +11108,15 @@ EMManager::EMManager(string DNAsequenceFileNameToSet,
 	emit_progress("setup:reps");
 	emit_progress("setup:edges");
 
-	for (int rep = 0; rep < this->num_repetitions; ++rep) {		
+	for (int rep = 0; rep < this->num_repetitions; ++rep) {	
 		this->P->EMTrifle_DNA_for_replicate(rep + 1);
 		emit_progress("rep", nullptr, rep + 1);
 	}
+}
+
+void EMManager::UNRESTforEachBranch(){
+	// 
+
 }
 
 

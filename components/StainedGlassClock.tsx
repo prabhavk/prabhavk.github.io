@@ -18,8 +18,8 @@ const TAU = Math.PI * 2;
 
 export default function StainedGlassClock({
   method,
-  rep,          // kept in the signature for compatibility
-  totalReps,    // kept in the signature for compatibility
+  rep,
+  totalReps,
   className = "",
 }: Props) {
   const ref = React.useRef<HTMLDivElement>(null);
@@ -42,7 +42,7 @@ export default function StainedGlassClock({
   const sticky = React.useMemo(
     () => ({
       method: longHandMethod as Method | null,
-      nodeIndex: longHandNodeIndex as number | null, // 1-based
+      nodeIndex: longHandNodeIndex as number | null,
       nodeTotal: longHandNodeTotal as number | null,
     }),
     [longHandMethod, longHandNodeIndex, longHandNodeTotal]
@@ -69,9 +69,10 @@ export default function StainedGlassClock({
   const isInternalLike = (name: string) =>
     /^h[_-]?\d+$/i.test(name) || /^h_/i.test(name);
 
+  // Force internal-like labels to lowercase 'h#'
   const prettyLabel = (name: string): string => {
     const m = String(name).match(/^[Hh][_-]?(\d+)$/);
-    if (m) return `H${m[1]}`;
+    if (m) return `h${m[1]}`;          // <-- always lowercase h
     if (!name) return name;
     return name.charAt(0).toUpperCase() + name.slice(1);
   };
@@ -83,7 +84,7 @@ export default function StainedGlassClock({
       if (typeof u === "string" && isInternalLike(u)) set.add(u);
       if (typeof v === "string" && isInternalLike(v)) set.add(v);
     }
-    if (set.size === 0) return ["H1", "H2", "H3", "H4", "H5", "H6"];
+    if (set.size === 0) return ["h1", "h2", "h3", "h4", "h5", "h6"];
     const arr = Array.from(set).sort((a, b) => {
       const ma = a.match(/^[Hh][_-]?(\d+)$/);
       const mb = b.match(/^[Hh][_-]?(\d+)$/);
@@ -129,7 +130,6 @@ export default function StainedGlassClock({
   /* ---------- Hand angles ---------- */
 
   // SHORT HAND — drive from store so it only moves at end-of-rep:
-  // denom: prefer store.totalReps (from "setup:reps"), else prop, else emInput.reps
   const denomReps =
     (storeTotalReps && storeTotalReps > 0 ? storeTotalReps :
      (totalReps && totalReps > 0 ? totalReps : (storeDefaultReps || 30)));
@@ -137,7 +137,7 @@ export default function StainedGlassClock({
   const clampedRep = Math.max(0, Math.min(denomReps, Number.isFinite(storeRep) ? storeRep : 0));
   const shortAngle =
     clampedRep > 0 && denomReps > 0
-      ? startCenter + (clampedRep / denomReps) * TAU   // hits 12 o’clock only when rep === total
+      ? startCenter + (clampedRep / denomReps) * TAU
       : startCenter;
 
   // LONG HAND — end of slice for layer-3 completion (sticky)
@@ -246,7 +246,7 @@ export default function StainedGlassClock({
                   const lx = Math.cos(ac) * lr;
                   const ly = Math.sin(ac) * lr;
 
-                  const label = rootLabels[j] ?? `H${j + 1}`;
+                  const label = rootLabels[j] ?? `h${j + 1}`; // <-- fallback lowercase
 
                   return (
                     <g key={`${m}-slice-${j}`}>
@@ -258,7 +258,7 @@ export default function StainedGlassClock({
                         textAnchor="middle"
                         dominantBaseline="middle"
                         fontSize={12}
-                        fill="#111827"
+                        fill={"#111827"}
                         opacity={0.9}
                         style={{ fontWeight: 600 }}
                       >
@@ -271,10 +271,10 @@ export default function StainedGlassClock({
             );
           })}
 
-          {/* Method boundaries (D | P | S@12) */}
+          {/* Method boundaries (D | P | H@12) */}
           {boundary(startCenter + 1 * methodWedge, "D")}
           {boundary(startCenter + 2 * methodWedge, "P")}
-          {boundary(startCenter + 3 * methodWedge, "S")}
+          {boundary(startCenter + 3 * methodWedge, "H")}
 
           {/* SHORT HAND (store-driven) */}
           <line

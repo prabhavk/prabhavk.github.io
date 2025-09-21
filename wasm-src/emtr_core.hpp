@@ -81,8 +81,8 @@ private:
 	bool grow_tree_incrementally = false;
 	bool flag_topology = false;
     bool flag_set_gmm_parameters = false;
-	int ComputeHammingDistance(string seq1, string seq2);
-	int ComputeHammingDistance(vector<unsigned char> recodedSeq1, vector<unsigned char> recodedSeq2);
+	int ComputeHammingDistance(string seq1, string seq2);	
+	int ComputeHammingDistance(vector<unsigned char> recodedSeq1, vector<unsigned char> recodedSeq2);	
 	int GetEdgeIndex (int vertexIndex1, int vertexIndex2, int numberOfVertices);
 	FamilyJoining * F;
 	MST * M;
@@ -138,7 +138,12 @@ private:
 	void ReadAllSequences(string complete_sequence_file_name);
 	void main(string init_criterion, bool root_search);
 	void MR_HSS(int num_rounds);
-	void EM_main();
+	void CheckList();
+	void SetPatterns();	// characterize quality of patterns
+	// follow up with visualizing pattern weight distribution
+	void EMDNA(); // BH model with parsimony, dirichlet and HSS
+	void NestSearch(); // Find smallest nest size that can be used for MLE on complete pattern set
+	void EM_main();	
 	void EM_pars_hss();
 	void EM_diri_hss();
     void EMparsimony();

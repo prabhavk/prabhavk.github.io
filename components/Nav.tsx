@@ -8,8 +8,7 @@ type Tab = { href: string; label: string; mode: "exact" | "deep" };
 
 const tabs: Tab[] = [
   { href: "/",                label: "Input",                 mode: "exact" }, // replace progress pane with three-stained clock
-  { href: "/runs",            label: "Available Results",     mode: "deep"  },
-  { href: "/familyjoining",   label: "FamilyJoining",         mode: "deep"  },
+  { href: "/runs",            label: "Available Results",     mode: "deep"  },  
   { href: "/cake",            label: "Cake",                  mode: "deep"  },
   { href: "/violin_methods",  label: "Violin methods",        mode: "deep"  }, // pack in same page and add layers
   { href: "/violin_roots",    label: "Violin roots",          mode: "deep"  }, // pack in same page and add layers
